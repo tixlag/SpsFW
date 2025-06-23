@@ -1,0 +1,807 @@
+openapi: 3.0.0
+info:
+  title: 'Websps API'
+  version: '0.8'
+paths:
+  /Api/Worksheets/Dispatcher/GetFactMasterInfo:
+    get:
+      tags:
+        - Отчеты
+      summary: 'Получить отчет по мастерам'
+      operationId: 75133f7c5c784fd897eec1b235d676c2
+      parameters:
+        -
+          name: date_start
+          in: query
+          description: 'С какой даты'
+          required: true
+          schema:
+            type: string
+          example: '2025-03-00T00:00:00'
+        -
+          name: date_end
+          in: query
+          description: 'По какую дату'
+          required: true
+          schema:
+            type: string
+          example: '2025-05-00T00:00:00'
+        -
+          name: employee_name
+          in: query
+          description: 'Имя работника (можно подстроку)'
+          required: false
+          schema:
+            type: string
+          example: Акулов
+        -
+          name: code_task_name
+          in: query
+          description: 'Название задачи (можно подстроку)'
+          required: false
+          schema:
+            type: string
+          example: Трубо
+        -
+          name: code_task_id
+          in: query
+          description: 'Id задачи'
+          required: false
+          schema:
+            type: integer
+          example: '4564'
+        -
+          name: object_ids
+          in: query
+          description: 'Ids объектов (передаем в строке через "," без пробелов)'
+          required: false
+          schema:
+            type: integer
+          example: '148,107'
+      responses:
+        '200':
+          description: Успех
+          content:
+            application/json:
+              schema: {  }
+              example: "\r\n            {\r\n    \"result\": {\r\n        \"success\": true,\r\n        \"error\": false,\r\n        \"error_messages\": [],\r\n        \"errors\": [],\r\n        \"errors_as_string\": \"\"\r\n    },\r\n    \"payload\": {\r\n        \"masters\": [\r\n            {\r\n                \"employee_id\": 611,\r\n                \"employee_name\": \"Рыбаков Егор Юрьевич\",\r\n                \"employee_code_1c\": \"УП00010827\",\r\n                \"objects\": [\r\n                    {\r\n                        \"object_id\": 107,\r\n                        \"object_name\": \"Инфраструктура Святогор\"\r\n                    }\r\n                ],\r\n                \"tasks\": [\r\n                    {\r\n                        \"code_task_id\": 4,\r\n                        \"code_task_name\": \"Армирование\",\r\n                        \"measurement_name\": \"тонн\",\r\n                        \"facts\": {\r\n                            \"tasks_plan_sum\": \"10491.2160\",\r\n                            \"fact_sum\": \"457.3458\",\r\n                            \"month_plan_sum\": null,\r\n                            \"master_fact\": \"71.8650\"\r\n                        },\r\n                        \"reports\": [\r\n                            {\r\n                                \"report_day\": \"2025-03-02\",\r\n                                \"volume\": \"0.1500\",\r\n                                \"users_count\": 0,\r\n                                \"users_in_report_count\": 43,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-03-03\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 0,\r\n                                \"users_in_report_count\": 43,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-03-30\",\r\n                                \"volume\": \"0.0500\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 2,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-01\",\r\n                                \"volume\": \"0.3000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-02\",\r\n                                \"volume\": \"0.3000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-03\",\r\n                                \"volume\": \"0.3000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-04\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-05\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-06\",\r\n                                \"volume\": \"0.3620\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 2,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-07\",\r\n                                \"volume\": \"0.1100\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-08\",\r\n                                \"volume\": \"3.0000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-09\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-10\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-12\",\r\n                                \"volume\": \"0.5700\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-13\",\r\n                                \"volume\": \"0.0700\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-18\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-19\",\r\n                                \"volume\": \"0.2000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-20\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-21\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-22\",\r\n                                \"volume\": \"0.1500\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-23\",\r\n                                \"volume\": \"0.2000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-24\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-25\",\r\n                                \"volume\": \"0.1500\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            }\r\n                        ]\r\n                    }\r\n                ]\r\n            }\r\n        ]\r\n    }\r\n}\r\n            "
+  /api/v3/employees/recommendations/excel:
+    get:
+      tags:
+        - Сотрудники
+      summary: 'По ссылке скачивается таблица с оценками сотрудников сотрудникам'
+      description: 'Скачать таблицу'
+      operationId: 87ce5f78887495d5bfefa64de6d6a0fe
+      responses:
+        '200':
+          description: 'Успешно скачивается'
+  /api/v3/employees/recommendations:
+    post:
+      tags:
+        - Сотрудники
+      summary: 'Создать рекомендацию сотруднику'
+      description: '1с код рекомендатора берется из сессии, поэтому не передаем.'
+      operationId: 978d0c741fbd45f2020f47fcc9ed2aa0
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddEmployeesRecommendationsDto'
+      responses:
+        '201':
+          description: 'Успешно добавлено'
+        '400':
+          $ref:
+            example: "\r\n{\r\n    \"error\": {\r\n        \"status\": 400,\r\n        \"user\": \"Скородумов Николай Валерьевич-УП00040092-12112\",\r\n        \"exception\": \"ValidationException\",\r\n        \"message\": \"Голосовать можно один раз в месяц. Вы уже голосовали.\",\r\n        \"file\": \"/var/www/html/www/src/src/Api/Additional/EmployeesRecommendations/EmployeesRecommendationsStorage.php\",\r\n        \"line\": 100,\r\n        \"previous\": null,\r\n        \"trace\": []\r\n    }\r\n}\r\n                    "
+  '/api/v3/employees/{recommender_code_1c}/recommendations':
+    get:
+      tags:
+        - Сотрудники
+      summary: 'Возвращает список все рекомендаций пользователя'
+      description: ''
+      operationId: 77072d9330ec6229f32f35070f2a5691
+      parameters:
+        -
+          name: recommender_code_1c
+          in: path
+          required: true
+          schema:
+            schema: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: {  }
+              example: "\r\n                    [\r\n  {\r\n    \"employee_name\": \"Ларионов Роман Сергеевич\",\r\n    \"employee_code_1c\": \"УП00035198\",\r\n    \"recommender_name\": \"Скородумов Николай Валерьевич\",\r\n    \"recommender_code_1c\": \"УП00040092\",\r\n    \"leadership_score\": \"5\",\r\n    \"skill_score\": \"5\",\r\n    \"comment\": \"Это пример комментария, который содержит более 30 символов и соответствует требованиям.\"\r\n  }\r\n]\r\n                    "
+  /api/v3/corporate-slider/categories:
+    get:
+      tags:
+        - CorporateSlider
+      summary: 'Возвращает список всех категорий с их слайдами'
+      operationId: 2aa53be6b308b5337e1af3802f29f22a
+      responses:
+        '200':
+          description: 'Список всех категорий и их слайдов'
+          content:
+            application/json:
+              schema:
+                properties:
+                  categories: { type: array, items: { $ref: '#/components/schemas/CategoryResponseDto' } }
+                type: object
+    post:
+      tags:
+        - CorporateSlider
+      summary: 'Создает новую категорию'
+      operationId: 3ee7e5d58b34c38776d3c54008af9ca9
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CategoryCreateDto'
+      responses:
+        '201':
+          description: 'Категория успешно создана'
+          content:
+            application/json:
+              schema:
+                properties:
+                  category_uuid: { type: string }
+                type: object
+    delete:
+      tags:
+        - CorporateSlider
+      summary: 'Удаляет категории по массивам UUID'
+      operationId: 3766241ddf530cf587963a13c001d47c
+      parameters:
+        -
+          name: category_uuids
+          in: query
+          description: 'Json строка с массивом uuids удаляемых категории'
+          required: true
+          example: '["uuid1", "uuid2"]'
+      responses:
+        '200':
+          description: 'Категории успешно удалены'
+  '/api/v3/corporate-slider/categories/{category_uuid}':
+    get:
+      tags:
+        - CorporateSlider
+      summary: 'Получает категорию по её UUID'
+      operationId: c48dc4e5207e2791b120d95995bf6c69
+      parameters:
+        -
+          name: category_uuid
+          in: path
+          description: 'UUID категории'
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                properties:
+                  category: { $ref: '#/components/schemas/CategoryResponseDto' }
+                type: object
+    post:
+      tags:
+        - CorporateSlider
+      summary: 'Обновляет категорию по uuid'
+      operationId: c859358975f4f6f4b752f4585b231e24
+      parameters:
+        -
+          name: category_uuid
+          in: path
+          description: 'UUID категории'
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CategoryUpdateDto'
+      responses:
+        '200':
+          description: 'Категория успешно обновлена'
+    delete:
+      tags:
+        - CorporateSlider
+      summary: 'Удаляет категорию по её UUID'
+      operationId: ef8defdbdb61decab5c50a38351aabd2
+      parameters:
+        -
+          name: category_uuid
+          in: path
+          description: 'UUID удаляемой категории'
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 'Категория успешно удалена'
+  /api/v3/metrics:
+    get:
+      tags:
+        - Core
+      summary: 'Здесь Prometheus собирает метрики приложения'
+      operationId: 9a39a493550ef6404b2b306152c07669
+      responses:
+        '200':
+          description: Ответ
+          content:
+            plain/text: {  }
+  /api/v3/login/password/change:
+    patch:
+      tags:
+        - User
+      summary: 'Change password'
+      description: 'Минимум 6 символов'
+      operationId: fbe8d48f3d61c21bfd31b27177045246
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordDto'
+      responses:
+        '200':
+          description: Success
+  /api/v3/worksheets/master/characteristics:
+    get:
+      tags:
+        - 'Дашборд диспетчеров'
+      summary: 'Получить характеристики мастеров'
+      description: 'Фильтрация работает! Слишком медленно выполняется запрос к бд'
+      operationId: 3ca9c06a1b36ea086c85c8acd675a616
+      parameters:
+        -
+          name: date_start
+          in: query
+          description: 'Дата начальная'
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2025-05-01'
+        -
+          name: date_end
+          in: query
+          description: 'Дата конечная'
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2025-05-31'
+        -
+          name: object_ids
+          in: query
+          description: 'Id объектов (массив вида 1,2,3)'
+          schema:
+            type: string
+        -
+          name: employee_name
+          in: query
+          description: 'Подстрока имени мастера'
+          schema:
+            type: string
+        -
+          name: code_task_name
+          in: query
+          description: 'Код для задачи (?)'
+          schema:
+            type: string
+        -
+          name: code_task_id
+          in: query
+          description: 'Id кода задачи (?)'
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Успешно
+          content:
+            application/json:
+              schema: {  }
+              example: "\r\n                    {\r\n    \"masters\": [\r\n        {\r\n            \"employee_id\": 727,\r\n            \"link_id\": 216,\r\n            \"report_days\": [\r\n                {\r\n                    \"day\": \"2025-05-01\",\r\n                    \"metrics\": {\r\n                        \"exists_reports_metric\": \"0.0\",\r\n                        \"count_of_good_comments\": 0,\r\n                        \"count_of_bad_comments\": 0,\r\n                        \"rebukes_count\": 0,\r\n                        \"timely_report_generation\": 1,\r\n                        \"timely_set_task\": null,\r\n                        \"fact_without_error\": null,\r\n                        \"tabulation_correction\": 1,\r\n                        \"score_master_report\": null\r\n                    }\r\n                }\r\n            ]\r\n        }\r\n    ]\r\n}\r\n                    "
+  '/api/v3/worksheets/master/characteristics/{master_id}':
+    get:
+      tags:
+        - 'Дашборд диспетчеров'
+      summary: 'Получить характеристики мастера по id'
+      operationId: 2a9a13976e05c91a62692802c205bc55
+      parameters:
+        -
+          name: date_start
+          in: query
+          description: 'Дата начальная'
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2025-05-01'
+        -
+          name: date_end
+          in: query
+          description: 'Дата конечная'
+          required: true
+          schema:
+            type: string
+            format: date
+          example: '2025-05-31'
+        -
+          name: master_id
+          in: path
+          description: 'Id мастера'
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Успешно
+          content:
+            application/json:
+              schema: {  }
+              example: "\r\n                    {\r\n    \"masters\": [\r\n        {\r\n            \"employee_id\": 727,\r\n            \"link_id\": 216,\r\n            \"report_days\": [\r\n                {\r\n                    \"day\": \"2025-05-01\",\r\n                    \"metrics\": {\r\n                        \"exists_reports_metric\": \"0.0\",\r\n                        \"count_of_good_comments\": 0,\r\n                        \"count_of_bad_comments\": 0,\r\n                        \"rebukes_count\": 0,\r\n                        \"timely_report_generation\": 1,\r\n                        \"timely_set_task\": null,\r\n                        \"fact_without_error\": null,\r\n                        \"tabulation_correction\": 1,\r\n                        \"score_master_report\": null\r\n                    }\r\n                }\r\n            ]\r\n        }\r\n    ]\r\n}\r\n                    "
+  /api/v3/worksheets/master/like-from-pto-for-day:
+    post:
+      tags:
+        - 'Дашборд диспетчеров'
+      summary: 'Поставить оценку мастеру за день работ по коду задачи и объекту'
+      operationId: 7fbfb187c700a19fec153d25c5d844ff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonPtoLikeMasterForDayDto'
+      responses:
+        '201':
+          description: 'Оценка успешно поставлена'
+  /api/v3/worksheets/master/like-from-pto-for-day/comment:
+    post:
+      tags:
+        - 'Дашборд диспетчеров'
+      summary: 'Отправить комментарий к лайку/дизлайку'
+      description: 'Метод сработает только для того же самого ПТОшника, который поставил оценку'
+      operationId: 9c80a8c7d8447fadb14351736f2eeeb6
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonPtoLikeMasterForDayDto'
+      responses:
+        '201':
+          description: 'Комментарий успешно установлен'
+  /api/v3/worksheets/master/report/all-day:
+    get:
+      tags:
+        - 'Дашборд диспетчеров'
+      summary: 'Получить общую сводку по мастеру за день'
+      operationId: df6d32cc88a63628bf830a7258df8cf0
+      parameters:
+        -
+          name: date
+          in: query
+          description: 'Дата для получения отчетов'
+          required: true
+          schema:
+            type: string
+            format: date
+            example: '2025-06-05'
+        -
+          name: master_code_1c
+          in: query
+          description: 'Код мастера в 1С'
+          required: true
+          schema:
+            type: string
+            example: УП00024589
+      responses:
+        '200':
+          description: 'Ответ пришел'
+  '/api/v3/worksheets/task/{id}':
+    delete:
+      tags:
+        - 'Задачи в отчетах'
+      summary: 'Удаляет задачу из отчета'
+      description: 'Для удаления задача должна быть сперва добавлена в архив'
+      operationId: 945c468ab45bc1987ab2fc88c7d27463
+      parameters:
+        -
+          name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 'Успешно удалено'
+        '400':
+          description: 'По id не найдена задача'
+  /Api/Worksheets/Dispatcher/ShowTasksReport/:
+    get:
+      tags:
+        - 'Задачи в отчетах'
+      summary: 'Получить задачи в отчетах'
+      operationId: 10cba0bbaa911a51875c166822514a93
+      parameters:
+        -
+          name: object_id
+          in: query
+          description: 'Id объекта'
+          required: true
+          schema:
+            type: integer
+        -
+          name: start_date
+          in: query
+          description: 'Дата начальная'
+          required: true
+          schema:
+            type: string
+            format: date
+        -
+          name: end_date
+          in: query
+          description: 'Дата конечная'
+          required: true
+          schema:
+            type: string
+            format: date
+        -
+          name: position_name
+          in: query
+          description: 'Название позиции'
+          schema:
+            type: string
+        -
+          name: task_name
+          in: query
+          description: 'Название задачи'
+          schema:
+            type: string
+        -
+          name: task_status_confirm
+          in: query
+          description: 'Статус задачи подтвержден (?)'
+          schema:
+            type: integer
+        -
+          name: task_status_close
+          in: query
+          description: 'Статус задачи закрыт (?)'
+          schema:
+            type: integer
+        -
+          name: task_types
+          in: query
+          description: 'Типы задач (возможно массив вида 1,2,3)'
+          schema:
+            type: string
+        -
+          name: code_task
+          in: query
+          description: 'Код для задачи (?)'
+          schema:
+            type: string
+        -
+          name: min_count
+          in: query
+          description: 'Минимально доступное количество (?)'
+          schema:
+            type: integer
+        -
+          name: chipher_filter
+          in: query
+          description: 'chipher_filter (?)'
+          schema:
+            type: string
+        -
+          name: exclude_empty_tasks
+          in: query
+          description: 'Исключить пустые задачи'
+          schema:
+            type: integer
+        -
+          name: week
+          in: query
+          description: Неделя
+          schema:
+            type: integer
+        -
+          name: active
+          in: query
+          description: '1 - убрать архивные задачи'
+          schema:
+            type: integer
+        -
+          name: show_deleted
+          in: query
+          description: '1 - показать удаленные задачи'
+          schema:
+            type: integer
+        -
+          name: show_only_archived
+          in: query
+          description: '1 - показать только удаленные задачи'
+          schema:
+            type: integer
+        -
+          name: exist_common_plan
+          in: query
+          description: '1 - показать только задачи с общим планом'
+          schema:
+            type: integer
+        -
+          name: exist_month_plan
+          in: query
+          description: '1 - показать только задачи с месячным планом'
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 'Вернул список задач'
+          content:
+            application/json:
+              schema: {  }
+              example: "\r\n                    {\r\n    \"result\": {\r\n        \"success\": true,\r\n        \"error\": false,\r\n        \"error_messages\": [],\r\n        \"errors\": [],\r\n        \"errors_as_string\": \"\"\r\n    },\r\n    \"payload\": {\r\n        \"tasks_reports\": [\r\n            {\r\n                \"position_id\": 269,\r\n                \"position_name\": \"Здание главного корпуса\",\r\n                \"object_id\": 98,\r\n                \"cipher_id\": \"\",\r\n                \"tasks\": [\r\n                    {\r\n                        \"id\": 7570,\r\n                        \"name\": \"Бетонирование фундаментов (оси 41-45)\",\r\n                        \"measurement_id\": 6,\r\n                        \"measurement_info\": {\r\n                            \"id\": 6,\r\n                            \"name\": \"м3\"\r\n                        },\r\n                        \"section_id\": 269,\r\n                        \"mark_id\": 1,\r\n                        \"archive\": 0,\r\n                        \"code_task_id\": 0,\r\n                        \"min_count\": 0,\r\n                        \"volume\": \"553.0000\",\r\n                        \"cipher\": \"\",\r\n                        \"code_1c\": null,\r\n                        \"fact\": {\r\n                            \"fact_volume\": \"0.0000\"\r\n                        },\r\n                        \"month_value\": \"\",\r\n                        \"reports\": [\r\n                            {\r\n                                \"date\": \"2025-05-16\",\r\n                                \"pto_volume\": \"0.0000\",\r\n                                \"master_volume\": \"0.0000\",\r\n                                \"pto_flag\": 0,\r\n                                \"count\": 1,\r\n                                \"links\": \"871\"\r\n                            }\r\n                        ]\r\n                    }\r\n                ]\r\n            }\r\n        ]\r\n    }\r\n}"
+        '400':
+          description: 'По id не найдена задача'
+  /api/v3/core/update:
+    get:
+      tags:
+        - Core
+      summary: 'Обновляет роуты и документацию'
+      description: "Можно сделать так, чтобы каждый запрос сканировал все контролеры,\nи проверял, изменился ли файл. Если да, то обновляем кеш"
+      operationId: 1f11140b1cef8c6baf235873f2e0e582
+      responses:
+        '200':
+          description: 'Успешно обновлено'
+  /api/v3/core/update/routes:
+    get:
+      tags:
+        - Core
+      summary: 'Обновляет только роуты'
+      operationId: ccefade0e4cd4090ea28dc295376c2e7
+      responses:
+        '200':
+          description: 'Успешно обновлено'
+components:
+  schemas:
+    AddEmployeesRecommendationsDto:
+      description: 'DTO для создания рекомендации сотруднику'
+      properties:
+        employee_code_1c:
+          required:
+            - true
+          type: string
+          example: УП00035198
+        leadership_score:
+          required:
+            - true
+          type: integer
+          maximum: 5
+          minimum: 0
+          example: 5
+        skill_score:
+          required:
+            - true
+          type: integer
+          maximum: 5
+          minimum: 0
+          example: 5
+        comment:
+          required:
+            - true
+          type: string
+          minLength: 30
+          example: 'Это пример комментария, который содержит более 30 символов и соответствует требованиям.'
+      type: object
+    CategoryCreateDto:
+      description: 'DTO категории'
+      properties:
+        category_name:
+          description: 'Название категории'
+          type: string
+          example: 'Новая категория'
+        slides:
+          description: 'Слайды категории'
+          type: array
+          items:
+            $ref: '#/components/schemas/SlideCreateDto'
+          nullable: true
+      type: object
+    ImageCreateDto:
+      description: 'DTO для изображения'
+      properties:
+        sort:
+          description: 'Позиция изображения'
+          type: integer
+          example: 0
+        file:
+          description: 'Файл изображения'
+          type: string
+          format: binary
+          nullable: true
+      type: object
+    SlideCreateDto:
+      description: 'DTO для слайда'
+      properties:
+        sort:
+          description: 'Позиция слайда'
+          type: integer
+          example: 0
+        images:
+          description: 'Изображения слайда. Либо 1, либо 4'
+          type: array
+          items:
+            $ref: '#/components/schemas/ImageCreateDto'
+      type: object
+    CategoryResponseDto:
+      description: 'DTO для ответа с категорией'
+      properties:
+        category_uuid:
+          description: 'UUID категории'
+          type: string
+        name:
+          description: 'Название категории'
+          type: string
+        slides:
+          description: 'Слайды категории'
+          type: array
+          items:
+            $ref: '#/components/schemas/SlideResponseDto'
+          nullable: true
+      type: object
+    ImageResponseDto:
+      description: 'DTO для ответа с изображением'
+      properties:
+        image_uuid:
+          description: 'UUID изображения'
+          type: string
+        path:
+          description: 'Путь к изображению'
+          type: string
+        name:
+          description: 'Название изображения'
+          type: string
+        sort:
+          description: 'Позиция изображения'
+          type: integer
+      type: object
+    SlideResponseDto:
+      description: 'DTO для ответа со слайдом'
+      properties:
+        slide_uuid:
+          description: 'UUID слайда'
+          type: string
+        sort:
+          description: 'Позиция слайда'
+          type: integer
+        images:
+          description: 'Изображения слайда'
+          type: array
+          items:
+            $ref: '#/components/schemas/ImageResponseDto'
+          nullable: true
+      type: object
+    CategoryUpdateDto:
+      description: 'DTO категории'
+      properties:
+        category_name:
+          description: 'Название категории'
+          type: string
+          example: 'Новая категория'
+        slide_uuids_to_remove:
+          description: 'Json строка с массивом uuids слайдеров для удаления'
+          type: string
+          example: '["uuid1", "uuid2"]'
+        slides:
+          description: 'Слайды категории'
+          type: array
+          items:
+            $ref: '#/components/schemas/SlideUpdateDto'
+          nullable: true
+      type: object
+    ImageUpdateDto:
+      description: 'DTO для изображения'
+      properties:
+        image_uuid:
+          description: 'Uuid изображения'
+          type: integer
+          example: uuid
+          nullable: true
+        sort:
+          description: 'Позиция изображения'
+          type: integer
+          example: 0
+        file:
+          description: 'Файл изображения'
+          type: string
+          format: binary
+      type: object
+    SlideUpdateDto:
+      description: 'DTO для слайда'
+      properties:
+        slide_uuid:
+          description: 'Uuid слайда'
+          type: integer
+          example: uuid
+        sort:
+          description: 'Позиция слайда'
+          type: integer
+          example: 0
+        images:
+          description: 'Изображения слайда. Либо 1, либо 4'
+          type: array
+          items:
+            $ref: '#/components/schemas/ImageUpdateDto'
+          nullable: true
+      type: object
+    ChangePasswordDto:
+      title: 'DTO для смены пароля'
+      properties:
+        old_password:
+          required:
+            - true
+          type: string
+          example: old_password
+        new_password:
+          required:
+            - true
+          type: string
+          example: new_password
+        confirm_password:
+          required:
+            - true
+          type: string
+          example: confirm_password
+      type: object
+    JsonPtoLikeMasterForDayDto:
+      description: 'Json для установки лайка/дизлайка мастеру за день по объекту и коду работы'
+      properties:
+        date:
+          required:
+            - true
+          type: string
+          format: date
+          example: '2025-06-05'
+        master_code_1c:
+          required:
+            - true
+          type: string
+          example: УП00024589
+        score:
+          description: '1 - лайк, 0 - дизлайк'
+          type: integer
+          example: '1'
+        comment:
+          type: string
+          example: 'Комментарий к оценке'
+      type: object
+tags:
+  -
+    name: Сотрудники
+    description: 'Все endpoints для работы с сотрудниками'
+  -
+    name: Отчеты
+    description: Отчеты
+  -
+    name: CorporateSlider
+    description: CorporateSlider
+  -
+    name: Core
+    description: Core
+  -
+    name: User
+    description: User
+  -
+    name: 'Дашборд диспетчеров'
+    description: 'Дашборд диспетчеров'
+  -
+    name: 'Задачи в отчетах'
+    description: 'Задачи в отчетах'

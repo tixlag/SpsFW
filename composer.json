@@ -1,0 +1,32 @@
+{
+  "name": "sps/fw",
+  "description": "SpsFramework - ready to go!",
+  "type": "library",
+  "license": "",
+  "require": {
+    "ext-mbstring": "*",
+    "ext-pdo": "*",
+    "vlucas/phpdotenv": "^5.6"
+  },
+  "autoload": {
+    "psr-4": {
+      "SpsFW\\": "src/"
+    }
+  },
+  "authors": [
+    {
+      "name": "Skorodumov Nikolay",
+      "email": "tixlag@yandex.ru",
+      "homepage": "https://scorodumov.ru"
+    }
+  ],
+  "minimum-stability": "RC",
+  "scripts": {
+    "migrate:dev": "APP_ENV=dev vendor/bin/phinx migrate",
+    "migrate:prod": "APP_ENV=prod vendor/bin/phinx migrate",
+    "rollback:dev": "APP_ENV=dev vendor/bin/phinx rollback",
+    "rollback:prod": "APP_ENV=prod vendor/bin/phinx rollback",
+    "create:prod": "APP_ENV=prod vendor/bin/phinx create",
+    "create:dev": "APP_ENV=dev vendor/bin/phinx create"
+  }
+}
