@@ -1,22 +1,28 @@
 <?php
-namespace SpsFW\Core\AccessRule;
+namespace SpsFW\Core\AccessRules;
 
 abstract class BaseAccessRules
 {
     /**
      * Получить все правила группы
      */
-    abstract public static function getRules(): array;
+    public static function getRules(): array
+    {
+        return static::RULES;
+    }
 
     /**
      * Получить префикс для констант
      */
-    abstract public static function getPrefix(): string;
+    public static function getRole(): string
+    {
+        return static::ROLE;
+    }
 
     /**
      * Получить описание правила по ID
      */
-    public static function getRuleLabel(int $ruleId): ?string
+    public static function getRuleDescription(int $ruleId): ?string
     {
         return static::getRules()[$ruleId] ?? null;
     }
@@ -27,5 +33,11 @@ abstract class BaseAccessRules
     public static function getRuleIds(): array
     {
         return array_keys(static::getRules());
+    }
+
+    public static function getRuleConstant($value): ?string
+    {
+        $constants = new \ReflectionClass(static::class)->getConstants();
+        return array_find_key($constants, fn($constantValue) => $constantValue === $value);
     }
 }

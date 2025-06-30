@@ -1,9 +1,10 @@
 <?php
-namespace SpsFW\Core\AccessRule;
+namespace SpsFW\Core\AccessRules;
 
 class PtoRules extends BaseAccessRules
 {
-    public const RULES = [
+    public const string ROLE = 'PTO';
+    public const array RULES = [
         200 => "Доступ к разделу \"ПТО\" цифрового звена",
         201 => "Доступ к разделу \"ПТО\" цифрового звена и подтверждение",
         202 => "Разрешить редактирование объемов задач в ПТО",
@@ -17,25 +18,16 @@ class PtoRules extends BaseAccessRules
         210 => "Доступ к разделу ПТО на выбранных участках",
     ];
 
-    public const DIGITAL_LINK_PTO_ACCESS = 200;
-    public const DIGITAL_LINK_PTO_ACCESS_AND_CONFIRM = 201;
-    public const DIGITAL_LINK_PTO_EDIT_TASK_VOLUME = 202;
-    public const DIGITAL_LINK_PTO_CREATE_TASKS = 203;
-    public const DIGITAL_LINK_PTO_EDIT_TASK_CODE = 204;
-    public const DIGITAL_LINK_PTO_FULL = 205;
-    public const DIGITAL_LINK_PTO_UPDATE_TASK_CODE = 206;
-    public const DIGITAL_LINK_PTO_LIKE_DISLIKE = 207;
-    public const DIGITAL_LINK_PTO_ALL_LOCATION_ACCESS = 208;
-    public const DIGITAL_LINK_PTO_ALLOW_VOLUME_EDIT = 209;
-    public const DIGITAL_LINK_PTO_ALLOWED_LOCATIONS = 210;
+    public const int DIGITAL_LINK_PTO_ACCESS = 200;
+    public const int DIGITAL_LINK_PTO_ACCESS_AND_CONFIRM = 201;
+    public const int DIGITAL_LINK_PTO_EDIT_TASK_VOLUME = 202;
+    public const int DIGITAL_LINK_PTO_CREATE_TASKS = 203;
+    public const int DIGITAL_LINK_PTO_EDIT_TASK_CODE = 204;
+    public const int DIGITAL_LINK_PTO_FULL = 205;
+    public const int DIGITAL_LINK_PTO_UPDATE_TASK_CODE = 206;
+    public const int DIGITAL_LINK_PTO_LIKE_DISLIKE = 207;
+    public const int DIGITAL_LINK_PTO_ALL_LOCATION_ACCESS = 208;
+    public const int DIGITAL_LINK_PTO_ALLOW_VOLUME_EDIT = 209;
+    public const int DIGITAL_LINK_PTO_ALLOWED_LOCATIONS = 210;
 
-    public static function getRules(): array
-    {
-        return self::RULES;
-    }
-
-    public static function getPrefix(): string
-    {
-        return 'PTO';
-    }
 }

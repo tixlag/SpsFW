@@ -1,17 +1,17 @@
 <?php
-namespace SpsFW\Core\AccessRule;
+
+namespace SpsFW\Core\AccessRules;
 
 class AccessChecker
 {
     /**
      * Проверить, есть ли у пользователя определенное правило
      * @param array $userRoles
-     * @param int $ruleId передаем int вида ProRules::DIGITAL_LINK_PTO_ACCESS
+     * @param int $ruleId передаем int вида PtoRules::DIGITAL_LINK_PTO_ACCESS
      * @return bool
      */
     public static function hasRule(array $userRoles, int $ruleId): bool
     {
-
         return key_exists($ruleId, $userRoles);
     }
 
@@ -27,6 +27,26 @@ class AccessChecker
     }
 
     /**
+     * Если нет не одной требуемое роли, вернет массив с требуемыми ролями
+     * @param array $userRoles
+     * @param array $requiredRules передаем array вида [ProRules::DIGITAL_LINK_PTO_ACCESS]
+     * @return array
+     */
+    public static function getMissedRulesAnyMode(array $userRoles, array $requiredRules): array
+    {
+        $roles = array_intersect(array_keys($userRoles), $requiredRules);
+
+        if (empty($roles)) {
+            return array_map(
+                fn($ruleId) => AccessRulesRegistry::getRuleRole($ruleId),
+                $requiredRules
+            );
+        }
+
+        return [];
+    }
+
+    /**
      * Проверить, есть ли у пользователя все указанные правила
      * @param array $userRoles
      * @param array $requiredRules передаем array вида [ProRules::DIGITAL_LINK_PTO_ACCESS]
@@ -35,6 +55,20 @@ class AccessChecker
     public static function hasAllRules(array $userRoles, array $requiredRules): bool
     {
         return empty(array_diff($requiredRules, array_keys($userRoles)));
+    }
+
+    /**
+     * Получить отсутствующие у пользователя права
+     * @param array $userRoles
+     * @param array $requiredRules передаем array вида [ProRules::DIGITAL_LINK_PTO_ACCESS]
+     * @return array<int>
+     */
+    public static function getMissedRulesAllMode(array $userRoles, array $requiredRules): array
+    {
+        return array_map(
+            fn($ruleId) => AccessRulesRegistry::getRuleRole($ruleId),
+            array_diff($requiredRules, array_keys($userRoles))
+        );
     }
 
     /**

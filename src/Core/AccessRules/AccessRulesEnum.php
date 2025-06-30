@@ -1,6 +1,6 @@
 <?php
 
-namespace SpsFW\Core\AccessRule;
+namespace SpsFW\Core\AccessRules;
 
 enum AccessRulesEnum: int
 {

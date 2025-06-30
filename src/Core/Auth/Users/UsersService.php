@@ -38,6 +38,8 @@ class UsersService implements UsersServiceI
      * @throws BadPasswordException
      * @throws RandomException
      */
+
+    //todo вынести в модуль аутентификации
     public function login($login, $password, $remember): User
     {
         $user = $this->usersStorage->getByLogin($login);
@@ -107,55 +109,8 @@ class UsersService implements UsersServiceI
     }
 
 
-    /**
-     * @throws RandomException
-     * @throws DateMalformedStringException
-     * @throws AuthorizationException
-     */
-    public function updateTokens(string $refreshToken): ?UserAuthI
-    {
-
-        list($selectorHex, $verifier) = explode('.', $refreshToken, 2);
-        $selectorBinary = hex2bin($selectorHex);
-
-        $refreshTokenInfo = $this->authTokenService->getAndDeleteRefreshToken($selectorBinary);
-
-        if (AuthTokenService::checkRefreshToken($refreshTokenInfo, $verifier)) {
-            $userId = $refreshTokenInfo['user_id'];
-
-            // если в header нет AccessToken, то получаем пользователя из базы
-            $user = Auth::getUnsafe() ?? $this->usersStorage->getById($userId);
-
-            $this->authTokenService->addNewRefreshToken($user);
-            $this->authTokenService->sendNewJwtToken($user);
-
-        }
-
-        return $user ?? null;
-    }
 
 
-    public function addAccessRules(string $userId, array $accessRules): ?UserAuthI
-    {
-        $user = $this->usersStorage->getById($userId);
-        $isAdded = $this->usersStorage->addAccessRules($user->id, $accessRules);
-        if ($isAdded) {
-            $user->addAccessRules($accessRules);
-        }
-        $this->authTokenService->sendNewJwtToken($user);
-        return $user;
-    }
-
-    public function setAccessRules(string $userId, array $accessRules): ?UserAuthI
-    {
-        $user = $this->usersStorage->getById($userId);
-        $isSet = $this->usersStorage->setAccessRules($user->id, $accessRules);
-        if ($isSet) {
-            $user->setAccessRules($accessRules);
-            $this->authTokenService->sendNewJwtToken($user);
-        }
-        return $user;
-    }
 
     public function getById(string $userId): UserAuthI
     {

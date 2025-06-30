@@ -1,6 +1,6 @@
 <?php
 
-namespace SpsFW\Core\AccessRule\Model;
+namespace SpsFW\Core\AccessRules\Models;
 
 use SpsFW\Core\Models\BaseModel;
 

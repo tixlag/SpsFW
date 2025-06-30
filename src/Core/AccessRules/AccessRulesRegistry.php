@@ -1,5 +1,5 @@
 <?php
-namespace SpsFW\Core\AccessRule;
+namespace SpsFW\Core\AccessRules;
 
 class AccessRulesRegistry
 {
@@ -22,12 +22,40 @@ class AccessRulesRegistry
     }
 
     /**
-     * Получить описание правила по ID
+     * Получить роль правила по ID
      */
-    public static function getRuleLabel(int $ruleId): ?string
+    public static function getRole(int $ruleId): ?string
     {
         foreach (self::$ruleGroups as $groupClass) {
-            $label = $groupClass::getRuleLabel($ruleId);
+            $label = $groupClass::getRole($ruleId);
+            if ($label !== null) {
+                return $label;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Получить описание правила по ID
+     */
+    public static function getRuleDescription(int $ruleId): ?string
+    {
+        foreach (self::$ruleGroups as $groupClass) {
+            $label = $groupClass::getRuleDescription($ruleId);
+            if ($label !== null) {
+                return $label;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Получить константу правила по ID
+     */
+    public static function getRuleConstant(int $ruleId): ?string
+    {
+        foreach (self::$ruleGroups as $groupClass) {
+            $label = $groupClass::getRuleConstant($ruleId);
             if ($label !== null) {
                 return $label;
             }
