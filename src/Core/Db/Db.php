@@ -20,15 +20,16 @@ class Db
     {
         if (!isset(self::$pdo)) {
             $config = Config::get('db');
+            $dbAdapter = $config['adapter'];
             $dbHost = $config['host'];
             $dbPort = $config['port'];
-            $username = $config['username'];
+            $username = $config['user'];
             $password = $config['password'];
             $dbName = $config['dbname'];
             $debugMode = $config['debugMode'];
 
             self::$pdo = new PDO(
-                sprintf("mysql:host=%s;port=%u;dbname=%s;charset=UTF8", $dbHost, $dbPort, $dbName),
+                sprintf("%s:host=%s;port=%u;dbname=%s;charset=UTF8", $dbAdapter, $dbHost, $dbPort, $dbName),
                 $username,
                 $password,
                 array(

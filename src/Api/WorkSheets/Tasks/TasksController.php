@@ -19,7 +19,7 @@ class TasksController
 
 
     #[OA\Delete(
-        path: '/api/v3/worksheets/task/{id}',
+        path: '/api/worksheets/task/{id}',
         description: 'Для удаления задача должна быть сперва добавлена в архив',
         summary: 'Удаляет задачу из отчета',
         tags: ['Задачи в отчетах'],
@@ -42,7 +42,7 @@ class TasksController
             )
         ]
     )]
-    #[Route(path: '/api/v3/worksheets/task/{id}', httpMethods: ['DELETE'])]
+    #[Route(path: '/api/worksheets/task/{id}', httpMethods: ['DELETE'])]
     public function deleteTask(int $id): Response
     {
         $task_info = Task::get($id);

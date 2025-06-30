@@ -9,14 +9,13 @@ use Sps\Auth;
 use Sps\Employees\GetEmployeeByCode1C;
 use Sps\UserAccess\AccessRulesEnum;
 use SpsFW\Api\Additional\EmployeesRecommendations\Dto\AddEmployeesRecommendationsDto;
-use SpsFW\Core\AccessRule\AccessRules;
+use SpsFW\Core\AccessRules\Attributes\AccessRulesAny;
 use SpsFW\Core\Exceptions\ValidationException;
-use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\Controller;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Route\Route;
-use SpsFW\Core\Validation\Attributes\Validation;
+use SpsFW\Core\Validation\Attributes\Validate;
 use SpsFW\Core\Validation\Enums\ParamsIn;
 
 #[Controller]
@@ -34,7 +33,7 @@ class EmployeesRecommendationsController extends RestController
     }
 
     #[OA\Get(
-        path: '/api/v3/employees/recommendations/excel',
+        path: '/api/employees/recommendations/excel',
         description: 'Скачать таблицу',
         summary: 'По ссылке скачивается таблица с оценками сотрудников сотрудникам',
         tags: ['Сотрудники'],
@@ -45,8 +44,8 @@ class EmployeesRecommendationsController extends RestController
             )
         ]
     )]
-    #[AccessRules(requiredRules: [AccessRulesEnum::Sections_Talents])]
-    #[Route(path: '/api/v3/employees/recommendations/excel')]
+    #[AccessRulesAny(requiredRules: [AccessRulesEnum::Sections_Talents])]
+    #[Route(path: '/api/employees/recommendations/excel')]
     public function getExcel(): Response
     {
         try {
@@ -64,7 +63,7 @@ class EmployeesRecommendationsController extends RestController
 
 
     #[OA\Post(
-        path: '/api/v3/employees/recommendations',
+        path: '/api/employees/recommendations',
         description: '1с код рекомендатора берется из сессии, поэтому не передаем.',
         summary: 'Создать рекомендацию сотруднику',
         requestBody: new OA\RequestBody(
@@ -101,8 +100,8 @@ class EmployeesRecommendationsController extends RestController
         ],
     )]
 
-    #[Validation(ParamsIn::Json, AddEmployeesRecommendationsDto::class)]
-    #[Route('/api/v3/employees/recommendations', ["POST"])]
+    #[Validate(ParamsIn::Json, AddEmployeesRecommendationsDto::class)]
+    #[Route('/api/employees/recommendations', ["POST"])]
     public function addRecommendation(AddEmployeesRecommendationsDto $dto): Response
     {
 
@@ -127,7 +126,7 @@ class EmployeesRecommendationsController extends RestController
 
 
     #[OA\Get(
-        path: '/api/v3/employees/{recommender_code_1c}/recommendations',
+        path: '/api/employees/{recommender_code_1c}/recommendations',
         description: '',
         summary: 'Возвращает список все рекомендаций пользователя',
         tags: ['Сотрудники'],
@@ -162,7 +161,7 @@ class EmployeesRecommendationsController extends RestController
             )
         ]
     )]
-    #[Route(path: '/api/v3/employees/{recommender_code_1c}/recommendations', httpMethods: ["GET"])]
+    #[Route(path: '/api/employees/{recommender_code_1c}/recommendations', httpMethods: ["GET"])]
     public function getRecommendation($recommender_code_1c): Response
     {
         $recommendations_list = $this->service->getRecommendationList(urldecode($recommender_code_1c));

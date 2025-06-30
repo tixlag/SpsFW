@@ -17,7 +17,7 @@ class SecretController
         $this->pdo = Db::get();
     }
 
-    #[Route(path: '/api/v3/secrets/drop-dining-room', httpMethods: [HttpMethod::POST])]
+    #[Route(path: '/api/secrets/drop-dining-room', httpMethods: [HttpMethod::POST])]
     public function dropDiningRoom()
     {
         $this->pdo->exec('

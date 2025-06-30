@@ -65,7 +65,7 @@ paths:
             application/json:
               schema: {  }
               example: "\r\n            {\r\n    \"result\": {\r\n        \"success\": true,\r\n        \"error\": false,\r\n        \"error_messages\": [],\r\n        \"errors\": [],\r\n        \"errors_as_string\": \"\"\r\n    },\r\n    \"payload\": {\r\n        \"masters\": [\r\n            {\r\n                \"employee_id\": 611,\r\n                \"employee_name\": \"Рыбаков Егор Юрьевич\",\r\n                \"employee_code_1c\": \"УП00010827\",\r\n                \"objects\": [\r\n                    {\r\n                        \"object_id\": 107,\r\n                        \"object_name\": \"Инфраструктура Святогор\"\r\n                    }\r\n                ],\r\n                \"tasks\": [\r\n                    {\r\n                        \"code_task_id\": 4,\r\n                        \"code_task_name\": \"Армирование\",\r\n                        \"measurement_name\": \"тонн\",\r\n                        \"facts\": {\r\n                            \"tasks_plan_sum\": \"10491.2160\",\r\n                            \"fact_sum\": \"457.3458\",\r\n                            \"month_plan_sum\": null,\r\n                            \"master_fact\": \"71.8650\"\r\n                        },\r\n                        \"reports\": [\r\n                            {\r\n                                \"report_day\": \"2025-03-02\",\r\n                                \"volume\": \"0.1500\",\r\n                                \"users_count\": 0,\r\n                                \"users_in_report_count\": 43,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-03-03\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 0,\r\n                                \"users_in_report_count\": 43,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-03-30\",\r\n                                \"volume\": \"0.0500\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 2,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-01\",\r\n                                \"volume\": \"0.3000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-02\",\r\n                                \"volume\": \"0.3000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-03\",\r\n                                \"volume\": \"0.3000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-04\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-05\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-06\",\r\n                                \"volume\": \"0.3620\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 2,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-07\",\r\n                                \"volume\": \"0.1100\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-08\",\r\n                                \"volume\": \"3.0000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-09\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-10\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-12\",\r\n                                \"volume\": \"0.5700\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-13\",\r\n                                \"volume\": \"0.0700\",\r\n                                \"users_count\": 56,\r\n                                \"users_in_report_count\": 56,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-18\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-19\",\r\n                                \"volume\": \"0.2000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-20\",\r\n                                \"volume\": \"0.1000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-21\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-22\",\r\n                                \"volume\": \"0.1500\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-23\",\r\n                                \"volume\": \"0.2000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-24\",\r\n                                \"volume\": \"0.0000\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            },\r\n                            {\r\n                                \"report_day\": \"2025-04-25\",\r\n                                \"volume\": \"0.1500\",\r\n                                \"users_count\": 28,\r\n                                \"users_in_report_count\": 28,\r\n                                \"tasks_count\": 1,\r\n                                \"change_id\": 1\r\n                            }\r\n                        ]\r\n                    }\r\n                ]\r\n            }\r\n        ]\r\n    }\r\n}\r\n            "
-  /api/v3/employees/recommendations/excel:
+  /api/employees/recommendations/excel:
     get:
       tags:
         - Сотрудники
@@ -75,7 +75,7 @@ paths:
       responses:
         '200':
           description: 'Успешно скачивается'
-  /api/v3/employees/recommendations:
+  /api/employees/recommendations:
     post:
       tags:
         - Сотрудники
@@ -93,7 +93,7 @@ paths:
         '400':
           $ref:
             example: "\r\n{\r\n    \"error\": {\r\n        \"status\": 400,\r\n        \"user\": \"Скородумов Николай Валерьевич-УП00040092-12112\",\r\n        \"exception\": \"ValidationException\",\r\n        \"message\": \"Голосовать можно один раз в месяц. Вы уже голосовали.\",\r\n        \"file\": \"/var/www/html/www/src/src/Api/Additional/EmployeesRecommendations/EmployeesRecommendationsStorage.php\",\r\n        \"line\": 100,\r\n        \"previous\": null,\r\n        \"trace\": []\r\n    }\r\n}\r\n                    "
-  '/api/v3/employees/{recommender_code_1c}/recommendations':
+  '/api/employees/{recommender_code_1c}/recommendations':
     get:
       tags:
         - Сотрудники
@@ -113,7 +113,7 @@ paths:
             application/json:
               schema: {  }
               example: "\r\n                    [\r\n  {\r\n    \"employee_name\": \"Ларионов Роман Сергеевич\",\r\n    \"employee_code_1c\": \"УП00035198\",\r\n    \"recommender_name\": \"Скородумов Николай Валерьевич\",\r\n    \"recommender_code_1c\": \"УП00040092\",\r\n    \"leadership_score\": \"5\",\r\n    \"skill_score\": \"5\",\r\n    \"comment\": \"Это пример комментария, который содержит более 30 символов и соответствует требованиям.\"\r\n  }\r\n]\r\n                    "
-  /api/v3/corporate-slider/categories:
+  /api/corporate-slider/categories:
     get:
       tags:
         - CorporateSlider
@@ -163,7 +163,7 @@ paths:
       responses:
         '200':
           description: 'Категории успешно удалены'
-  '/api/v3/corporate-slider/categories/{category_uuid}':
+  '/api/corporate-slider/categories/{category_uuid}':
     get:
       tags:
         - CorporateSlider
@@ -224,7 +224,7 @@ paths:
       responses:
         '200':
           description: 'Категория успешно удалена'
-  /api/v3/metrics:
+  /api/metrics:
     get:
       tags:
         - Core
@@ -235,7 +235,7 @@ paths:
           description: Ответ
           content:
             plain/text: {  }
-  /api/v3/login/password/change:
+  /api/login/password/change:
     patch:
       tags:
         - User
@@ -250,7 +250,7 @@ paths:
       responses:
         '200':
           description: Success
-  /api/v3/worksheets/master/characteristics:
+  /api/worksheets/master/characteristics:
     get:
       tags:
         - 'Дашборд диспетчеров'
@@ -307,7 +307,7 @@ paths:
             application/json:
               schema: {  }
               example: "\r\n                    {\r\n    \"masters\": [\r\n        {\r\n            \"employee_id\": 727,\r\n            \"link_id\": 216,\r\n            \"report_days\": [\r\n                {\r\n                    \"day\": \"2025-05-01\",\r\n                    \"metrics\": {\r\n                        \"exists_reports_metric\": \"0.0\",\r\n                        \"count_of_good_comments\": 0,\r\n                        \"count_of_bad_comments\": 0,\r\n                        \"rebukes_count\": 0,\r\n                        \"timely_report_generation\": 1,\r\n                        \"timely_set_task\": null,\r\n                        \"fact_without_error\": null,\r\n                        \"tabulation_correction\": 1,\r\n                        \"score_master_report\": null\r\n                    }\r\n                }\r\n            ]\r\n        }\r\n    ]\r\n}\r\n                    "
-  '/api/v3/worksheets/master/characteristics/{master_id}':
+  '/api/worksheets/master/characteristics/{master_id}':
     get:
       tags:
         - 'Дашборд диспетчеров'
@@ -345,7 +345,7 @@ paths:
             application/json:
               schema: {  }
               example: "\r\n                    {\r\n    \"masters\": [\r\n        {\r\n            \"employee_id\": 727,\r\n            \"link_id\": 216,\r\n            \"report_days\": [\r\n                {\r\n                    \"day\": \"2025-05-01\",\r\n                    \"metrics\": {\r\n                        \"exists_reports_metric\": \"0.0\",\r\n                        \"count_of_good_comments\": 0,\r\n                        \"count_of_bad_comments\": 0,\r\n                        \"rebukes_count\": 0,\r\n                        \"timely_report_generation\": 1,\r\n                        \"timely_set_task\": null,\r\n                        \"fact_without_error\": null,\r\n                        \"tabulation_correction\": 1,\r\n                        \"score_master_report\": null\r\n                    }\r\n                }\r\n            ]\r\n        }\r\n    ]\r\n}\r\n                    "
-  /api/v3/worksheets/master/like-from-pto-for-day:
+  /api/worksheets/master/like-from-pto-for-day:
     post:
       tags:
         - 'Дашборд диспетчеров'
@@ -360,7 +360,7 @@ paths:
       responses:
         '201':
           description: 'Оценка успешно поставлена'
-  /api/v3/worksheets/master/like-from-pto-for-day/comment:
+  /api/worksheets/master/like-from-pto-for-day/comment:
     post:
       tags:
         - 'Дашборд диспетчеров'
@@ -376,7 +376,7 @@ paths:
       responses:
         '201':
           description: 'Комментарий успешно установлен'
-  /api/v3/worksheets/master/report/all-day:
+  /api/worksheets/master/report/all-day:
     get:
       tags:
         - 'Дашборд диспетчеров'
@@ -403,7 +403,7 @@ paths:
       responses:
         '200':
           description: 'Ответ пришел'
-  '/api/v3/worksheets/task/{id}':
+  '/api/worksheets/task/{id}':
     delete:
       tags:
         - 'Задачи в отчетах'
@@ -551,7 +551,7 @@ paths:
               example: "\r\n                    {\r\n    \"result\": {\r\n        \"success\": true,\r\n        \"error\": false,\r\n        \"error_messages\": [],\r\n        \"errors\": [],\r\n        \"errors_as_string\": \"\"\r\n    },\r\n    \"payload\": {\r\n        \"tasks_reports\": [\r\n            {\r\n                \"position_id\": 269,\r\n                \"position_name\": \"Здание главного корпуса\",\r\n                \"object_id\": 98,\r\n                \"cipher_id\": \"\",\r\n                \"tasks\": [\r\n                    {\r\n                        \"id\": 7570,\r\n                        \"name\": \"Бетонирование фундаментов (оси 41-45)\",\r\n                        \"measurement_id\": 6,\r\n                        \"measurement_info\": {\r\n                            \"id\": 6,\r\n                            \"name\": \"м3\"\r\n                        },\r\n                        \"section_id\": 269,\r\n                        \"mark_id\": 1,\r\n                        \"archive\": 0,\r\n                        \"code_task_id\": 0,\r\n                        \"min_count\": 0,\r\n                        \"volume\": \"553.0000\",\r\n                        \"cipher\": \"\",\r\n                        \"code_1c\": null,\r\n                        \"fact\": {\r\n                            \"fact_volume\": \"0.0000\"\r\n                        },\r\n                        \"month_value\": \"\",\r\n                        \"reports\": [\r\n                            {\r\n                                \"date\": \"2025-05-16\",\r\n                                \"pto_volume\": \"0.0000\",\r\n                                \"master_volume\": \"0.0000\",\r\n                                \"pto_flag\": 0,\r\n                                \"count\": 1,\r\n                                \"links\": \"871\"\r\n                            }\r\n                        ]\r\n                    }\r\n                ]\r\n            }\r\n        ]\r\n    }\r\n}"
         '400':
           description: 'По id не найдена задача'
-  /api/v3/core/update:
+  /api/core/update:
     get:
       tags:
         - Core
@@ -561,7 +561,7 @@ paths:
       responses:
         '200':
           description: 'Успешно обновлено'
-  /api/v3/core/update/routes:
+  /api/core/update/routes:
     get:
       tags:
         - Core

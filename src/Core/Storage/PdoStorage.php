@@ -3,7 +3,8 @@
 namespace SpsFW\Core\Storage;
 
 use PDO;
-use Sps\Db;
+use Ramsey\Uuid\Uuid;
+use SpsFW\Core\Db\Db;
 use SpsFW\Core\Models\BaseModel;
 
 abstract class PdoStorage
@@ -14,6 +15,11 @@ abstract class PdoStorage
     public function __construct()
     {
         $this->pdo = Db::get();
+    }
+
+    protected function generateId(): string
+    {
+        return Uuid::uuid7()->toString();
     }
 
     protected function insertModel(BaseModel $model): bool

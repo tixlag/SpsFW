@@ -6,7 +6,6 @@ use OpenApi\Attributes\OpenApi;
 use OpenApi\Attributes\Property;
 use ReflectionAttribute;
 use ReflectionClass;
-use Sps\DateTimeHelper;
 use SpsFW\Core\Exceptions\ValidationException;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Validation\Enums\ParamsIn;
@@ -21,7 +20,7 @@ class Validator
         'minimum' => true,
         'maximum' => true,
         'minLength' => true,
-        'maxLength' => true
+        'maxLength' => true,
     ];
 
     /**
@@ -36,6 +35,18 @@ class Validator
         /** @var array $reqParams */
         $reqParams = Request::getInstance()->{$in->value}();
 
+        return self::validateDto($dtoClass, $reqParams);
+    }
+
+    /**
+     * @param string $dtoClass
+     * @param array $reqParams
+     * @return mixed
+     * @throws ValidationException
+     * @throws \ReflectionException
+     */
+    private static function validateDto(string $dtoClass, array $reqParams): mixed
+    {
         $dto = new $dtoClass();
         $reflection = new ReflectionClass($dto);
         $properties = $reflection->getProperties();
@@ -72,11 +83,31 @@ class Validator
             // проходимся по аргементам OpenApi атрибута
             foreach ($propertyAttributes as $propertyAttribute) {
                 $attributesOpenApi = $propertyAttribute->getArguments();
-                $propertyName = $attributesOpenApi['property'];
+                $propertyName = $attributesOpenApi['property'] ?? $property->getName();
                 $rawValue = $reqParams[$propertyName];
                 foreach ($attributesOpenApi as $attributeOpenApiKey => $attributeOpenApiValue) {
+
+                    if ($attributeOpenApiKey === 'ref') {
+                        if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
+                            $nestedDtos = [];
+                            foreach ($rawValue as $rawNestedDto) {
+                                if (!is_array($rawNestedDto))
+                                    throw new ValidationException(
+                                        "$propertyName ожидает массив"
+                                    );
+                                $value = self::validateDto($attributeOpenApiValue, $rawNestedDto);
+                                $nestedDtos[] = $value;
+                            }
+                            $property->setValue($dto, $nestedDtos);
+                            break;
+                        }
+                        $value = self::validateDto($attributeOpenApiValue, $rawValue);
+                        $property->setValue($dto, $value);
+                        break;
+                    }
+
                     // Если есть параметр для валидации, то валидируем
-                    if (self::$attributesOpenApi[$attributeOpenApiKey]) {
+                    if (isset(self::$attributesOpenApi[$attributeOpenApiKey])) {
                         $value = self::validateOpenApi(
                             $propertyName,
                             $rawValue,
@@ -125,6 +156,9 @@ class Validator
         return $dto;
     }
 
+    /**
+     * @throws ValidationException
+     */
     private static function validateOpenApi(
         string $propertyName,
         mixed $rawValue,
@@ -148,6 +182,11 @@ class Validator
                             if (ctype_digit($trimmed)) {
                                 return (int)$rawValue;
                             }
+                        }
+                        throw new ValidationException("В поле '$propertyName' ожидается целое число");
+                    case 'boolean':
+                        if (is_bool($rawValue)) {
+                            return $rawValue;
                         }
                         throw new ValidationException("В поле '$propertyName' ожидается целое число");
                     case 'string':

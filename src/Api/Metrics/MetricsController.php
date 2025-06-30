@@ -16,13 +16,13 @@ class MetricsController
      */
 
     #[OA\Get(
-        path: '/api/v3/metrics',
+        path: '/api/metrics',
         summary: 'Здесь Prometheus собирает метрики приложения',
         tags: ['Core'],
         responses: [ new OA\Response(response: 200,description: 'Ответ',content: new OA\MediaType(mediaType: 'plain/text')) ]
     )]
 
-    #[Route('/api/v3/metrics')]
+    #[Route('/api/metrics')]
     public function index(): Response
     {
         return Response::raw(

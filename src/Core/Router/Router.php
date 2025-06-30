@@ -4,21 +4,21 @@ namespace SpsFW\Core\Router;
 
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use RedisException;
 use ReflectionClass;
 use ReflectionException;
 use ReflectionMethod;
 use ReflectionNamedType;
-use Sps\ApplicationError;
-use Sps\Auth;
-use Sps\HttpError401Exception;
-use Sps\HttpError403Exception;
-use Sps\RedisHelper;
-use Sps\UserAccess\AccessRulesEnum;
 use SpsFW\Api\Metrics\Metrics;
-use SpsFW\Core\AccessRule\AccessRules;
+use SpsFW\Core\AccessRules\AccessChecker;
+use SpsFW\Core\AccessRules\AccessMode;
+use SpsFW\Core\AccessRules\Attributes\AccessRulesAll;
+use SpsFW\Core\AccessRules\Attributes\AccessRulesAny;
+use SpsFW\Core\AccessRules\Attributes\NoAuthAccess;
+use SpsFW\Core\Auth\Users\Models\Auth;
+use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\RouteNotFoundException;
+use SpsFW\Core\Exceptions\TokenExpiredException;
 use SpsFW\Core\Http\HttpMethod;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
@@ -26,7 +26,7 @@ use SpsFW\Core\Middleware\Infrastructure\Middleware;
 use SpsFW\Core\Middleware\Infrastructure\MiddlewareInterface;
 use SpsFW\Core\Route\Controller;
 use SpsFW\Core\Route\Route;
-use SpsFW\Core\Validation\Attributes\Validation;
+use SpsFW\Core\Validation\Attributes\Validate;
 use SpsFW\Core\Validation\Validator;
 
 class Router
@@ -38,7 +38,7 @@ class Router
      *     pattern: string,
      *     params: array<string>,
      *     middlewares: array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}>,
-     *     access_rules: array<int>
+     *     access_rules: array<array<string>|array,
      * }>
      */
     protected array $routes = [];
@@ -54,11 +54,13 @@ class Router
 
     /**
      * DI для middlewares
-     * @var array<mixed>
+     * @var array
      */
     protected array $dependencies = [];
 
-    protected ?RedisHelper $redis = null;
+    protected array $controllersDirs = [__DIR__ . '/../'];
+
+//    protected ?RedisHelper $redis = null;
 
     /**
      * @param string $controllersDir Путь к директории с контроллерами
@@ -67,20 +69,24 @@ class Router
      * @param array<string, mixed> $dependencies Зависимости для внедрения в конструкторы классов и middleware
      */
     public function __construct(
-        protected string $controllersDir,
+        ?string $controllersDir = null,
         protected bool $useCache = true,
         protected string $cacheFile = __DIR__ . '/routes.json',
         array $dependencies = []
     ) {
+//        Metrics::init();
+        if ($controllersDir !== null) {
+            $this->controllersDirs[] = $controllersDir;
+        }
         $this->request = Request::getInstance();
         $this->dependencies = $dependencies;
 //        $this->dependencies[] = ['router', $this];
 
-        try {
-            $this->redis = RedisHelper::getInstance();
-        } catch (RedisException $e) {
-            $this->redis = null;
-        }
+//        try {
+//            $this->redis = RedisHelper::getInstance();
+//        } catch (RedisException $e) {
+//            $this->redis = null;
+//        }
 
         $this->loadRoutes();
     }
@@ -98,89 +104,74 @@ class Router
         return $this;
     }
 
-    public function loadRoutes($createCache = false): void
+    public function loadRoutes($createCache = false, $redis = false): void
     {
         if ($this->useCache && !$createCache) {
             try {
                 $this->routes = RoutesCache::$routes;
                 return;
-            } catch (\Error $e) {}
-            $routesFromRedis = unserialize($this->redis?->getValue("SpsFW_routes") ?? '');
-            if ($routesFromRedis) {
-                $this->routes = $routesFromRedis;
+            } catch (\Error $e) {
+                $this->scanControllers();
+                $this->createRoutesCacheClass();
                 return;
-            } else {
-                $cacheDir = dirname($this->cacheFile);
-                if (!file_exists($cacheDir)) {
-                    mkdir($cacheDir, 0755, true);
-                }
-                if (file_exists($this->cacheFile)) {
-                    $this->routes = unserialize(file_get_contents($this->cacheFile), [
-                        'allowed_classes' => true
-                    ]);
-                    return;
-                }
+            }
+            if ($redis) {
+                $this->loadRoutesFromRedisOrJson();
+                return;
             }
         }
 
         $this->scanControllers();
 
         if ($this->useCache || $createCache) {
-            $routesString = var_export($this->routes, true);
-            $classCode = <<<PHP
-            <?php
-                
-            namespace src\Core\Router;
-            
-            class RoutesCache {
-                public static \$routes =  $routesString;
-            }
-            PHP;
-            file_put_contents(__DIR__ . '/RoutesCache.php', $classCode);
+            $this->createRoutesCacheClass();
 
-            $routes = serialize($this->routes);
-            $this->redis?->setValue("SpsFW_routes", $routes);
-            file_put_contents($this->cacheFile, $routes);
+            if ($this->redis) {
+                $routes = serialize($this->routes);
+                $this->redis?->setValue("SpsFW_routes", $routes);
+                file_put_contents($this->cacheFile, $routes);
+            }
         }
     }
 
-    protected
-    function scanControllers(): void
+    protected function scanControllers(): void
     {
 //        $controllerFiles = glob($this->controllersDir . '/**/*Controller.php', GLOB_BRACE);;
 
         $this->routes = [];
 
-        $dir = new RecursiveDirectoryIterator($this->controllersDir);
-        $iterator = new RecursiveIteratorIterator($dir);
-        $controllerFiles = [];
+        foreach ($this->controllersDirs as $dir) {
+            $dir = new RecursiveDirectoryIterator($dir);
+            $iterator = new RecursiveIteratorIterator($dir);
+            $controllerFiles = [];
 
-        foreach ($iterator as $file) {
-            if ($file->isFile() && preg_match('/Controller\.php$/', $file->getFilename())) {
-                $controllerFiles[] = $file->getRealPath();
-            }
-        }
-
-
-        if ($controllerFiles === false) {
-            throw new \RuntimeException("Директория контроллеров не найдена: {$this->controllersDir}");
-        }
-
-        $controllerClassNames = [];
-        foreach ($controllerFiles as $file) {
-            require_once $file;
-            $className = $this->getPathToNamespace($file);
-            $controllerClassNames[] = $className;
-        }
-
-        foreach ($controllerClassNames as $className) {
-            if (!class_exists($className)) {
-                continue;
+            foreach ($iterator as $file) {
+                if ($file->isFile() && preg_match('/Controller\.php$/', $file->getFilename())) {
+                    $controllerFiles[] = $file->getRealPath();
+                }
             }
 
-            $reflection = new ReflectionClass($className);
-            $routes = $this->registerControllerRoutes($reflection);
-            $this->routes = array_merge($this->routes, $routes);
+
+            if ($controllerFiles === false) {
+                throw new \RuntimeException("Директория контроллеров не найдена: {$this->controllersDirs}");
+            }
+
+            $controllerClassNames = [];
+            foreach ($controllerFiles as $file) {
+                require_once $file;
+                $className = $this->getPathToNamespace($file);
+                $controllerClassNames[] = $className;
+            }
+
+            foreach ($controllerClassNames as $className) {
+                if (!class_exists($className)) {
+                    continue;
+                }
+
+                $reflection = new ReflectionClass($className);
+                $routes = $this->registerControllerRoutes($reflection);
+                $this->routes = array_merge($this->routes, $routes);
+            }
         }
     }
 
@@ -198,6 +189,8 @@ class Router
         // Обрабатываем последний элемент (файл) -> получаем имя класса
         $filename = array_pop($pathParts);
         $className = substr($filename, 0, -4); // Убираем .php
+
+        $pathParts[0] = 'SpsFW';
         // Добавляем имя класса обратно
         $pathParts[] = $className;
         // Собираем namespace
@@ -212,10 +205,10 @@ class Router
         ReflectionClass $reflection
     ): array {
         $routes = [];
-        $controllerAttribute = $reflection->getAttributes(Controller::class);
-        if (empty($controllerAttribute)) {
-            return [];
-        }
+//        $controllerAttribute = $reflection->getAttributes(Controller::class);
+//        if (empty($controllerAttribute)) {
+//            return [];
+//        }
 
 //        $classRoute = $controllerAttribute[0]->newInstance();
         $classMiddlewares = $this->collectMiddlewares($reflection);
@@ -306,19 +299,37 @@ class Router
 
     /**
      * @param ReflectionMethod $method
-     * @return array<AccessRulesEnum>
+     * @return array<array<string>>
      */
     protected
     function collectAccessRules(
         ReflectionMethod $method
     ): array {
-        $attributes = $method->getAttributes(AccessRules::class);
-        if (empty($attributes)) {
+        $attributesAny = $method->getAttributes(AccessRulesAny::class);
+        $attributesAll = $method->getAttributes(AccessRulesAll::class);
+        $noAuthAccess = $method->getAttributes(NoAuthAccess::class);
+        if (!empty($noAuthAccess)) {
+            return ['NO_AUTH_ACCESS'];
+        }
+        if (empty($attributesAny)) {
             return [];
         }
 
-        $accessRuleAttribute = $attributes[0]->newInstance();
-        return $accessRuleAttribute->getRequiredRules();
+        $accessRules = [];
+
+        foreach ($attributesAny as $attribute) {
+            $accessRuleAttribute = $attribute->newInstance();
+            $accessRules['any'] = [
+                'rules' => $accessRuleAttribute->getRequiredRules(),
+            ];
+        }
+        foreach ($attributesAll as $attribute) {
+            $accessRuleAttribute = $attribute->newInstance();
+            $accessRules['all'] = [
+                'rules' => $accessRuleAttribute->getRequiredRules(),
+            ];
+        }
+        return $accessRules;
     }
 
     public
@@ -350,7 +361,9 @@ class Router
             }
             return Response::error($e);
         } finally {
-            Metrics::createAll($this->currentRoute['rawPath'] ?? Request::getUri());
+            if (isset(Metrics::$registry)) {
+                Metrics::createAll($this->currentRoute['rawPath'] ?? Request::getUri());
+            }
         }
     }
 
@@ -361,7 +374,7 @@ class Router
      *     pattern: string,
      *     params: array<string>,
      *     middlewares: array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}>,
-     *     access_rules: array<AccessRulesEnum>,
+     *     access_rules: array<array<string>>,
      *     match_params: array<string, string>
      * }
      * @throws RouteNotFoundException
@@ -372,7 +385,7 @@ class Router
         $method = $this->request->getMethod();
         $path = $this->request->getRequestUri();
 
-        if ($route = $this->routes["{$method}:{$path}"]) {
+        if ($route = $this->routes["{$method}:{$path}"] ?? []) {
             $route['match_params'] = [];
             return $route;
         }
@@ -384,7 +397,7 @@ class Router
                 continue;
             }
 
-            if (!preg_match($route['pattern'], $path, $matches)) {
+            if (empty($route['pattern']) || !preg_match($route['pattern'], $path, $matches)) {
                 continue;
             }
 
@@ -410,7 +423,7 @@ class Router
      *     pattern: string,
      *     params: array<string>,
      *     middlewares: array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}>,
-     *     access_rules: array<AccessRulesEnum>,
+     *     access_rules: array|array<array<string>>,
      *     match_params: array<string, string>
      * } $route
      * @return Response
@@ -631,7 +644,7 @@ class Router
             $args[] = $value;
         }
 
-        $validationAttributes = $reflectionMethod->getAttributes(Validation::class);
+        $validationAttributes = $reflectionMethod->getAttributes(Validate::class);
 
         foreach ($validationAttributes as $validationAttribute) {
             $validationInstance = $validationAttribute->newInstance();
@@ -662,6 +675,47 @@ class Router
     }
 
     /**
+     * @return void
+     */
+    public function loadRoutesFromRedisOrJson(): void
+    {
+        $routesFromRedis = unserialize($this->redis?->getValue("SpsFW_routes") ?? '');
+        if ($routesFromRedis) {
+            $this->routes = $routesFromRedis;
+//                return;
+        } else {
+            $cacheDir = dirname($this->cacheFile);
+            if (!file_exists($cacheDir)) {
+                mkdir($cacheDir, 0755, true);
+            }
+            if (file_exists($this->cacheFile)) {
+                $this->routes = unserialize(file_get_contents($this->cacheFile), [
+                    'allowed_classes' => true
+                ]);
+                //  return;
+            }
+        }
+    }
+
+    /**
+     * @return void
+     */
+    public function createRoutesCacheClass(): void
+    {
+        $routesString = var_export($this->routes, true);
+        $classCode = <<<PHP
+            <?php
+                
+            namespace SpsFW\Core\Router;
+            
+            class RoutesCache {
+                public static \$routes =  $routesString;
+            }
+            PHP;
+        file_put_contents(__DIR__ . '/RoutesCache.php', $classCode);
+    }
+
+    /**
      * @param int $status HTTP статус ошибки
      * @param string $message Сообщение об ошибке
      * @return Response
@@ -679,19 +733,41 @@ class Router
     }
 
     /**
-     * @throws HttpError403Exception|ApplicationError|HttpError401Exception
+     * @throws AuthorizationException
      */
     private
     function checkAccess(
-        mixed $access_rules
+        mixed $access_rules_arrays
     ): void {
-        if (is_null($user = Auth::get())) {
-            throw new HttpError401Exception("Требуется авторизация", 401);
+        if (isset($access_rules_arrays[0]) && $access_rules_arrays[0] == 'NO_AUTH_ACCESS') {
+            return;
         }
-        foreach ($access_rules as $rule) {
-            if (!$user->getAccessRulesHelper()->hasRule($rule)) {
-                throw new HttpError403Exception("Доступ запрещен. Требуется право: {$rule->name}", 403);
+        if (is_null($user = Auth::getOrThrow())) {
+            throw new AuthorizationException("Требуется аутентификация", 403);
+        }
+
+        $problemRules = [];
+        if (isset($access_rules_arrays['any'])) {
+            foreach ($access_rules_arrays['any'] as $requiredRules) {
+                if (empty($requireRules = AccessChecker::getMissedRulesAnyMode($user->accessRules, $requiredRules))) {
+                    return; // одно из AnyRules выполнено
+                } else {
+                    $problemRules[] = "Нужно хотя бы одно из правил: [" . implode('; ', $requireRules) . "]";
+                }
             }
+        }
+
+        if (isset($access_rules_arrays['all'])) {
+            foreach ($access_rules_arrays['all'] as $requiredRules) {
+                if (empty($missedRules = AccessChecker::getMissedRulesAllMode($user->accessRules, $requiredRules))) {
+                    return;
+                } else {
+                    $problemRules[] = "Нужны все правила доступа: [" . implode('; ', $missedRules) . "]";
+                }
+            }
+        }
+        if (count($problemRules) > 0) {
+            throw new AuthorizationException(implode(PHP_EOL, $problemRules), 403);
         }
     }
 }

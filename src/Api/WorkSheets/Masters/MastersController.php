@@ -6,18 +6,16 @@ use OpenApi\Attributes as OA;
 use Sps\Auth;
 use Sps\UserAccess\AccessRulesEnum;
 use SpsFW\Api\WorkSheets\Masters\Characteristics\Dto\GetAllMasterCharacteristicsRequestDTO;
+use SpsFW\Api\WorkSheets\Masters\Pto\Dto\JsonPtoLikeMasterForDayDto;
 use SpsFW\Api\WorkSheets\Masters\Pto\Dto\PtoLikeDislikeMasterCommentDto;
 use SpsFW\Api\WorkSheets\Masters\Pto\Dto\PtoLikeDislikeMasterDto;
-use SpsFW\Api\WorkSheets\Masters\Pto\Dto\JsonPtoLikeMasterForDayDto;
-use SpsFW\Core\AccessRule\AccessRules;
-use SpsFW\Core\Exceptions\ValidationException;
+use SpsFW\Core\AccessRules\Attributes\AccessRulesAny;
 use SpsFW\Core\Http\HttpMethod;
-use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\Controller;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Route\Route;
-use SpsFW\Core\Validation\Attributes\Validation;
+use SpsFW\Core\Validation\Attributes\Validate;
 use SpsFW\Core\Validation\Dtos\StartEndDateRequestDTO;
 use SpsFW\Core\Validation\Enums\ParamsIn;
 
@@ -39,7 +37,7 @@ class MastersController extends RestController
 
 
     #[OA\Get(
-        path: '/api/v3/worksheets/master/characteristics',
+        path: '/api/worksheets/master/characteristics',
         description: 'Фильтрация работает! Слишком медленно выполняется запрос к бд',
         summary: 'Получить характеристики мастеров',
         tags: ['Дашборд диспетчеров'],
@@ -120,7 +118,7 @@ class MastersController extends RestController
             )
         ]
     )]
-    #[Route(path: '/api/v3/worksheets/master/characteristics', httpMethods: [HttpMethod::GET])]
+    #[Route(path: '/api/worksheets/master/characteristics', httpMethods: [HttpMethod::GET])]
     public function getAllMasterCharacteristic(): Response
     {
         $dto = $this->validator->validateLegacy(ParamsIn::Query, new GetAllMasterCharacteristicsRequestDTO());
@@ -131,7 +129,7 @@ class MastersController extends RestController
     }
 
     #[OA\Get(
-        path: '/api/v3/worksheets/master/characteristics/{master_id}',
+        path: '/api/worksheets/master/characteristics/{master_id}',
         summary: 'Получить характеристики мастера по id',
         tags: ['Дашборд диспетчеров'],
         parameters: [
@@ -194,7 +192,7 @@ class MastersController extends RestController
             )
         ]
     )]
-    #[Route(path: '/api/v3/worksheets/master/characteristics/{master_id}', httpMethods: [HttpMethod::GET])]
+    #[Route(path: '/api/worksheets/master/characteristics/{master_id}', httpMethods: [HttpMethod::GET])]
     public function getOneMasterCharacteristic($master_id): Response
     {
         $dto = $this->validator->validateLegacy(ParamsIn::Query, new StartEndDateRequestDTO());
@@ -206,7 +204,7 @@ class MastersController extends RestController
 
 
     #[OA\Post(
-        path: '/api/v3/worksheets/master/like-from-pto-for-day',
+        path: '/api/worksheets/master/like-from-pto-for-day',
         summary: 'Поставить оценку мастеру за день работ по коду задачи и объекту',
         requestBody: new OA\RequestBody(
             required: true,
@@ -222,9 +220,9 @@ class MastersController extends RestController
             )
         ]
     )]
-    #[AccessRules([AccessRulesEnum::DigitalLinkUnit_ProductionAndTechnicalDepartment_Like_Dislike_Ability])]
-    #[Validation(ParamsIn::Json, PtoLikeDislikeMasterDto::class)]
-    #[Route(path: '/api/v3/worksheets/master/like-from-pto-for-day', httpMethods: [HttpMethod::POST])]
+    #[AccessRulesAny([AccessRulesEnum::DigitalLinkUnit_ProductionAndTechnicalDepartment_Like_Dislike_Ability])]
+    #[Validate(ParamsIn::Json, PtoLikeDislikeMasterDto::class)]
+    #[Route(path: '/api/worksheets/master/like-from-pto-for-day', httpMethods: [HttpMethod::POST])]
     public function likeFromPtoForDay(PtoLikeDislikeMasterDto $dto): Response
     {
         $this->mastersService->likeFromPtoForDay($dto->master_code_1c, $dto->score, $dto->date);
@@ -233,7 +231,7 @@ class MastersController extends RestController
     }
 
     #[OA\Post(
-        path: '/api/v3/worksheets/master/like-from-pto-for-day/comment',
+        path: '/api/worksheets/master/like-from-pto-for-day/comment',
         description: 'Метод сработает только для того же самого ПТОшника, который поставил оценку',
         summary: 'Отправить комментарий к лайку/дизлайку',
         requestBody: new OA\RequestBody(
@@ -250,9 +248,9 @@ class MastersController extends RestController
             )
         ]
     )]
-    #[AccessRules([AccessRulesEnum::DigitalLinkUnit_ProductionAndTechnicalDepartment_Like_Dislike_Ability])]
-    #[Validation(ParamsIn::Json, PtoLikeDislikeMasterCommentDto::class)]
-    #[Route(path: '/api/v3/worksheets/master/like-from-pto-for-day/comment', httpMethods: [HttpMethod::POST])]
+    #[AccessRulesAny([AccessRulesEnum::DigitalLinkUnit_ProductionAndTechnicalDepartment_Like_Dislike_Ability])]
+    #[Validate(ParamsIn::Json, PtoLikeDislikeMasterCommentDto::class)]
+    #[Route(path: '/api/worksheets/master/like-from-pto-for-day/comment', httpMethods: [HttpMethod::POST])]
     public function commentToLikeFromPtoForDay(PtoLikeDislikeMasterCommentDto $dto): Response
     {
         $this->mastersService->commentToLikeFromPtoForDay($dto->master_code_1c, $dto->comment, $dto->date);

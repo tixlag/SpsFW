@@ -3,6 +3,7 @@
 namespace SpsFW\Core;
 
 use OpenApi\Attributes as OA;
+use SpsFW\Core\AccessRules\Attributes\NoAuthAccess;
 use SpsFW\Core\Route\Controller;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Route\Route;
@@ -17,26 +18,33 @@ class CoreUtilController extends RestController
      * и проверял, изменился ли файл. Если да, то обновляем кеш
      * @return array
      */
-    #[OA\Get(path: '/api/v3/core/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
+    #[OA\Post(path: '/api/core/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
-    #[Route(path: '/api/v3/core/update')]
+    #[Route('/api/core/update', ['POST'])]
     public function updateRoutes(): array
     {
-        new Router(SPS_NEW_CONTROLLERS_DIR, SPS_NEW_USE_CACHE,SPS_NEW_PATH_TO_CACHE_FILE)
+        new Router()
             ->loadRoutes(createCache: true);
         DocsUtil::updateDocs();
 
         return ['result' => 'ok'];
     }
 
-    #[OA\Get(path: '/api/v3/core/update/routes', summary: 'Обновляет только роуты', tags: ['Core'])]
+    #[OA\Post(path: '/api/core/update/routes', summary: 'Обновляет только роуты', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
-    #[Route(path: '/api/v3/core/update/routes')]
+    #[Route('/api/core/update/routes', ['POST'])]
     public function updateOnlyRoutes(): array
     {
-        new Router(SPS_NEW_CONTROLLERS_DIR, SPS_NEW_USE_CACHE,SPS_NEW_PATH_TO_CACHE_FILE)->loadRoutes(createCache: true);
+        new Router()->loadRoutes(createCache: true);
 
         return ['result' => 'ok'];
+    }
+
+    #[Route(path: '/test')]
+    #[NoAuthAccess]
+    public function test(): string
+    {
+        return 'Lumen (10.0.4) (Laravel Components ^10.0)';
     }
 
 }

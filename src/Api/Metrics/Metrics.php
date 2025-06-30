@@ -9,7 +9,7 @@ use Prometheus\Exception\StorageException;
 use Prometheus\Histogram;
 use Prometheus\RenderTextFormat;
 use Prometheus\Storage\PDO;
-use Sps\Db;
+use SpsFW\Core\Db\Db;
 use SpsFW\Core\Http\Request;
 
 class Metrics
@@ -90,7 +90,7 @@ class Metrics
 
     public static function createAll(?string $path = null): void
     {
-        if ($path === '/api/v3/metrics') return;
+        if ($path === '/api/metrics') return;
 
         global $globalStartTime;
         if (isset($globalStartTime) && $globalStartTime > 0) {

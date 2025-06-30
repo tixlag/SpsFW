@@ -2,11 +2,6 @@
 
 namespace SpsFW\Api\Users;
 
-use Sps\ApplicationError;
-use Sps\Auth;
-use Sps\HttpError401Exception;
-use Sps\Users\User;
-use Sps\Users\UserStore;
 use SpsFW\Api\Users\Dto\ChangePasswordDto;
 use SpsFW\Core\Exceptions\ValidationException;
 

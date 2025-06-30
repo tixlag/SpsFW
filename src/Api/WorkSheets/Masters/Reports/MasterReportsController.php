@@ -31,7 +31,7 @@ class MasterReportsController extends RestController
     }
 
     #[OA\Get(
-        path: '/api/v3/worksheets/master/report/all-day',
+        path: '/api/worksheets/master/report/all-day',
         summary: 'Получить общую сводку по мастеру за день',
         tags: ['Дашборд диспетчеров'],
         parameters: [
@@ -67,7 +67,7 @@ class MasterReportsController extends RestController
             )
         ]
     )]
-    #[Route(path: '/api/v3/worksheets/master/report/all-day', httpMethods: [HttpMethod::GET])]
+    #[Route(path: '/api/worksheets/master/report/all-day', httpMethods: [HttpMethod::GET])]
     public function getAllReportsByDay(): Response
     {
         $dto = $this->validator->validateLegacy(ParamsIn::Query, new GetAllMasterReportsByDayDto());

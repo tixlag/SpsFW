@@ -10,6 +10,7 @@ class CookieHelper
      * @param string $value
      * @param int|null $expire
      * @param bool $httponly
+     * @param string $sameSite
      * @return bool
      */
     public static function setCookie(string $name, string $value, ?int $expire = 0, bool $httponly = false, string $sameSite = "None"): bool
@@ -18,7 +19,7 @@ class CookieHelper
             'path' => '/',
             'secure' => true,
             'httponly' => $httponly,
-            'samesite' => 'None',
+            'samesite' => $sameSite,
         );
 
         if (isset($expire)) {

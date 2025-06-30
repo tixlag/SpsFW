@@ -3,7 +3,9 @@
 namespace SpsFW\Core\Http;
 
 use Exception;
-use Sps\Auth;
+use SpsFW\Core\Auth\Users\Models\Auth;
+use SpsFW\Core\Config;
+use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 
 class Response
@@ -23,7 +25,7 @@ class Response
         string $contentType = 'text/html'
     ) {
         $this->headers['Content-Type'] = $contentType;
-        $this->headers['Access-Control-Allow-Origin'] = SPS_HTTP_ORIGIN;
+        $this->headers['Access-Control-Allow-Origin'] = Config::get('app')['host'];
         $this->headers['Access-Control-Allow-Credentials'] = 'true';
         $this->headers['Access-Control-Allow-Headers'] = 'Content-type, Authorization';
     }
@@ -33,10 +35,11 @@ class Response
      * @param \Throwable|null $exception
      * @param string|null $message
      * @return array[]
+     * @throws AuthorizationException
      */
     public static function createErrorBody(?\Throwable $exception, ?string $message, ?int $statusCode): array
     {
-        $user = Auth::get();
+        $user = Auth::getOrNull();
 
         // Безопасно получаем previous exception
         $previous = null;
@@ -88,7 +91,7 @@ class Response
             'error' => [
                 'status' => $statusCode ?? ($exception ? $exception->getCode() : 500),
                 'uri' => $_SERVER['REQUEST_URI'] ?? '',
-                'user' => $user ? ($user->getName() . '-' . $user->getCode1c() . '-' . $user->getId()) : 'anonymous',
+                'user' => $user ? ('id: ' . $user->id) : 'anonymous',
                 'exception' => $exception ? basename(str_replace('\\', '/', get_class($exception))) : null,
                 'message' => $message ?? ($exception ? $exception->getMessage() : 'Unknown error'),
                 'file' => $exception ? basename($exception->getFile()) : '',
@@ -127,7 +130,11 @@ class Response
                         if (!empty($properties)) {
                             $serialized = [];
                             foreach ($properties as $property) {
-                                $serialized[$property->getName()] = $property->getValue($arg);
+                                try {
+                                    $serialized[$property->getName()] = $property->getValue($arg);
+                                } catch ( \Exception $e) {
+                                    $serialized[$property->getName()] = "";
+                                }
                             }
                         } // 4. Если публичных свойств нет, пытаемся привести к массиву
                         else {
@@ -242,6 +249,7 @@ class Response
      * @param mixed $data
      * @param int $flags Флаги для json_encode
      * @return self
+     * @throws BaseException
      */
     private function createJson(mixed $data, int $flags = 0): self
     {
@@ -256,11 +264,10 @@ class Response
 
     public function send(): void
     {
-        http_response_code($this->status);
-
         foreach ($this->headers as $name => $value) {
             header("{$name}: {$value}");
         }
+        http_response_code($this->status);
 
         echo $this->body;
     }
@@ -291,7 +298,7 @@ class Response
      * Возвращает 201 ответ
      * @return self
      */
-    public static function created(array|string|null $data = null): self
+    public static function created(array|object|string|null $data = null): self
     {
         if (is_null($data)) {
             return new self(201);

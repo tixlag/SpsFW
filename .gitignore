@@ -1,0 +1,6 @@
+.env.prod
+.env.dev
+.env
+/vendor/
+composer.phar
+*/openapi.yaml

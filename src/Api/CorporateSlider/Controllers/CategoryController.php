@@ -32,7 +32,7 @@ class CategoryController extends RestController
      * @throws CallableControllerException
      */
     #[OA\Post(
-        path: "/api/v3/corporate-slider/categories",
+        path: "/api/corporate-slider/categories",
         summary: "Создает новую категорию",
         tags: ["CorporateSlider"]
     )]
@@ -54,7 +54,7 @@ class CategoryController extends RestController
             ]
         )
     )]
-    #[Route(path: '/api/v3/corporate-slider/categories', httpMethods: [HttpMethod::POST])]
+    #[Route(path: '/api/corporate-slider/categories', httpMethods: [HttpMethod::POST])]
 
     public function createCategory(): Response
     {
@@ -77,7 +77,7 @@ class CategoryController extends RestController
 
 
     #[OA\Post(
-        path: "/api/v3/corporate-slider/categories/{category_uuid}",
+        path: "/api/corporate-slider/categories/{category_uuid}",
         summary: "Обновляет категорию по uuid",
         tags: ["CorporateSlider"]
     )]
@@ -98,7 +98,7 @@ class CategoryController extends RestController
         )
     )]
     #[OA\Response(response: 200, description: "Категория успешно обновлена")]
-    #[Route(path: "/api/v3/corporate-slider/categories/{category_uuid}", httpMethods: [HttpMethod::POST])]
+    #[Route(path: "/api/corporate-slider/categories/{category_uuid}", httpMethods: [HttpMethod::POST])]
     public function updateCategory(string $category_uuid): Response
     {
         $body = $this->request->getJsonData() ?? $this->request->getPost();
@@ -122,7 +122,7 @@ class CategoryController extends RestController
     }
 
     #[OA\Get(
-        path: "/api/v3/corporate-slider/categories/{category_uuid}",
+        path: "/api/corporate-slider/categories/{category_uuid}",
         summary: "Получает категорию по её UUID",
         tags: ["CorporateSlider"]
     )]
@@ -142,7 +142,7 @@ class CategoryController extends RestController
             ]
         )
     )]
-    #[Route(path: '/api/v3/corporate-slider/categories/{category_uuid}', httpMethods: [HttpMethod::GET])]
+    #[Route(path: '/api/corporate-slider/categories/{category_uuid}', httpMethods: [HttpMethod::GET])]
     public function getCategoryByUuidWithSlides(string $category_uuid): array
     {
         $category = $this->categoryStorage->getCategoriesWithSlides($category_uuid)[0];
@@ -151,7 +151,7 @@ class CategoryController extends RestController
 
     // Получение всех категорий
     #[OA\Get(
-        path: "/api/v3/corporate-slider/categories",
+        path: "/api/corporate-slider/categories",
         summary: "Возвращает список всех категорий с их слайдами",
         tags: ["CorporateSlider"],
     )]
@@ -171,7 +171,7 @@ class CategoryController extends RestController
         )
     )]
 
-    #[Route(path: "/api/v3/corporate-slider/categories", httpMethods: [HttpMethod::GET])]
+    #[Route(path: "/api/corporate-slider/categories", httpMethods: [HttpMethod::GET])]
     public function getAllCategoriesWithSlides(): array
     {
         $categories = $this->categoryStorage->getCategoriesWithSlides();
@@ -181,7 +181,7 @@ class CategoryController extends RestController
 
 
     #[OA\Delete(
-        path: "/api/v3/corporate-slider/categories/{category_uuid}",
+        path: "/api/corporate-slider/categories/{category_uuid}",
         summary: "Удаляет категорию по её UUID",
         tags: ["CorporateSlider"]
     )]
@@ -194,7 +194,7 @@ class CategoryController extends RestController
     )]
     #[OA\Response(response: 200, description: "Категория успешно удалена")]
 
-    #[Route(path: "/api/v3/corporate-slider/categories/{category_uuid}", httpMethods: [HttpMethod::DELETE])]
+    #[Route(path: "/api/corporate-slider/categories/{category_uuid}", httpMethods: [HttpMethod::DELETE])]
     public function deleteCategory(string $category_uuid): Response
     {
         try {
@@ -208,7 +208,7 @@ class CategoryController extends RestController
 
 
     #[OA\Delete(
-        path: "/api/v3/corporate-slider/categories",
+        path: "/api/corporate-slider/categories",
         summary: "Удаляет категории по массивам UUID",
         tags: ["CorporateSlider"]
     )]
@@ -221,7 +221,7 @@ class CategoryController extends RestController
     )]
     #[OA\Response(response: 200, description: "Категории успешно удалены")]
 
-    #[Route(path: "/api/v3/corporate-slider/categories", httpMethods: [HttpMethod::DELETE])]
+    #[Route(path: "/api/corporate-slider/categories", httpMethods: [HttpMethod::DELETE])]
     public function deleteManyCategories(): Response
     {
         try {

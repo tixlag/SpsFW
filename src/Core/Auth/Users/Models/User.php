@@ -2,15 +2,20 @@
 
 namespace SpsFW\Core\Auth\Users\Models;
 
+use DateTime;
 use JsonSerializable;
+use SpsFW\Core\AccessRules\Dto\AccessRulesArrayDto;
 use SpsFW\Core\Models\BaseModel;
 
-class User extends BaseModel implements JsonSerializable
+class User extends BaseModel implements UserAuthI, JsonSerializable
 {
 
     public const string TABLE = 'users';
 
+    private(set) string $id;
+
     /**
+     * @param string $id
      * @param string $login
      * @param string $hashedPassword
      * @param string $passport
@@ -22,16 +27,19 @@ class User extends BaseModel implements JsonSerializable
      * @param array $accessRulesValue
      */
     public function __construct(
-        private(set) string $id,
+
         readonly string $login,
+        private(set) ?string $code_1c,
         readonly string $hashedPassword,
         readonly string $passport,
         readonly string $fio,
         readonly string $birthday,
         readonly ?string $email = null,
         readonly ?string $phone = null,
-        private ?string $refresh_token = null,
+        private(set) ?string $refreshToken = null,
         private(set) array $accessRules = [],
+        private(set) ?DateTime $time_signup = null,
+        private(set) ?DateTime $time_login = null
     ) {
     }
 
@@ -54,6 +62,13 @@ class User extends BaseModel implements JsonSerializable
         $this->accessRules[$accessRuleId] = $value;
     }
 
+    public function addAccessRules(array $accessRules): self
+    {
+        $this->accessRules += $accessRules;
+
+        return $this;
+    }
+
     /**
      * Устанавливает значение правила
      * @param int $accessRuleId
@@ -66,8 +81,13 @@ class User extends BaseModel implements JsonSerializable
 
     public function setRefreshToken(string $refreshToken): self
     {
-        $this->refresh_token = $refreshToken;
+        $this->refreshToken = $refreshToken;
         return $this;
+    }
+
+    public function setCode1c(string $code_1c): void
+    {
+        $this->code_1c = $code_1c;
     }
 
 
@@ -76,6 +96,7 @@ class User extends BaseModel implements JsonSerializable
         return [
             'id' => $this->id,
             'login' => $this->login,
+            'code_1c' => $this->code_1c,
             'passport' => $this->passport,
             'fio' => $this->fio,
             'birthday' => $this->birthday,
@@ -83,6 +104,17 @@ class User extends BaseModel implements JsonSerializable
             'phone' => $this->phone,
             'accessRules' => $this->accessRules,
         ];
+    }
+
+    public function setTimeLogin(DateTime $timeLogin): UserAuthI
+    {
+        // TODO: Implement setTimeLogin() method.
+    }
+
+    public function setId(string $user_id): self
+    {
+        $this->id = $user_id;
+        return $this;
     }
 
 }

@@ -10,7 +10,7 @@ use SpsFW\Core\Route\Route;
 #[Controller]
 class TestController
 {
-    #[Route(path: '/api/v3/test/{id}/{category}')]
+    #[Route(path: '/api/test/{id}/{category}')]
     #[Middleware(middlewares: [PerformanceMiddleware::class])]
     public function test(string $id, $category): mixed
     {

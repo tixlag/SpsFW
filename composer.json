@@ -1,12 +1,17 @@
 {
-  "name": "sps/fw",
+  "name": "tixlag/php-framework",
   "description": "SpsFramework - ready to go!",
   "type": "library",
   "license": "",
+  "version": "0.1.1",
   "require": {
     "ext-mbstring": "*",
     "ext-pdo": "*",
-    "vlucas/phpdotenv": "^5.6"
+    "vlucas/phpdotenv": "^5.6",
+    "robmorgan/phinx": "^0.16.9",
+    "firebase/php-jwt": "^6.11",
+    "zircote/swagger-php": "^5.1",
+    "promphp/prometheus_client_php": "^v2.14.1"
   },
   "autoload": {
     "psr-4": {
@@ -27,6 +32,54 @@
     "rollback:dev": "APP_ENV=dev vendor/bin/phinx rollback",
     "rollback:prod": "APP_ENV=prod vendor/bin/phinx rollback",
     "create:prod": "APP_ENV=prod vendor/bin/phinx create",
-    "create:dev": "APP_ENV=dev vendor/bin/phinx create"
+    "create:dev": "APP_ENV=dev vendor/bin/phinx create",
+    "migration:generate:dev": [
+      "echo 'Generating migrations from schemas...'",
+      "APP_ENV=dev php scripts/generate_migrations.php"
+    ],
+    "migration:generate:prod": [
+      "echo 'Generating migrations from schemas...'",
+      "APP_ENV=prod php scripts/generate_migrations.php"
+    ],
+    "migration:status:dev": [
+      "echo 'Checking migration status...'",
+      "APP_ENV=dev vendor/bin/phinx status -c phinx.php"
+    ],
+    "migration:status:prod": [
+      "echo 'Checking migration status...'",
+      "APP_ENV=prod vendor/bin/phinx status -c phinx.php"
+    ],
+    "migration:run:dev": [
+      "echo 'Running Phinx migrations...'",
+      "APP_ENV=dev vendor/bin/phinx migrate -c phinx.php"
+    ],
+    "migration:run:prod": [
+      "echo 'Running Phinx migrations...'",
+      "APP_ENV=prod vendor/bin/phinx migrate -c phinx.php"
+    ],
+    "migration:auto:dev": [
+      "echo '🚀 Starting automatic migration process...'",
+      "@migration:generate:dev",
+      "@migration:status:dev",
+      "@migration:run:dev",
+      "echo '✅ Migration process completed successfully!'"
+    ],
+    "migration:auto:prod": [
+      "echo '🚀 Starting automatic migration process...'",
+      "@migration:generate:prod",
+      "@migration:status:prod",
+      "@migration:run:prod",
+      "echo '✅ Migration process completed successfully!'"
+    ]
+  },
+  "scripts-descriptions": {
+    "migration:generate:dev": "Generate migrations from schema files",
+    "migration:run:dev": "Execute all pending migrations",
+    "migration:status:dev": "Show migration status",
+    "migration:auto:dev": "Generate and run all migrations automatically",
+    "migration:generate:prod": "Generate migrations from schema files",
+    "migration:run:prod": "Execute all pending migrations",
+    "migration:status:prod": "Show migration status",
+    "migration:auto:prod": "Generate and run all migrations automatically"
   }
 }

@@ -31,7 +31,7 @@ class LoginController extends RestController
      * @throws ApplicationError
      */
     #[OA\Patch(
-        path: '/api/v3/login/password/change',
+        path: '/api/login/password/change',
         description: 'Минимум 6 символов',
         summary: 'Change password',
         requestBody: new OA\RequestBody(
@@ -47,7 +47,7 @@ class LoginController extends RestController
             )
         ]
     )]
-    #[Route('/api/v3/login/password/change', httpMethods: ['PATCH'])]
+    #[Route('/api/login/password/change', httpMethods: ['PATCH'])]
     public function changePassword(): Response
     {
         $dto = $this->validator->validateLegacy(ParamsIn::Json, new ChangePasswordDto());
