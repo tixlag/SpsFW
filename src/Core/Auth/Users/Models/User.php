@@ -4,7 +4,6 @@ namespace SpsFW\Core\Auth\Users\Models;
 
 use DateTime;
 use JsonSerializable;
-use SpsFW\Core\AccessRules\Dto\AccessRulesArrayDto;
 use SpsFW\Core\Models\BaseModel;
 
 class User extends BaseModel implements UserAuthI, JsonSerializable

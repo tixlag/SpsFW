@@ -10,9 +10,6 @@ interface UsersServiceI
     public function login($login, $password, $remember);
 
     public function register(string $login, string $password, string $passportNumber, string $fio, string $birthday, ?string $email, ?string $phone);
-    public function updateTokens(string $refreshToken);
-
-    public function logout();
 
     public function changePassword($email, $password);
 
@@ -23,8 +20,5 @@ interface UsersServiceI
     public function changeAvatar($email, $newAvatar);
 
     public function getById(string $userId): UserAuthI;
-
-    public function addAccessRules(string $userId, array $accessRules): ?UserAuthI;
-    public function setAccessRules(string $userId, array $accessRules): ?UserAuthI;
 
 }

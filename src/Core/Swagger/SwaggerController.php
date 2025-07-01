@@ -3,10 +3,10 @@
 namespace SpsFW\Core\Swagger;
 
 use OpenApi\Attributes as OA;
-use SpsFW\Core\AccessRules\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\Controller;
+use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Http\Response;
-use SpsFW\Core\Route\Controller;
-use SpsFW\Core\Route\Route;
 
 
 #[OA\Info(

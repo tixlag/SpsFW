@@ -3,10 +3,15 @@
 namespace SpsFW\Core;
 
 use OpenApi\Attributes as OA;
-use SpsFW\Core\AccessRules\Attributes\NoAuthAccess;
-use SpsFW\Core\Route\Controller;
+use ReflectionException;
+use SpsFW\Core\Attributes\Controller;
+use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\Route;
+use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Route\RestController;
-use SpsFW\Core\Route\Route;
+use SpsFW\Core\Router\ClassScanner;
+use SpsFW\Core\Router\DICacheBuilder;
+use SpsFW\Core\Router\DIContainer;
 use SpsFW\Core\Router\Router;
 
 #[Controller]
@@ -45,6 +50,34 @@ class CoreUtilController extends RestController
     public function test(): string
     {
         return 'Lumen (10.0.4) (Laravel Components ^10.0)';
+    }
+
+    /**
+     * @throws BaseException
+     * @throws ReflectionException
+     */
+    #[Route(path: '/core/update', httpMethods: ['POST'])]
+    #[NoAuthAccess]
+    public function coreUpdate(): string
+    {
+        $scannerDirs = [
+            __DIR__ . '/../../',              // фреймворк
+            // __DIR__ . '/../../../../',    // приложение
+        ];
+
+        $router = new Router();
+        DocsUtil::updateDocs();
+
+        $allClasses = [];
+        foreach ($scannerDirs as $dir) {
+            $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
+        }
+
+        $compiler = new DICacheBuilder($router->container);
+        $compiler->compile($allClasses);
+            $router->loadRoutes(createCache: true);
+
+        return 'ok';
     }
 
 }

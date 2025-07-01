@@ -5,8 +5,8 @@ namespace SpsFW\Core\Auth\Users\Models;
 use DateTime;
 use Exception;
 use Firebase\JWT\ExpiredException;
-use SpsFW\Core\AccessRules\Dto\AccessRulesArrayDto;
-use SpsFW\Core\Auth\AuthToken\AccessRulesService;
+use SpsFW\Core\Auth\AccessRules\AccessRulesService;
+use SpsFW\Core\Auth\AuthToken\AuthTokenService;
 use SpsFW\Core\Exceptions\AuthorizationException;
 
 class Auth implements UserAuthI
@@ -44,7 +44,7 @@ class Auth implements UserAuthI
                 if (preg_match('/Bearer\s(\S+)/', $authHeader, $matches)) {
                     $authToken = $matches[1];
                     try {
-                        $jwtDecoded = AccessRulesService::decodeJwt($authToken);
+                        $jwtDecoded = AuthTokenService::decodeJwt($authToken);
                     } catch (Exception $e) {
                         throw new AuthorizationException('JWT problem', 401, $e);
                     }

@@ -2,35 +2,32 @@
 
 namespace SpsFW\Core\Auth\Users;
 
-use DateMalformedStringException;
 use Random\RandomException;
-use SpsFW\Core\AccessRules\AccessRulesService;
+use SpsFW\Core\Attributes\Inject;
+use SpsFW\Core\Auth\AccessRules\AccessRulesService;
 use SpsFW\Core\Auth\AuthToken\AuthTokenService;
-use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
-use SpsFW\Core\Auth\Users\Models\Auth;
 use SpsFW\Core\Auth\Users\Models\User;
 use SpsFW\Core\Auth\Users\Models\UserAuthI;
 use SpsFW\Core\Auth\Users\Storages\UsersStorage;
 use SpsFW\Core\Auth\Users\Storages\UsersStorageI;
 use SpsFW\Core\Config;
-use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BadPasswordException;
 use SpsFW\Core\Exceptions\UserNotFoundException;
 use SpsFW\Core\Utils\CookieHelper;
 
 class UsersService implements UsersServiceI
 {
-    private UsersStorageI $usersStorage;
+    public function __construct(
 
-    private AuthTokenService $authTokenService;
+        #[Inject]
+        private ?UsersStorageI $usersStorage = null,
 
-    private AccessRulesService $accessRulesService;
+        #[Inject]
+        private ?AuthTokenService $authTokenService = null,
 
-    public function __construct(?UsersStorageI $usersStorage = null, ?AuthTokenService $authTokenService = null, ?AccessRulesService $accessRulesService = null)
+        #[Inject]
+        private ?AccessRulesService $accessRulesService = null)
     {
-            $this->usersStorage = $usersStorage ?? new UsersStorage();
-            $this->authTokenService = $authTokenService ?? new AuthTokenService();
-            $this->accessRulesService = $accessRulesService ?? new AccessRulesService();
     }
 
     /**

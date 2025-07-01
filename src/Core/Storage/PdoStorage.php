@@ -10,11 +10,14 @@ use SpsFW\Core\Models\BaseModel;
 abstract class PdoStorage
 {
 
-    protected PDO $pdo;
+    protected ?PDO $pdo = null;
 
-    public function __construct()
+    protected function getPdo(): PDO
     {
-        $this->pdo = Db::get();
+        if ($this->pdo === null) {
+            $this->pdo = Db::get();
+        }
+        return $this->pdo;
     }
 
     protected function generateId(): string
@@ -43,11 +46,11 @@ abstract class PdoStorage
     protected function insert(string $table, array $params): void
     {
         $paramsKeys = implode(', ', array_keys($params));
-        $paramsValues = array_values($params);
-        $paramsKeysForInsert = implode(', :', $paramsKeys);
+        $paramsValues = implode(', ', array_values($params));
+        $paramsKeysForInsert = implode(', :', $params);
          $this->pdo->prepare(/** @lang MariaDB */"
             INSERT INTO $table ($paramsKeys)
-            VALUES ($params)
+            VALUES ($paramsValues)
 ");
     }
 

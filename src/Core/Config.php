@@ -2,9 +2,21 @@
 
 namespace SpsFW\Core;
 
+use SpsFW\Core\Auth\Users\Storages\UsersStorage;
+use SpsFW\Core\Auth\Users\Storages\UsersStorageI;
+use SpsFW\Core\Auth\Users\UsersService;
+use SpsFW\Core\Auth\Users\UsersServiceI;
+
 class Config
 {
     private static $config = [];
+
+    public static array $bindings = [
+        UsersServiceI::class => UsersService::class,
+        UsersStorageI::class => UsersStorage::class,
+        // Добавляй другие интерфейсы здесь
+    ];
+
 
     public static function get($key)
     {

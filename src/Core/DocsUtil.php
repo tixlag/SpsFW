@@ -2,48 +2,48 @@
 
 namespace SpsFW\Core;
 
+use OpenApi\Generator;
 use OpenApi\Loggers\DefaultLogger;
-use SpsFW\Core\Http\Response;
 
 class DocsUtil
 {
-
-    /** В зависимости от того, где развернуто окружение, формируем маршруты и сохраняем их
-     * @return void
+    /**
+     * Генерирует OpenAPI документацию, используя относительные пути.
+     * Поднимается на 2 уровня вверх от текущего файла для определения корня проекта.
      */
     public static function updateDocs(): void
     {
+        // Получаем путь к корневой директории проекта (две директории вверх от __FILE__)
+        $frameworkPath = dirname(__DIR__, 1);
+        $projectPath = dirname(__DIR__, 3);
 
-        if (defined( SPS_DEVELOPMENT_VERSION) && !SPS_DEVELOPMENT_VERSION  && is_dir("/var/www/lk.sps38.pro/")) {
-            $openapi = new \OpenApi\Generator(new class extends DefaultLogger {
-                public function warning($message, array $context = array()): void
-                {
-                    return;
-                }
-            })->generate([ '/var/www/lk.sps38.pro/www/src/src/', '/var/www/lk.sps38.pro/www/src/Sps/']);
+        // Пути для сканирования аннотаций
+        $scanPaths = [
+            $frameworkPath . '/Sps/',
+            $frameworkPath . '/src/',
+        ];
 
-            file_put_contents("/var/www/lk.sps38.pro/www/src/src/Swagger/View/openapi.yaml", $openapi->toYaml());
-            file_put_contents("/var/www/dev.sps38.pro/www/src/src/Api/Swagger/View/openapi.yaml", $openapi->toYaml());
+        // Путь для сохранения YAML-файла
+        $outputPath = $frameworkPath . '/src/Api/Swagger/View/openapi.yaml';
 
-        } elseif (is_dir("/var/www/dev.sps38.pro/")) {
-            $openapi = new \OpenApi\Generator(new class extends DefaultLogger {
-                public function warning($message, array $context = array()): void
-                {
-                    return;
-                }
-            })->generate(['/var/www/dev.sps38.pro/www/src/src/', '/var/www/dev.sps38.pro/www/src/Sps/']);
-
-            file_put_contents("/var/www/dev.sps38.pro/www/src/src/Api/Swagger/View/openapi.yaml", $openapi->toYaml());
-        } else {
-            $openapi = new \OpenApi\Generator(new class extends DefaultLogger {
-                public function warning($message, array $context = array()): void
-                {
-                    return;
-                }
-            })->generate([ '/var/www/html/www/src/Sps/', '/var/www/html/www/src/src/']);
-
-            file_put_contents("/var/www/html/www/src/src/Api/Swagger/View/openapi.yaml", $openapi->toYaml());
+        // Убедимся, что целевая директория существует
+        if (!is_dir(dirname($outputPath))) {
+            mkdir(dirname($outputPath), 0777, true);
         }
 
+        // Создаём генератор с подавленными предупреждениями
+        $openapi = new Generator(new class extends DefaultLogger {
+            public function warning($message, array $context = []): void
+            {
+                // Игнорируем все предупреждения
+                return;
+            }
+        });
+
+        // Запускаем генерацию из найденных путей
+        $generatedOpenApi = $openapi->generate($scanPaths);
+
+        // Сохраняем результат
+        file_put_contents($outputPath, $generatedOpenApi->toYaml());
     }
 }

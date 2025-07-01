@@ -3,14 +3,18 @@
 namespace SpsFW\Core\Auth\Users\Controllers;
 
 use DateMalformedStringException;
+use OpenApi\Attributes as OA;
 use Random\RandomException;
-use SpsFW\Core\AccessRules\AccessRulesService;
-use SpsFW\Core\AccessRules\Attributes\AccessRulesAll;
-use SpsFW\Core\AccessRules\Attributes\AccessRulesAny;
-use SpsFW\Core\AccessRules\Attributes\NoAuthAccess;
-use SpsFW\Core\AccessRules\Dto\AccessRulesArrayDto;
-use SpsFW\Core\AccessRules\MasterRules;
-use SpsFW\Core\AccessRules\PtoRules;
+use SpsFW\Core\Attributes\AccessRulesAll;
+use SpsFW\Core\Attributes\AccessRulesAny;
+use SpsFW\Core\Attributes\Inject;
+use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\Route;
+use SpsFW\Core\Attributes\Validate;
+use SpsFW\Core\Auth\AccessRules\AccessRulesService;
+use SpsFW\Core\Auth\AccessRules\Dto\AccessRulesArrayDto;
+use SpsFW\Core\Auth\AccessRules\MasterRules;
+use SpsFW\Core\Auth\AccessRules\PtoRules;
 use SpsFW\Core\Auth\AuthToken\AuthTokenService;
 use SpsFW\Core\Auth\Users\Dto\LoginUserDto;
 use SpsFW\Core\Auth\Users\Dto\RegisterUserDto;
@@ -23,24 +27,23 @@ use SpsFW\Core\Exceptions\BadPasswordException;
 use SpsFW\Core\Exceptions\UserNotFoundException;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
-use SpsFW\Core\Route\Route;
-use SpsFW\Core\Validation\Attributes\Validate;
 use SpsFW\Core\Validation\Enums\ParamsIn;
-use OpenApi\Attributes as OA;
 
+// todo разнести контроллеры по соответсвующим областям и грамотно продумать интерфейсы пользователя для самостоятельной работы фреймворка
 class UsersController extends RestController
 {
 
-    private UsersServiceI $usersService;
-    private AccessRulesService $accessRulesService;
-    private AuthTokenService $authTokenService;
 
     // Такой конструктор нужен, чтобы мы могли мокать наши сервисы
-    public function __construct(?UsersServiceI $usersService = null, ?AccessRulesService $accessRulesService = null, ?AuthTokenService $authTokenService = null)
+    public function __construct(
+        #[Inject]
+        private ?UsersServiceI $usersService,
+        #[Inject]
+        private ?AccessRulesService $accessRulesService,
+        #[Inject]
+        private ?AuthTokenService $authTokenService)
     {
-        $this->usersService = $usersService ?? new UsersService();
-        $this->accessRulesService = $accessRulesService ?? new AccessRulesService();
-        $this->authTokenService = $authTokenService ?? new AuthTokenService();
+
         parent::__construct();
     }
 

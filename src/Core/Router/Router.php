@@ -8,29 +8,28 @@ use ReflectionClass;
 use ReflectionException;
 use ReflectionMethod;
 use ReflectionNamedType;
-use SpsFW\Api\Metrics\Metrics;
-use SpsFW\Core\AccessRules\AccessChecker;
-use SpsFW\Core\AccessRules\AccessMode;
-use SpsFW\Core\AccessRules\Attributes\AccessRulesAll;
-use SpsFW\Core\AccessRules\Attributes\AccessRulesAny;
-use SpsFW\Core\AccessRules\Attributes\NoAuthAccess;
+//use SpsFW\Api\Metrics\Metrics;
+use SpsFW\Core\Attributes\AccessRulesAll;
+use SpsFW\Core\Attributes\AccessRulesAny;
+use SpsFW\Core\Attributes\Middleware;
+use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\Route;
+use SpsFW\Core\Attributes\Validate;
+use SpsFW\Core\Auth\AccessRules\AccessChecker;
 use SpsFW\Core\Auth\Users\Models\Auth;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\RouteNotFoundException;
-use SpsFW\Core\Exceptions\TokenExpiredException;
 use SpsFW\Core\Http\HttpMethod;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
-use SpsFW\Core\Middleware\Infrastructure\Middleware;
 use SpsFW\Core\Middleware\Infrastructure\MiddlewareInterface;
-use SpsFW\Core\Route\Controller;
-use SpsFW\Core\Route\Route;
-use SpsFW\Core\Validation\Attributes\Validate;
 use SpsFW\Core\Validation\Validator;
 
 class Router
 {
+
+    private(set) DIContainer $container;
     /**
      * @var array<string, array{
      *     controller: class-string,
@@ -67,6 +66,7 @@ class Router
      * @param bool $useCache Использовать ли кеширование маршрутов
      * @param string $cacheFile Путь к файлу кеша
      * @param array<string, mixed> $dependencies Зависимости для внедрения в конструкторы классов и middleware
+     * @throws BaseException
      */
     public function __construct(
         ?string $controllersDir = null,
@@ -74,6 +74,19 @@ class Router
         protected string $cacheFile = __DIR__ . '/routes.json',
         array $dependencies = []
     ) {
+//        $scannerDirs = [
+//            __DIR__ . '/../../',              // фреймворк
+//            // __DIR__ . '/../../../../',    // приложение
+//        ];
+//        $allClasses = [];
+//        foreach ($scannerDirs as $dir) {
+//            $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
+//        }
+//
+//        $compiler = new DICacheBuilder(new DIContainer());
+//        $compiler->compile($allClasses);
+//        return 'ok';
+
 //        Metrics::init();
         if ($controllersDir !== null) {
             $this->controllersDirs[] = $controllersDir;
@@ -87,6 +100,7 @@ class Router
 //        } catch (RedisException $e) {
 //            $this->redis = null;
 //        }
+        $this->container = new DIContainer();
 
         $this->loadRoutes();
     }
@@ -108,29 +122,25 @@ class Router
     {
         if ($this->useCache && !$createCache) {
             try {
-                $this->routes = RoutesCache::$routes;
-                return;
+                $compiledRoutesFile = __DIR__ . '/compiled_routes.php';
+                if (file_exists($compiledRoutesFile)) {
+                    $this->routes = require $compiledRoutesFile;
+                    return;
+                }
+
             } catch (\Error $e) {
                 $this->scanControllers();
-                $this->createRoutesCacheClass();
+                $this->createRoutesCache();
                 return;
             }
-            if ($redis) {
-                $this->loadRoutesFromRedisOrJson();
-                return;
-            }
+
         }
 
         $this->scanControllers();
 
         if ($this->useCache || $createCache) {
-            $this->createRoutesCacheClass();
+            $this->createRoutesCache();
 
-            if ($this->redis) {
-                $routes = serialize($this->routes);
-                $this->redis?->setValue("SpsFW_routes", $routes);
-                file_put_contents($this->cacheFile, $routes);
-            }
         }
     }
 
@@ -205,12 +215,7 @@ class Router
         ReflectionClass $reflection
     ): array {
         $routes = [];
-//        $controllerAttribute = $reflection->getAttributes(Controller::class);
-//        if (empty($controllerAttribute)) {
-//            return [];
-//        }
 
-//        $classRoute = $controllerAttribute[0]->newInstance();
         $classMiddlewares = $this->collectMiddlewares($reflection);
 
         foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
@@ -289,7 +294,7 @@ class Router
         $attributes = $reflection->getAttributes(Middleware::class);
 
         foreach ($attributes as $attribute) {
-            /** @var Middleware $middlewareAttr */
+            /** @var \SpsFW\Core\Attributes\Middleware $middlewareAttr */
             $middlewareAttr = $attribute->newInstance();
             $middlewares = array_merge($middlewares, $middlewareAttr->getMiddlewares());
         }
@@ -351,19 +356,19 @@ class Router
                 );
             }
 
-            if (isset(Metrics::$registry)) {
-                Metrics::incrementErrors(
-                    $e,
-                    $_SERVER['REQUEST_METHOD'],
-                    $this->currentRoute['rawPath'] ?? Request::getUri(),
-                    http_response_code()
-                );
-            }
+//            if (isset(Metrics::$registry)) {
+//                Metrics::incrementErrors(
+//                    $e,
+//                    $_SERVER['REQUEST_METHOD'],
+//                    $this->currentRoute['rawPath'] ?? Request::getUri(),
+//                    http_response_code()
+//                );
+//            }
             return Response::error($e);
         } finally {
-            if (isset(Metrics::$registry)) {
-                Metrics::createAll($this->currentRoute['rawPath'] ?? Request::getUri());
-            }
+//            if (isset(Metrics::$registry)) {
+//                Metrics::createAll($this->currentRoute['rawPath'] ?? Request::getUri());
+//            }
         }
     }
 
@@ -427,7 +432,7 @@ class Router
      *     match_params: array<string, string>
      * } $route
      * @return Response
-     * @throws HttpError403Exception|HttpError401Exception|ApplicationError|ReflectionException
+     * @throws ReflectionException|AuthorizationException
      */
     protected
     function processRoute(
@@ -490,14 +495,24 @@ class Router
     }
 
     /**
-     * @template T of object
+     * @template T of object|null
      * @param class-string<T> $className
      * @return T
+     * @throws ReflectionException
      */
     protected
     function createControllerInstance(
         string $className
-    ): object {
+    ): object|null {
+        // тестируем DI
+        $globalStartTime = hrtime(true);
+        $res =  $this->container->get($className);
+        $endTime = hrtime(true);
+        $duration = ($endTime - $globalStartTime) / 1e6; // В миллисекундах
+        echo sprintf('DI speed: %s', number_format($duration, 2));
+        return $res;
+
+
         // Если нет мидлвар, вызывает констурктор напрямую
         if (empty($this->currentRoute['middlewares'])) {
             return new $className();
@@ -676,8 +691,10 @@ class Router
 
     /**
      * @return void
+     * @deprecated редис не нужен
      */
-    public function loadRoutesFromRedisOrJson(): void
+    public
+    function loadRoutesFromRedisOrJson(): void
     {
         $routesFromRedis = unserialize($this->redis?->getValue("SpsFW_routes") ?? '');
         if ($routesFromRedis) {
@@ -700,19 +717,12 @@ class Router
     /**
      * @return void
      */
-    public function createRoutesCacheClass(): void
+    public
+    function createRoutesCache(): void
     {
         $routesString = var_export($this->routes, true);
-        $classCode = <<<PHP
-            <?php
-                
-            namespace SpsFW\Core\Router;
-            
-            class RoutesCache {
-                public static \$routes =  $routesString;
-            }
-            PHP;
-        file_put_contents(__DIR__ . '/RoutesCache.php', $classCode);
+        $php = "<?php\n\nreturn $routesString;\n";
+        file_put_contents(__DIR__ . '/compiled_routes.php', $php);
     }
 
     /**
@@ -770,4 +780,6 @@ class Router
             throw new AuthorizationException(implode(PHP_EOL, $problemRules), 403);
         }
     }
+
+
 }

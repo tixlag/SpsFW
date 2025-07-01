@@ -8,10 +8,10 @@ use Exception;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Random\RandomException;
+use SpsFW\Core\Attributes\Inject;
 use SpsFW\Core\Auth\Users\Models\User;
 use SpsFW\Core\Auth\Users\Models\Auth;
 use SpsFW\Core\Auth\Users\Models\UserAuthI;
-use SpsFW\Core\Auth\Users\UsersService;
 use SpsFW\Core\Auth\Users\UsersServiceI;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\AuthorizationException;
@@ -21,22 +21,21 @@ class AuthTokenService
 {
     private static ?array $config = null;
 
-    private ?AuthTokenStorage $authTokenStorage;
-    private ?UsersServiceI $usersService;
 
-    public function __construct(?AuthTokenStorage $authTokenStorage = null, ?UsersServiceI $usersService = null)
-    {
-        $this->authTokenStorage = $authTokenStorage ?? new AuthTokenStorage();
-        $this->usersService = $usersService ?? new UsersService();
+    public function __construct(
+        #[Inject]
+        private ?AuthTokenStorage $authTokenStorage,
+        #[Inject]
+        private ?UsersServiceI $usersService,
+    ) {
     }
+
 
     private static function init(): void
     {
         if (self::$config == null) {
-            self::$config = Config::get('jwt');
+            self::$config = Config::get('auth')['jwt'];
         }
-
-
     }
 
     /** @return array{selector: string, token: string, verifier_hash: string}
@@ -64,10 +63,15 @@ class AuthTokenService
         $payload['id'] = $user->id;
         $payload['accessRules'] = $user->accessRules;
 
-        return JWT::encode($payload, self::$config['secret'], self::$config['header']['alg'], head: self::$config['header']);
+        return JWT::encode(
+            $payload,
+            self::$config['secret'],
+            self::$config['header']['alg'],
+            head: self::$config['header']
+        );
     }
 
-/** @throws Exception */
+    /** @throws Exception */
     public static function decodeJwt(string $jwt): object
     {
         return JWT::decode($jwt, self::getKey());
@@ -77,7 +81,6 @@ class AuthTokenService
     {
         self::init();
         return new Key(self::$config['secret'], self::$config['header']['alg']);
-
     }
 
 
@@ -90,7 +93,7 @@ class AuthTokenService
      */
     public static function checkRefreshToken(mixed $refreshTokenInfo, string $verifier): bool
     {
-        $good =  $refreshTokenInfo
+        $good = $refreshTokenInfo
             && new DateTime($refreshTokenInfo['expires_at']) > new DateTime()
             && password_verify(
                 $verifier,
@@ -100,29 +103,26 @@ class AuthTokenService
             return true;
         }
         throw new AuthorizationException('Неверный refresh token');
-
     }
-
-
-
-
-
-
-
-
 
 
     /**
      * @param User $user
      * @return void
      * @throws RandomException
+     * @throws \DateMalformedIntervalStringException
      * @warning вернет токен в Cookies!
      */
     public function addNewRefreshToken(UserAuthI $user): void
     {
         $refreshTokenInfo = self::generateRefreshToken();
         $expiresIn = Config::get('auth')['refreshTokenExpiresIn'];
-        $this->authTokenStorage->addRefreshToken($user, $refreshTokenInfo['selector'], $refreshTokenInfo['verifier_hash'], $expiresIn);
+        $this->authTokenStorage->addRefreshToken(
+            $user,
+            $refreshTokenInfo['selector'],
+            $refreshTokenInfo['verifier_hash'],
+            $expiresIn
+        );
         CookieHelper::setCookie(
             "refresh_token",
             $refreshTokenInfo['token'],
@@ -132,7 +132,8 @@ class AuthTokenService
         );
     }
 
-    public function getAndDeleteRefreshToken(string $selector): array {
+    public function getAndDeleteRefreshToken(string $selector): array
+    {
         return $this->authTokenStorage->getAndDeleteRefreshToken($selector);
     }
 
@@ -154,7 +155,6 @@ class AuthTokenService
      */
     public function updateTokens(string $refreshToken): ?UserAuthI
     {
-
         list($selectorHex, $verifier) = explode('.', $refreshToken, 2);
         $selectorBinary = hex2bin($selectorHex);
 
@@ -168,13 +168,10 @@ class AuthTokenService
 
             $this->addNewRefreshToken($user);
             $this->sendNewJwtToken($user);
-
         }
 
         return $user ?? null;
     }
-
-
 
 
 }
