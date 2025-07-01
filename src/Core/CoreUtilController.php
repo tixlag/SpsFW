@@ -60,25 +60,19 @@ class CoreUtilController extends RestController
     #[NoAuthAccess]
     public function coreUpdate(): string
     {
-        $scannerDirs = [
-            __DIR__ . '/../../',              // фреймворк
-            // __DIR__ . '/../../../../',    // приложение
-        ];
+
 
         $router = new Router();
+        $router->loadRoutes(createCache: true);
+
+        DICacheBuilder::compileDI();
         DocsUtil::updateDocs();
 
-        $allClasses = [];
-        foreach ($scannerDirs as $dir) {
-            $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
-        }
-
-        $compiler = new DICacheBuilder($router->container);
-        $compiler->compile($allClasses);
-            $router->loadRoutes(createCache: true);
 
         return 'ok';
     }
+
+
 
 }
 

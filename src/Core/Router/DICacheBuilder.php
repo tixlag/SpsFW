@@ -12,7 +12,7 @@ class DICacheBuilder
     private DIContainer $container;
     private array $compiled = [];
 
-    private string $cacheDir = __DIR__ . '/../../../../../../var/cache';
+    public static string $DIDir = __DIR__ . '/../../../../../../var/cache/DI';
 
     public function __construct(DIContainer $container)
     {
@@ -87,7 +87,7 @@ class DICacheBuilder
     {
         $export = var_export($this->compiled, true);
         $php = "<?php\n\nreturn $export;\n";
-        file_put_contents($this->cacheDir . '/compiled_di.php', $php);
+        file_put_contents(self::$DIDir . '/compiled_di.php', $php);
     }
 
     private function writeFactoryFile(): void
@@ -116,12 +116,34 @@ class DICacheBuilder
         $factoriesCode = implode("\n\n", $factories);
 
         $php = "<?php\n\nclass DIFactory {\n{$factoriesCode}\n}\n";
-        file_put_contents($this->cacheDir . '/DIFactory.php', $php);
+        file_put_contents(self::$DIDir . '/DIFactory.php', $php);
     }
 
     private function getShortClassName(string $fullClassName): string
     {
         $parts = explode('\\', $fullClassName);
         return end($parts);
+    }
+
+
+    /**
+     * @return void
+     * @throws BaseException
+     * @throws ReflectionException
+     */
+    public static function compileDI(): void
+    {
+        $allClasses = [];
+
+        $scannerDirs = [
+            __DIR__ . '/../../',              // фреймворк
+            // __DIR__ . '/../../../../',    // приложение
+        ];
+        foreach ($scannerDirs as $dir) {
+            $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
+        }
+
+        $compiler = new DICacheBuilder(new DIContainer());
+        $compiler->compile($allClasses);
     }
 }

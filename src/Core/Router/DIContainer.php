@@ -7,6 +7,7 @@ use ReflectionException;
 use ReflectionProperty;
 use RuntimeException;
 use SpsFW\Core\Config;
+use SpsFW\Core\Exceptions\BaseException;
 
 class DIContainer
 {
@@ -14,11 +15,17 @@ class DIContainer
     private array $compiledMap = [];
     private array $resolved = []; // Кэш разрешённых зависимостей
 
+    /**
+     * @throws ReflectionException
+     * @throws BaseException
+     */
     public function __construct()
     {
-        $compiledPath = __DIR__ . '/compiled_di.php';
+        $compiledPath = DICacheBuilder::$DIDir . '/compiled_di.php';
         if (file_exists($compiledPath)) {
             $this->compiledMap = require $compiledPath;
+        } else {
+            DICacheBuilder::compileDI();
         }
     }
 
@@ -128,4 +135,6 @@ class DIContainer
     {
         return Config::$bindings[$abstract] ?? $abstract;
     }
+
+
 }
