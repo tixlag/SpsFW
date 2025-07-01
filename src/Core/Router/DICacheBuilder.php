@@ -12,7 +12,7 @@ class DICacheBuilder
     private DIContainer $container;
     private array $compiled = [];
 
-    private string $cacheDir = __DIR__ . '/../../../../var/cache';
+    private string $cacheDir = __DIR__ . '/../../../../../../var/cache';
 
     public function __construct(DIContainer $container)
     {

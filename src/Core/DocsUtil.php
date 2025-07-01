@@ -7,7 +7,7 @@ use OpenApi\Loggers\DefaultLogger;
 
 class DocsUtil
 {
-    protected static string $cacheDir = __DIR__ . '/../../../../var/cache';
+    protected static string $cacheDir = __DIR__ . '/../../../../../../var/cache';
     /**
      * Генерирует OpenAPI документацию, используя относительные пути.
      * Поднимается на 2 уровня вверх от текущего файла для определения корня проекта.
