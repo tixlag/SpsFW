@@ -12,6 +12,8 @@ class DICacheBuilder
     private DIContainer $container;
     private array $compiled = [];
 
+    private string $cacheDir = __DIR__ . '/../../../../var/cache';
+
     public function __construct(DIContainer $container)
     {
         $this->container = $container;
@@ -85,7 +87,7 @@ class DICacheBuilder
     {
         $export = var_export($this->compiled, true);
         $php = "<?php\n\nreturn $export;\n";
-        file_put_contents(__DIR__ . '/compiled_di.php', $php);
+        file_put_contents($this->cacheDir . '/compiled_di.php', $php);
     }
 
     private function writeFactoryFile(): void
@@ -114,7 +116,7 @@ class DICacheBuilder
         $factoriesCode = implode("\n\n", $factories);
 
         $php = "<?php\n\nclass DIFactory {\n{$factoriesCode}\n}\n";
-        file_put_contents(__DIR__ . '/DIFactory.php', $php);
+        file_put_contents($this->cacheDir . '/DIFactory.php', $php);
     }
 
     private function getShortClassName(string $fullClassName): string

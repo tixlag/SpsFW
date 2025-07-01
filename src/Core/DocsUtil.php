@@ -7,6 +7,7 @@ use OpenApi\Loggers\DefaultLogger;
 
 class DocsUtil
 {
+    protected static string $cacheDir = __DIR__ . '/../../../../var/cache';
     /**
      * Генерирует OpenAPI документацию, используя относительные пути.
      * Поднимается на 2 уровня вверх от текущего файла для определения корня проекта.
@@ -24,7 +25,7 @@ class DocsUtil
         ];
 
         // Путь для сохранения YAML-файла
-        $outputPath = $frameworkPath . '/src/Api/Swagger/View/openapi.yaml';
+        $outputPath = self::$cacheDir. '/openapi.yaml';
 
         // Убедимся, что целевая директория существует
         if (!is_dir(dirname($outputPath))) {
