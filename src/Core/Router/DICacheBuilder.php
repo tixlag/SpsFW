@@ -131,19 +131,19 @@ class DICacheBuilder
      * @throws BaseException
      * @throws ReflectionException
      */
-    public static function compileDI(): void
+    public static function compileDI(?DIContainer $container = null): void
     {
         $allClasses = [];
 
         $scannerDirs = [
-            __DIR__ . '/../../',              // фреймворк
+            __DIR__ . '/../',              // фреймворк
             // __DIR__ . '/../../../../',    // приложение
         ];
         foreach ($scannerDirs as $dir) {
             $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
         }
 
-        $compiler = new DICacheBuilder(new DIContainer());
+        $compiler = new DICacheBuilder($container ?? new DIContainer());
         $compiler->compile($allClasses);
     }
 }

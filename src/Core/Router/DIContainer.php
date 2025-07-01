@@ -24,8 +24,6 @@ class DIContainer
         $compiledPath = DICacheBuilder::$DIDir . '/compiled_di.php';
         if (file_exists($compiledPath)) {
             $this->compiledMap = require $compiledPath;
-        } else {
-            DICacheBuilder::compileDI();
         }
     }
 

@@ -505,6 +505,9 @@ class Router
     ): object|null {
         // тестируем DI
         $globalStartTime = hrtime(true);
+        if (!file_exists(DICacheBuilder::$DIDir . '/compiled_di.php')) {
+            DICacheBuilder::compileDI($this->container);
+        }
         $res = $this->container->get($className);
         $endTime = hrtime(true);
         $duration = ($endTime - $globalStartTime) / 1e6; // В миллисекундах
