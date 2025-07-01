@@ -60,7 +60,7 @@ class Router
 
     protected array $controllersDirs = [__DIR__ . '/../'];
 
-    protected string $cacheDir = __DIR__ . '/../../../../var/cache';
+    protected string $cacheDir = __DIR__ . '/../../../../../../../var/cache';
 
 //    protected ?RedisHelper $redis = null;
 
