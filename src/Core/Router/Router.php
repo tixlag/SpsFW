@@ -8,6 +8,7 @@ use ReflectionClass;
 use ReflectionException;
 use ReflectionMethod;
 use ReflectionNamedType;
+
 //use SpsFW\Api\Metrics\Metrics;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
@@ -59,6 +60,8 @@ class Router
 
     protected array $controllersDirs = [__DIR__ . '/../'];
 
+    protected string $cacheDir = __DIR__ . '/../../../../var/cache';
+
 //    protected ?RedisHelper $redis = null;
 
     /**
@@ -71,7 +74,6 @@ class Router
     public function __construct(
         ?string $controllersDir = null,
         protected bool $useCache = true,
-        protected string $cacheFile = __DIR__ . '/routes.json',
         array $dependencies = []
     ) {
 //        $scannerDirs = [
@@ -122,25 +124,22 @@ class Router
     {
         if ($this->useCache && !$createCache) {
             try {
-                $compiledRoutesFile = __DIR__ . '/compiled_routes.php';
+                $compiledRoutesFile = $this->cacheDir . '/compiled_routes.php';
                 if (file_exists($compiledRoutesFile)) {
                     $this->routes = require $compiledRoutesFile;
                     return;
                 }
-
             } catch (\Error $e) {
                 $this->scanControllers();
                 $this->createRoutesCache();
                 return;
             }
-
         }
 
         $this->scanControllers();
 
         if ($this->useCache || $createCache) {
             $this->createRoutesCache();
-
         }
     }
 
@@ -506,7 +505,7 @@ class Router
     ): object|null {
         // тестируем DI
         $globalStartTime = hrtime(true);
-        $res =  $this->container->get($className);
+        $res = $this->container->get($className);
         $endTime = hrtime(true);
         $duration = ($endTime - $globalStartTime) / 1e6; // В миллисекундах
         echo sprintf('DI speed: %s', number_format($duration, 2));
@@ -689,30 +688,6 @@ class Router
         return new Response();
     }
 
-    /**
-     * @return void
-     * @deprecated редис не нужен
-     */
-    public
-    function loadRoutesFromRedisOrJson(): void
-    {
-        $routesFromRedis = unserialize($this->redis?->getValue("SpsFW_routes") ?? '');
-        if ($routesFromRedis) {
-            $this->routes = $routesFromRedis;
-//                return;
-        } else {
-            $cacheDir = dirname($this->cacheFile);
-            if (!file_exists($cacheDir)) {
-                mkdir($cacheDir, 0755, true);
-            }
-            if (file_exists($this->cacheFile)) {
-                $this->routes = unserialize(file_get_contents($this->cacheFile), [
-                    'allowed_classes' => true
-                ]);
-                //  return;
-            }
-        }
-    }
 
     /**
      * @return void
@@ -722,7 +697,12 @@ class Router
     {
         $routesString = var_export($this->routes, true);
         $php = "<?php\n\nreturn $routesString;\n";
-        file_put_contents(__DIR__ . '/compiled_routes.php', $php);
+
+        if (!is_dir($this->cacheDir)) {
+            mkdir($this->cacheDir, 0777, true);
+        }
+
+        file_put_contents($this->cacheDir . '/compiled_routes.php', $php);
     }
 
     /**
