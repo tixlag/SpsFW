@@ -30,6 +30,7 @@ class DICacheBuilder
         }
 
         $this->writeToFile();
+        $this->container->setCompiledMap($this->compiled);
     }
 
     /**

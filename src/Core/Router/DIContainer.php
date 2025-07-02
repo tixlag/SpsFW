@@ -13,6 +13,11 @@ class DIContainer
 {
     private array $singletons = [];
     private array $compiledMap = [];
+
+    public function setCompiledMap(array $compiledMap): void
+    {
+        $this->compiledMap = $compiledMap;
+    }
     private array $resolved = []; // Кэш разрешённых зависимостей
 
     /**
