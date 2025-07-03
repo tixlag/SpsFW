@@ -17,7 +17,6 @@ use SpsFW\Core\Http\Response;
 class SwaggerController
 {
     #[Route(path: "/swagger")]
-    #[NoAuthAccess]
     public function index(): Response
     {
         return Response::html(file_get_contents('View/index.html', true));

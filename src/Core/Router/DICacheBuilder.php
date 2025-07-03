@@ -80,8 +80,10 @@ class DICacheBuilder
 
     private function writeToFile(): void
     {
+        if (!is_dir(self::$DIDir)) {
+            mkdir(self::$DIDir, 0777, true);
+        }
         $this->writeCompiledMap();
-        $this->writeFactoryFile();
     }
 
     private function writeCompiledMap(): void
@@ -91,34 +93,6 @@ class DICacheBuilder
         file_put_contents(self::$DIDir . '/compiled_di.php', $php);
     }
 
-    private function writeFactoryFile(): void
-    {
-        $factories = [];
-
-        foreach ($this->compiled as $className => $info) {
-            $shortName = $this->getShortClassName($className);
-            $factoryName = "create{$shortName}";
-
-            if ($info['has_constructor'] && !empty($info['constructor_params'])) {
-                // Генерируем фабричный метод с параметрами
-                $paramsList = [];
-                foreach ($info['constructor_params'] as $param) {
-                    $paramsList[] = "\$param{$param['position']}";
-                }
-                $paramsString = implode(', ', $paramsList);
-
-                $factories[] = "    public static function {$factoryName}({$paramsString}): {$className} {\n        return new {$className}({$paramsString});\n    }";
-            } else {
-                // Простой конструктор без параметров
-                $factories[] = "    public static function {$factoryName}(): {$className} {\n        return new {$className}();\n    }";
-            }
-        }
-
-        $factoriesCode = implode("\n\n", $factories);
-
-        $php = "<?php\n\nclass DIFactory {\n{$factoriesCode}\n}\n";
-        file_put_contents(self::$DIDir . '/DIFactory.php', $php);
-    }
 
     private function getShortClassName(string $fullClassName): string
     {
@@ -138,7 +112,7 @@ class DICacheBuilder
 
         $scannerDirs = [
             __DIR__ . '/../',              // фреймворк
-            // __DIR__ . '/../../../../',    // приложение
+             __DIR__ . '/../../../../../../src/',    // приложение
         ];
         foreach ($scannerDirs as $dir) {
             $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));

@@ -1,5 +1,5 @@
 <?php
-namespace SpsFW\Core\Auth\AccessRules;
+namespace SpsFW\Core\Auth\AccessRules\Instances;
 
 class SystemRules extends BaseAccessRules
 {

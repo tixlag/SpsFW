@@ -3,23 +3,24 @@
 namespace SpsFW\Core\Auth\AuthToken;
 
 use DateInterval;
+use DateMalformedIntervalStringException;
 use DateTime;
-use SpsFW\Core\Auth\Users\Models\UserAuthI;
+use SpsFW\Core\Auth\AccessRules\Models\UserAbstract;
 use SpsFW\Core\Storage\PdoStorage;
 
-class AuthTokenStorage extends PdoStorage //todo реализовать интерфейс и избавиться от статики
+class AuthTokenStorage extends PdoStorage implements AuthTokenStorageI
 {
 
 
     /**
-     * @param UserAuthI $user
+     * @param UserAbstract $user
      * @param string $selector
      * @param string $hashedToken
      * @param int $expiresIn
-     * @return UserAuthI
-     * @throws \DateMalformedIntervalStringException
+     * @return UserAbstract
+     * @throws DateMalformedIntervalStringException
      */
-    public function addRefreshToken(UserAuthI $user, string $selector, string $hashedToken, int $expiresIn): UserAuthI
+    public function addRefreshToken(UserAbstract $user, string $selector, string $hashedToken, int $expiresIn): UserAbstract
     {
         $this->getPdo()->prepare(/** @lang MariaDB */
             "INSERT INTO users__refresh_tokens (user_id, selector, verifier_hash, expires_at)

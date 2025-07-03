@@ -8,16 +8,14 @@ use ReflectionClass;
 use ReflectionException;
 use ReflectionMethod;
 use ReflectionNamedType;
-
-//use SpsFW\Api\Metrics\Metrics;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Attributes\Validate;
-use SpsFW\Core\Auth\AccessRules\AccessChecker;
-use SpsFW\Core\Auth\Users\Models\Auth;
+use SpsFW\Core\Auth\AccessRules\Models\Auth;
+use SpsFW\Core\Auth\AccessRules\Util\AccessChecker;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\RouteNotFoundException;
@@ -26,6 +24,8 @@ use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Middleware\Infrastructure\MiddlewareInterface;
 use SpsFW\Core\Validation\Validator;
+
+//use SpsFW\Api\Metrics\Metrics;
 
 class Router
 {
@@ -58,7 +58,10 @@ class Router
      */
     protected array $dependencies = [];
 
-    protected array $controllersDirs = [__DIR__ . '/../'];
+    protected array $controllersDirs = [
+        __DIR__ . '/../',
+        __DIR__ . '/../../../../../../src',
+        ];
 
     protected string $cacheDir = __DIR__ . '/../../../../../../var/cache';
 
@@ -186,24 +189,23 @@ class Router
 
     private function getPathToNamespace($filePath): ?string
     {
-        // Разбиваем путь на части с учетом ОС
-        $parts = explode(DIRECTORY_SEPARATOR, $filePath);
-        // Находим индекс элемента 'src'
-        $SpsFWIndex = array_search('src', $parts);
-        if ($SpsFWIndex === false) {
-            return null; // src не найден в пути
-        }
-        // Берем части пути от src до конца
-        $pathParts = array_slice($parts, $SpsFWIndex);
-        // Обрабатываем последний элемент (файл) -> получаем имя класса
-        $filename = array_pop($pathParts);
-        $className = substr($filename, 0, -4); // Убираем .php
 
-        $pathParts[0] = 'SpsFW';
-        // Добавляем имя класса обратно
-        $pathParts[] = $className;
-        // Собираем namespace
-        return implode('\\', $pathParts);
+        $ns = NULL;
+        $handle = fopen($filePath, "r");
+        if ($handle) {
+            while (($line = fgets($handle)) !== false) {
+                if (str_starts_with($line, 'namespace')) {
+                    $partsPath = explode(DIRECTORY_SEPARATOR, $filePath);
+                    $className =  substr(array_pop($partsPath), 0, -4);
+                    $parts = explode(' ', $line);
+                    $ns = rtrim(trim($parts[1]), ';') . '\\' . $className;
+                    break;
+                }
+            }
+            fclose($handle);
+        }
+        return $ns;
+
     }
 
     /**
@@ -437,7 +439,7 @@ class Router
     function processRoute(
         array $route
     ): Response {
-        $this->checkAccess($route['access_rules']);
+        AccessChecker::checkAccess($route['access_rules']);
         // Применяем глобальные middleware
         $middlewares = $this->prepareMiddlewares(
             array_merge(
@@ -498,6 +500,7 @@ class Router
      * @param class-string<T> $className
      * @return T
      * @throws ReflectionException
+     * @throws BaseException
      */
     protected
     function createControllerInstance(
@@ -511,7 +514,9 @@ class Router
         $res = $this->container->get($className);
         $endTime = hrtime(true);
         $duration = ($endTime - $globalStartTime) / 1e6; // В миллисекундах
-        echo sprintf('DI speed: %s', number_format($duration, 2));
+        if (!headers_sent()) {
+            header(sprintf('X-DI-speed: %s', number_format($duration, 2)));
+        }
         return $res;
 
 
@@ -725,44 +730,7 @@ class Router
         ], $status);
     }
 
-    /**
-     * @throws AuthorizationException
-     */
-    private
-    function checkAccess(
-        mixed $access_rules_arrays
-    ): void {
-        if (isset($access_rules_arrays[0]) && $access_rules_arrays[0] == 'NO_AUTH_ACCESS') {
-            return;
-        }
-        if (is_null($user = Auth::getOrThrow())) {
-            throw new AuthorizationException("Требуется аутентификация", 403);
-        }
 
-        $problemRules = [];
-        if (isset($access_rules_arrays['any'])) {
-            foreach ($access_rules_arrays['any'] as $requiredRules) {
-                if (empty($requireRules = AccessChecker::getMissedRulesAnyMode($user->accessRules, $requiredRules))) {
-                    return; // одно из AnyRules выполнено
-                } else {
-                    $problemRules[] = "Нужно хотя бы одно из правил: [" . implode('; ', $requireRules) . "]";
-                }
-            }
-        }
-
-        if (isset($access_rules_arrays['all'])) {
-            foreach ($access_rules_arrays['all'] as $requiredRules) {
-                if (empty($missedRules = AccessChecker::getMissedRulesAllMode($user->accessRules, $requiredRules))) {
-                    return;
-                } else {
-                    $problemRules[] = "Нужны все правила доступа: [" . implode('; ', $missedRules) . "]";
-                }
-            }
-        }
-        if (count($problemRules) > 0) {
-            throw new AuthorizationException(implode(PHP_EOL, $problemRules), 403);
-        }
-    }
 
 
 }

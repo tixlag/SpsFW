@@ -1,13 +1,15 @@
 <?php
-namespace SpsFW\Core\Auth\AccessRules;
+namespace SpsFW\Core\Auth\AccessRules\Util;
 
+
+use SpsFW\Core\Auth\AccessRules\Instances\BaseAccessRules;
+use SpsFW\Core\Auth\AccessRules\Instances\MasterRules;
+use SpsFW\Core\Auth\AccessRules\Instances\PtoRules;
+use SpsFW\Core\Auth\AccessRules\Instances\SystemRules;
 
 class AccessRulesRegistry
 {
     private static array $ruleGroups = [
-        SystemRules::class,
-        MasterRules::class,
-        PtoRules::class,
     ];
 
     /**
@@ -83,6 +85,16 @@ class AccessRulesRegistry
     public static function getRuleGroups(): array
     {
         return self::$ruleGroups;
+    }
+
+    public static function register(string|array $group): void
+    {
+        foreach ((array)$group as $g) {
+            if (!is_subclass_of($g, BaseAccessRules::class)) {
+                throw new \InvalidArgumentException("$g must extend BaseAccessRules");
+            }
+            self::$ruleGroups[] = $g;
+        }
     }
 
 }

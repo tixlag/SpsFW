@@ -3,38 +3,31 @@
 namespace SpsFW\Core\Auth\AccessRules;
 
 use SpsFW\Core\Attributes\Inject;
-use SpsFW\Core\Auth\AuthToken\AuthTokenService;
-use SpsFW\Core\Auth\Users\Models\UserAuthI;
-use SpsFW\Core\Auth\Users\UsersService;
-use SpsFW\Core\Auth\Users\UsersServiceI;
-use SpsFW\Core\Utils\CookieHelper;
+use SpsFW\Core\Auth\AccessRules\Models\UserAbstract;
+use SpsFW\Core\Auth\AuthServiceI;
+use SpsFW\Core\Interfaces\UsersServiceI;
 
-class AccessRulesService
+class AccessRulesService implements AccessRulesServiceI
 {
 
     public function __construct(
         #[Inject]
-        private ?AccessRulesStorage $accessRulesStorage = null,
+        private AccessRulesStorageI $accessRulesStorage,
         #[Inject]
-        private ?UsersServiceI $usersService = null,
+        private UsersServiceI $usersService,
         #[Inject]
-        private ?AuthTokenService $authTokenService = null)
+        private AuthServiceI $authTokenService)
     {
     }
 
-    public function logout(): void
-    {
-        $refreshToken = $_COOKIE['refresh_token'];
-        $this->authTokenService->getAndDeleteRefreshToken($refreshToken);
-        CookieHelper::clearCookie('refresh_token');
-    }
+
 
     public function extractAccessRules(string $userId): array
     {
         return $this->accessRulesStorage->extractAccessRules($userId);
     }
 
-    public function addAccessRules(string $userId, array $accessRules): ?UserAuthI
+    public function addAccessRules(string $userId, array $accessRules): ?UserAbstract
     {
         $user = $this->usersService->getById($userId);
         $isAdded = $this->accessRulesStorage->addAccessRules($user->id, $accessRules);
@@ -46,7 +39,7 @@ class AccessRulesService
     }
 
 
-    public function setAccessRules(string $userId, array $accessRules): ?UserAuthI
+    public function setAccessRules(string $userId, array $accessRules): ?UserAbstract
     {
         $user = $this->usersService->getById($userId);
         $isSet = $this->accessRulesStorage->setAccessRules($user->id, $accessRules);

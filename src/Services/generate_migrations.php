@@ -5,7 +5,7 @@ use SpsFW\Core\Db\Migration\SchemaMigrationGenerator;
 require_once __DIR__ . '/../../vendor/autoload.php';
 
 
-$projectRoot = dirname(__DIR__);
+$projectRoot = dirname(__DIR__, 5);
 $generator = new SchemaMigrationGenerator($projectRoot);
 
 try {

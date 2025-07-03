@@ -7,7 +7,6 @@ use OpenApi\Loggers\DefaultLogger;
 
 class DocsUtil
 {
-    protected static string $cacheDir = __DIR__ . '/../../../../../../var/cache';
     /**
      * Генерирует OpenAPI документацию, используя относительные пути.
      * Поднимается на 2 уровня вверх от текущего файла для определения корня проекта.
@@ -16,16 +15,17 @@ class DocsUtil
     {
         // Получаем путь к корневой директории проекта (две директории вверх от __FILE__)
         $frameworkPath = dirname(__DIR__, 1);
-        $projectPath = dirname(__DIR__, 3);
+        $projectPath = dirname(__DIR__, 5);
+        $cacheDir = $projectPath . '/var/cache/openapi';
 
         // Пути для сканирования аннотаций
         $scanPaths = [
-            $frameworkPath . '/Sps/',
-            $frameworkPath . '/src/',
+            $frameworkPath,
+            $projectPath . '/src/',
         ];
 
         // Путь для сохранения YAML-файла
-        $outputPath = self::$cacheDir. '/openapi.yaml';
+        $outputPath = $cacheDir. '/openapi.yaml';
 
         // Убедимся, что целевая директория существует
         if (!is_dir(dirname($outputPath))) {

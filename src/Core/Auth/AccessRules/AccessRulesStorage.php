@@ -3,9 +3,10 @@
 namespace SpsFW\Core\Auth\AccessRules;
 
 use PDOException;
+use SpsFW\Core\Auth\AccessRules\Util\AccessRulesRegistry;
 use SpsFW\Core\Storage\PdoStorage;
 
-class AccessRulesStorage extends PdoStorage //todo реализовать интерфейс и избавиться от статики
+class AccessRulesStorage extends PdoStorage implements AccessRulesStorageI
 {
 
 

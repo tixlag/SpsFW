@@ -6,6 +6,7 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 
 class ClassScanner
+
 {
     public static function getClassesFromDir(string $dir): array
     {

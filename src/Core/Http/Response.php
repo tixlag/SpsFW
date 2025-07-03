@@ -3,7 +3,7 @@
 namespace SpsFW\Core\Http;
 
 use Exception;
-use SpsFW\Core\Auth\Users\Models\Auth;
+use SpsFW\Core\Auth\AccessRules\Models\Auth;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;

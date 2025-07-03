@@ -1,6 +1,11 @@
 <?php
 
-namespace SpsFW\Core\Auth\AccessRules;
+namespace SpsFW\Core\Auth\AccessRules\Util;
+
+
+
+use SpsFW\Core\Auth\AccessRules\Models\Auth;
+use SpsFW\Core\Exceptions\AuthorizationException;
 
 class AccessChecker
 {
@@ -81,5 +86,39 @@ class AccessChecker
     {
         $groupRuleIds = $groupClass::getRuleIds();
         return array_intersect(array_keys($userRoles), $groupRuleIds);
+    }
+
+    /**
+     * @throws AuthorizationException
+     */
+    public static function checkAccess(mixed $access_rules_arrays): void {
+        if (isset($access_rules_arrays[0]) && $access_rules_arrays[0] == 'NO_AUTH_ACCESS') {
+            return;
+        }
+        $user = Auth::getOrThrow();
+
+        $problemRules = [];
+        if (isset($access_rules_arrays['any'])) {
+            foreach ($access_rules_arrays['any'] as $requiredRules) {
+                if (empty($requireRules = AccessChecker::getMissedRulesAnyMode($user->accessRules, $requiredRules))) {
+                    return;
+                } else {
+                    $problemRules[] = "Нужно хотя бы одно из правил: [" . implode('; ', $requireRules) . "]";
+                }
+            }
+        }
+
+        if (isset($access_rules_arrays['all'])) {
+            foreach ($access_rules_arrays['all'] as $requiredRules) {
+                if (empty($missedRules = AccessChecker::getMissedRulesAllMode($user->accessRules, $requiredRules))) {
+                    return;
+                } else {
+                    $problemRules[] = "Нужны все правила доступа: [" . implode('; ', $missedRules) . "]";
+                }
+            }
+        }
+        if (count($problemRules) > 0) {
+            throw new AuthorizationException(implode(PHP_EOL, $problemRules), 403);
+        }
     }
 }
