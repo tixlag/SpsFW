@@ -3,7 +3,7 @@
   "description": "SpsFramework - ready to go!",
   "type": "library",
   "license": "",
-  "version": "0.1.1",
+  "version": "dev-master",
   "require": {
     "ext-mbstring": "*",
     "ext-pdo": "*",
