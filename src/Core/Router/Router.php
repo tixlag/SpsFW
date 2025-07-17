@@ -2,27 +2,30 @@
 
 namespace SpsFW\Core\Router;
 
+use OpenApi\Attributes\Property;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
+use ReflectionAttribute;
 use ReflectionClass;
 use ReflectionException;
 use ReflectionMethod;
 use ReflectionNamedType;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
+use SpsFW\Core\Attributes\JsonBody;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Attributes\Validate;
-use SpsFW\Core\Auth\AccessRules\Models\Auth;
-use SpsFW\Core\Auth\AccessRules\Util\AccessChecker;
+use SpsFW\Core\Auth\Util\AccessChecker;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\RouteNotFoundException;
 use SpsFW\Core\Http\HttpMethod;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
-use SpsFW\Core\Middleware\Infrastructure\MiddlewareInterface;
+use SpsFW\Core\Middleware\MiddlewareInterface;
+use SpsFW\Core\Validation\Enum\ParamsIn;
 use SpsFW\Core\Validation\Validator;
 
 //use SpsFW\Api\Metrics\Metrics;
@@ -61,7 +64,7 @@ class Router
     protected array $controllersDirs = [
         __DIR__ . '/../',
         __DIR__ . '/../../../../../../src',
-        ];
+    ];
 
     protected string $cacheDir = __DIR__ . '/../../../../../../var/cache';
 
@@ -171,7 +174,7 @@ class Router
             $controllerClassNames = [];
             foreach ($controllerFiles as $file) {
                 require_once $file;
-                $className = $this->getPathToNamespace($file);
+                $className = ClassScanner::getPathToNamespace($file);
                 $controllerClassNames[] = $className;
             }
 
@@ -187,38 +190,15 @@ class Router
         }
     }
 
-    private function getPathToNamespace($filePath): ?string
-    {
-
-        $ns = NULL;
-        $handle = fopen($filePath, "r");
-        if ($handle) {
-            while (($line = fgets($handle)) !== false) {
-                if (str_starts_with($line, 'namespace')) {
-                    $partsPath = explode(DIRECTORY_SEPARATOR, $filePath);
-                    $className =  substr(array_pop($partsPath), 0, -4);
-                    $parts = explode(' ', $line);
-                    $ns = rtrim(trim($parts[1]), ';') . '\\' . $className;
-                    break;
-                }
-            }
-            fclose($handle);
-        }
-        return $ns;
-
-    }
-
     /**
      * @param ReflectionClass $reflection
+     * @throws ReflectionException
      */
-    protected
-    function registerControllerRoutes(
+    protected function registerControllerRoutes(
         ReflectionClass $reflection
     ): array {
         $routes = [];
-
         $classMiddlewares = $this->collectMiddlewares($reflection);
-
         foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
             $methodRouteAttributes = $method->getAttributes(Route::class);
             if (empty($methodRouteAttributes)) {
@@ -227,17 +207,29 @@ class Router
             $methodRoute = $methodRouteAttributes[0]->newInstance();
             $fullPath = $methodRoute->getPath();
             $compiled = $this->compileRoutePattern($fullPath);
-
             $middlewares = array_merge(
                 $classMiddlewares,
                 $this->collectMiddlewares($method)
             );
-
             $accessRules = $this->collectAccessRules($method);
-
             $httpMethods = $methodRoute->getHttpMethods();
             if (empty($httpMethods)) {
                 $httpMethods[] = "GET";
+            }
+            $methodParameters = $method->getParameters();
+            $validationParams = [];
+            foreach ($methodParameters as $methodParameter) {
+                $dtoClass = $methodParameter->getType()->getName();
+                $validationAttributes = $methodParameter->getAttributes(Validate::class, ReflectionAttribute::IS_INSTANCEOF);
+                if (empty($validationAttributes)) continue;
+                $validationAttribute = $validationAttributes[0];
+                if ($validationAttribute->newInstance() instanceof JsonBody) {
+                    $validationParams[] = [
+                        'in' => ParamsIn::Json,
+                        'dto' => $dtoClass,
+                        'rules' => $this->extractValidationRules($dtoClass), // Извлекаем правила
+                    ];
+                }
             }
             foreach ($httpMethods as $httpMethod) {
                 $httpMethodString = is_string($httpMethod) ? $httpMethod : $httpMethod->value;
@@ -251,10 +243,58 @@ class Router
                     'params' => $compiled['params'],
                     'middlewares' => $middlewares,
                     'access_rules' => $accessRules,
+                    'dtos' => $validationParams,
                 ];
             }
         }
         return $routes ?? [];
+    }
+
+    /**
+     * @throws ReflectionException
+     */
+    private function extractValidationRules(string $dtoClass): array
+    {
+        $rules = [];
+        $reflection = new ReflectionClass($dtoClass);
+        $properties = $reflection->getProperties();
+
+        foreach ($properties as $property) {
+            $propertyAttributes = $property->getAttributes(Property::class);
+            $realPropertyName = $property->getName();
+            foreach ($propertyAttributes as $propertyAttribute) {
+                $attributesOpenApi = $propertyAttribute->getArguments();
+                $propertyName = $attributesOpenApi['property'] ?? $property->getName();
+
+                $propertyRules = [];
+
+                foreach ($attributesOpenApi as $attributeKey => $attributeValue) {
+                    $propertyRules['real_name'] = $realPropertyName;
+                    if ($attributeKey === 'ref') {
+                        if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
+                            $propertyRules['ref'] = $attributeValue;
+                            $propertyRules['type'] = 'array';
+                            $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                        } else {
+                            $propertyRules['ref'] = $attributeValue;
+                            $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                        }
+                        break;
+                    }
+
+                    // Сохраняем только валидационные атрибуты
+                    if (isset(Validator::$attributesOpenApi[$attributeKey])) {
+                        $propertyRules[$attributeKey] = $attributeValue;
+                    }
+                }
+
+                if (!empty($propertyRules)) {
+                    $rules[$propertyName] = $propertyRules;
+                }
+            }
+        }
+
+        return $rules;
     }
 
     /**
@@ -267,7 +307,7 @@ class Router
     ): array {
         $params = [];
         $pattern = preg_replace_callback('/{([a-zA-Z0-9_-]+)}/', function ($matches) use (&$params) {
-            $params[] = $matches[1];
+            $params[$matches[1]] = null;
             return '([^/]+)';
         }, $path);
 
@@ -295,7 +335,7 @@ class Router
         $attributes = $reflection->getAttributes(Middleware::class);
 
         foreach ($attributes as $attribute) {
-            /** @var \SpsFW\Core\Attributes\Middleware $middlewareAttr */
+            /** @var Middleware $middlewareAttr */
             $middlewareAttr = $attribute->newInstance();
             $middlewares = array_merge($middlewares, $middlewareAttr->getMiddlewares());
         }
@@ -367,6 +407,7 @@ class Router
 //            }
             return Response::error($e);
         } finally {
+            // todo вернуть поддержку Prometheus
 //            if (isset(Metrics::$registry)) {
 //                Metrics::createAll($this->currentRoute['rawPath'] ?? Request::getUri());
 //            }
@@ -410,8 +451,10 @@ class Router
             // Извлекаем параметры маршрута
             $matchParams = [];
             array_shift($matches); // Удаляем полное совпадение
-            foreach ($route['params'] as $index => $paramName) {
-                $matchParams[$paramName] = $matches[$index] ?? '';
+            $counter = 0;
+            foreach ($route['params'] as $paramName => $null) {
+                $matchParams[$paramName] =  $matches[$counter] ?? '';
+                $counter++;
             }
 
             $route['match_params'] = $matchParams;
@@ -461,7 +504,7 @@ class Router
 
         // Выполняем метод контроллера
         $controller = $this->createControllerInstance($route['controller']);
-        $response = $this->executeControllerMethod($controller, $route['method'], $route['match_params']);
+        $response = $this->executeControllerMethod($controller, $route['method'], $route['params'], $route['match_params'], $route['dtos']);
 
         // Применяем middleware после выполнения контроллера (в обратном порядке)
         foreach (array_reverse($middlewares) as $middleware) {
@@ -519,7 +562,7 @@ class Router
         }
         return $res;
 
-
+        //todo Вернуть поодержу Middlewares
         // Если нет мидлвар, вызывает констурктор напрямую
         if (empty($this->currentRoute['middlewares'])) {
             return new $className();
@@ -628,7 +671,7 @@ class Router
     /**
      * @param object $controller Экземпляр контроллера
      * @param string $methodName Имя метода
-     * @param array<string, string> $routeParams Параметры маршрута
+     * @param array<string, string> $matchParams Параметры маршрута
      * @return Response
      * @throws ReflectionException
      */
@@ -636,45 +679,45 @@ class Router
     function executeControllerMethod(
         object $controller,
         string $methodName,
-        array $routeParams
+        array $exceptParams,
+        array $matchParams,
+        ?array $dtoParams = [],
     ): Response {
-        $reflectionMethod = new ReflectionMethod($controller, $methodName);
-        $parameters = $reflectionMethod->getParameters();
         $args = [];
 
-        foreach ($routeParams as $routeParamName => $value) {
-            $parameter = array_find($parameters, fn($param) => $param->getName() === $routeParamName);
-            if (!$parameter) {
+        foreach ($matchParams as $routeParamName => $value) {
+            if (!key_exists($routeParamName, $exceptParams)) {
                 throw new \RuntimeException(
                     "Не удалось связать параметр '{$routeParamName}' для метода '{$methodName}'"
                 );
             }
-            $paramType = $parameter->getType();
-
-            // Приводим к типу, если указан
-            if ($paramType instanceof ReflectionNamedType) {
-                $typeName = $paramType->getName();
-
-                $value = match ($typeName) {
-                    'int' => (int)$value,
-                    'float' => (float)$value,
-                    'bool' => filter_var($value, FILTER_VALIDATE_BOOLEAN),
-                    default => $value
-                };
-            }
-
             $args[] = $value;
         }
-
-        $validationAttributes = $reflectionMethod->getAttributes(Validate::class);
-
-        foreach ($validationAttributes as $validationAttribute) {
-            $validationInstance = $validationAttribute->newInstance();
-            $args[] = Validator::validate($validationInstance->where, $validationInstance->dtoClass);
+        foreach ($dtoParams as $dtoParam) {
+            $args[] = Validator::validate($dtoParam['in'], $dtoParam['dto'], $dtoParam['rules']);
         }
 
-        // Вызываем метод контроллера
-        $result = $reflectionMethod->invokeArgs($controller, $args);
+        $result = $controller->{$methodName}(...$args);
+//        $reflectionMethod = new ReflectionMethod($controller, $methodName);
+//        $parameters = $reflectionMethod->getParameters();
+//        $args = [];
+//
+
+//
+////        $validationAttributes = $reflectionMethod->getAttributes(Validate::class);
+////
+////        foreach ($validationAttributes as $validationAttribute) {
+////            $validationInstance = $validationAttribute->newInstance();
+////            $args[] = Validator::validate($validationInstance->where, $validationInstance->dtoClass);
+////        }
+//        if (!empty($dtos)) {
+//            foreach ($dtos as $dtoConfig) {
+//                $args[] = Validator::validate($dtoConfig['in'], $dtoConfig['dto']);
+//            }
+//        }
+//
+//        // Вызываем метод контроллера
+//        $result = $reflectionMethod->invokeArgs($controller, $args);
 
         // Если метод вернул Response, используем его
         if ($result instanceof Response) {

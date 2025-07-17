@@ -5,7 +5,7 @@ namespace SpsFW\Core\Auth\AuthToken;
 use DateInterval;
 use DateMalformedIntervalStringException;
 use DateTime;
-use SpsFW\Core\Auth\AccessRules\Models\UserAbstract;
+use SpsFW\Core\Auth\Instances\UserAbstract;
 use SpsFW\Core\Storage\PdoStorage;
 
 class AuthTokenStorage extends PdoStorage implements AuthTokenStorageI
@@ -13,7 +13,6 @@ class AuthTokenStorage extends PdoStorage implements AuthTokenStorageI
 
 
     /**
-     * @param UserAbstract $user
      * @param string $selector
      * @param string $hashedToken
      * @param int $expiresIn
@@ -27,7 +26,7 @@ class AuthTokenStorage extends PdoStorage implements AuthTokenStorageI
                     VALUES (:user_id, :selector, :verifier_hash, :expires_at)"
         )
             ->execute([
-                'user_id' => $user->id,
+                'user_id' => $user->uuid,
                 'selector' => $selector,
                 'verifier_hash' => $hashedToken,
                 'expires_at' => new DateTime()->add(new DateInterval('PT'.$expiresIn.'S'))->format('Y-m-d H:i:s')

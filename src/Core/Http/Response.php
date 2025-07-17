@@ -3,7 +3,7 @@
 namespace SpsFW\Core\Http;
 
 use Exception;
-use SpsFW\Core\Auth\AccessRules\Models\Auth;
+use SpsFW\Core\Auth\Instances\Auth;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
@@ -91,7 +91,7 @@ class Response
             'error' => [
                 'status' => $statusCode ?? ($exception ? $exception->getCode() : 500),
                 'uri' => $_SERVER['REQUEST_URI'] ?? '',
-                'user' => $user ? ('id: ' . $user->id) : 'anonymous',
+                'user' => $user ? ('id: ' . $user->uuid) : 'anonymous',
                 'exception' => $exception ? basename(str_replace('\\', '/', get_class($exception))) : null,
                 'message' => $message ?? ($exception ? $exception->getMessage() : 'Unknown error'),
                 'file' => $exception ? basename($exception->getFile()) : '',
@@ -132,7 +132,7 @@ class Response
                             foreach ($properties as $property) {
                                 try {
                                     $serialized[$property->getName()] = $property->getValue($arg);
-                                } catch ( \Exception $e) {
+                                } catch ( \Throwable $e) {
                                     $serialized[$property->getName()] = "";
                                 }
                             }

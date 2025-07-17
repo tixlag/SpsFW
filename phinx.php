@@ -1,22 +1,27 @@
 <?php
 
 use Dotenv\Dotenv;
+use SpsFW\Core\Router\ClassScanner;
 
-// Загрузите автозагрузчик Composer
-require_once 'vendor/autoload.php';
 
-$projectRoot = dirname(__DIR__, 2) . '/src';
+if (file_exists(__DIR__ . 'vendor/autoload.php')) {
+    require_once __DIR__ . 'vendor/autoload.php';
+} else {
+    require_once __DIR__ . '/../../../vendor/autoload.php';
+}
+
+$projectRoot = dirname(__DIR__, 3) . '/src';
 $coreRoot = dirname(__DIR__ . '/src/Core/.');
 $env = getenv('APP_ENV') ?: 'dev';
 
 $envPaths = [];
-$envFile = ".env.$env";
-if (file_exists($projectRoot . "/$envFile")) {
-    $envPaths[] = $projectRoot . "/$envFile";
+$envFiles = [".env", ".env.$env"];
+foreach ($envFiles as $envFile) {
+    if (file_exists($projectRoot . "/$envFile")) {
+        $envPaths[] = $projectRoot . "/$envFile";
+    }
 }
-if (file_exists($projectRoot . "/$envFile")) {
-    $envPaths[] = $projectRoot . '/.env';
-}
+
 
 $dotenv = Dotenv::createUnsafeImmutable(empty($envPaths) ? ['./'] : $envPaths);
 $dotenv->load();
@@ -65,17 +70,18 @@ function findDomainMigrationPaths($dirs): array {
         );
 
         foreach ($iterator as $fileInfo) {
-            // Пропускаем всё, что не является директорией
-            if (!$fileInfo->isDir()) {
-                continue;
-            }
+            if (!$fileInfo->isDir()) continue;
 
             $currentPath = $fileInfo->getPathname();
 
             $migrationsPath = $currentPath . '/migrations';
 
             if (is_dir($migrationsPath)) {
-                $migrationPaths[] = $migrationsPath;
+                $files = glob($migrationsPath . '/*.php');
+                $firstFile = reset($files);
+                $namespace = ClassScanner::getPathToNamespace($firstFile, false);
+
+                $migrationPaths[$namespace] = $migrationsPath;
             }
         }
     }

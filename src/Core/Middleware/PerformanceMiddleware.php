@@ -4,7 +4,6 @@ namespace SpsFW\Core\Middleware;
 
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
-use SpsFW\Core\Middleware\Infrastructure\MiddlewareInterface;
 
 class PerformanceMiddleware implements MiddlewareInterface
 {

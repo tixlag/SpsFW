@@ -8,11 +8,8 @@ use SpsFW\Core\Attributes\Controller;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Exceptions\BaseException;
-use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
-use SpsFW\Core\Router\ClassScanner;
 use SpsFW\Core\Router\DICacheBuilder;
-use SpsFW\Core\Router\DIContainer;
 use SpsFW\Core\Router\Router;
 
 #[Controller]

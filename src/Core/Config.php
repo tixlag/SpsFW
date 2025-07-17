@@ -2,32 +2,30 @@
 
 namespace SpsFW\Core;
 
-use SpsFW\Core\Auth\AccessRules\AccessRulesService;
-use SpsFW\Core\Auth\AccessRules\AccessRulesServiceI;
-use SpsFW\Core\Auth\AccessRules\AccessRulesStorage;
-use SpsFW\Core\Auth\AccessRules\AccessRulesStorageI;
-use SpsFW\Core\Auth\AccessRules\Instances\MasterRules;
-use SpsFW\Core\Auth\AccessRules\Instances\PtoRules;
-use SpsFW\Core\Auth\AccessRules\Instances\SystemRules;
-use SpsFW\Core\Auth\AccessRules\Util\AccessRulesRegistry;
-use SpsFW\Core\Auth\AuthService;
-use SpsFW\Core\Auth\AuthServiceI;
+use SpsFW\Core\Auth\AccessRule\AccessRuleService;
+use SpsFW\Core\Auth\AccessRule\AccessRuleServiceI;
+use SpsFW\Core\Auth\AccessRule\AccessRuleStorage;
+use SpsFW\Core\Auth\AccessRule\AccessRuleStorageI;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorageI;
-
+use SpsFW\Core\Auth\Util\AccessRuleRegistry;
+use SpsNew\Auth\AccessRules\MasterRule;
+use SpsNew\Auth\AccessRules\PtoRule;
+use SpsNew\Auth\AccessRules\SystemRule;
 
 
 class Config
 {
-    private static $config = [];
+    private static array $config = [];
 
     public static array $bindings = [
-        AuthServiceI::class => AuthService::class,
         AuthTokenStorageI::class => AuthTokenStorage::class,
-        AccessRulesServiceI::class => AccessRulesService::class,
-        AccessRulesStorageI::class => AccessRulesStorage::class,
+        AccessRuleServiceI::class => AccessRuleService::class,
+        AccessRuleStorageI::class => AccessRuleStorage::class,
         // Добавляй другие интерфейсы здесь, чтобы DI мог выдать конкретные реализации
     ];
+
+
 
 
     public static function get($key)
@@ -40,11 +38,7 @@ class Config
 
     public static function init(array $customConfig = []): void
     {
-        AccessRulesRegistry::register([
-            SystemRules::class,
-            MasterRules::class,
-            PtoRules::class,
-        ]);
+
 
         $url = sprintf("%s://%s:%u", getenv('HTTP_SCHEME'), getenv('HOST'), getenv('PORT'));
         $host = sprintf("%s:%u", getenv('HOST'), getenv('PORT'));

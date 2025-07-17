@@ -38,4 +38,23 @@ class ClassScanner
 
         return $classes;
     }
+
+    public static function getPathToNamespace($filePath, $withClassName = true): ?string
+    {
+        $ns = null;
+        $handle = fopen($filePath, "r");
+        if ($handle) {
+            while (($line = fgets($handle)) !== false) {
+                if (str_starts_with($line, 'namespace')) {
+                    $partsPath = explode(DIRECTORY_SEPARATOR, $filePath);
+                    $className = substr(array_pop($partsPath), 0, -4);
+                    $parts = explode(' ', $line);
+                    $ns = rtrim(trim($parts[1]), ';') .  ($withClassName  ? '\\' .$className : "");
+                    break;
+                }
+            }
+            fclose($handle);
+        }
+        return $ns;
+    }
 }

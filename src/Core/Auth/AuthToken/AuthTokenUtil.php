@@ -4,11 +4,10 @@ namespace SpsFW\Core\Auth\AuthToken;
 
 use DateMalformedStringException;
 use DateTime;
-use Exception;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use Random\RandomException;
-use SpsFW\Core\Auth\AccessRules\Models\UserAbstract;
+use SpsFW\Core\Auth\Instances\UserAbstract;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\AuthorizationException;
 
@@ -35,7 +34,7 @@ class AuthTokenUtil
     {
         $jwtConfig = Config::get('auth')['jwt'];
         $payload = $jwtConfig['payload'];
-        $payload['id'] = $user->id;
+        $payload['id'] = $user->uuid;
         $payload['accessRules'] = $user->accessRules;
 
         return JWT::encode(

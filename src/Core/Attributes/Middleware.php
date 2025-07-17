@@ -4,19 +4,18 @@ namespace SpsFW\Core\Attributes;
 
 
 use Attribute;
-use SpsFW\Core\Middleware\Infrastructure\MiddlewareInterface;
 
 
 #[Attribute(Attribute::TARGET_METHOD | Attribute::TARGET_CLASS)]
 readonly class Middleware
 {
     /**
-     * @var array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}>
+     * @var array<array{class: class-string<\SpsFW\Core\Middleware\MiddlewareInterface>, params: array<string, mixed>}>
      */
     private array $middlewares;
 
     /**
-     * @param array<class-string<MiddlewareInterface>|array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}> $middlewares
+     * @param array<class-string<\SpsFW\Core\Middleware\MiddlewareInterface>|array{class: class-string<\SpsFW\Core\Middleware\MiddlewareInterface>, params: array<string, mixed>}> $middlewares
      */
     public function __construct(array $middlewares)
     {
@@ -49,7 +48,7 @@ readonly class Middleware
     }
 
     /**
-     * @return array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}>
+     * @return array<array{class: class-string<\SpsFW\Core\Middleware\MiddlewareInterface>, params: array<string, mixed>}>
      */
     public function getMiddlewares(): array
     {

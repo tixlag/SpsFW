@@ -5,7 +5,7 @@ namespace SpsFW\Core\Storage;
 use PDO;
 use Ramsey\Uuid\Uuid;
 use SpsFW\Core\Db\Db;
-use SpsFW\Core\Models\BaseModel;
+use SpsFW\Core\Db\Models\BaseModel;
 
 abstract class PdoStorage
 {

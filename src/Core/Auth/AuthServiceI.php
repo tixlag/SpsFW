@@ -5,16 +5,17 @@ namespace SpsFW\Core\Auth;
 use DateMalformedIntervalStringException;
 use DateMalformedStringException;
 use Random\RandomException;
-use SpsFW\Core\Auth\AccessRules\Models\UserAbstract;
+use SpsFW\Core\Auth\Instances\UserAbstract;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BadPasswordException;
 use SpsFW\Core\Exceptions\UserNotFoundException;
-use SpsNew\Users\Models\User;
 
+/**
+ *
+ */
 interface AuthServiceI
 {
     /**
-     * @param \SpsNew\Users\Models\User $user
      * @return void
      * @throws RandomException
      * @throws DateMalformedIntervalStringException
@@ -22,6 +23,10 @@ interface AuthServiceI
      */
     public function addNewRefreshToken(UserAbstract $user): void;
 
+    /**
+     * @param string $selector
+     * @return array
+     */
     public function getAndDeleteRefreshToken(string $selector): array;
 
     /**
@@ -60,5 +65,8 @@ interface AuthServiceI
         ?string $phone
     ): UserAbstract;
 
+    /**
+     * @return void
+     */
     public function logout(): void;
 }

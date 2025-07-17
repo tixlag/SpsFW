@@ -70,6 +70,10 @@
       "@migration:status:prod",
       "@migration:run:prod",
       "echo '✅ Migration process completed successfully!'"
+    ],
+    "migration:generate:models": [
+      "echo 'Generating models from schemas...'",
+      "APP_ENV=prod php scripts/generate_migrations.php"
     ]
   },
   "scripts-descriptions": {

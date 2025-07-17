@@ -2,19 +2,18 @@
 
 namespace SpsFW\Core\Validation;
 
-use OpenApi\Attributes\OpenApi;
 use OpenApi\Attributes\Property;
-use ReflectionAttribute;
 use ReflectionClass;
+use ReflectionException;
 use SpsFW\Core\Exceptions\ValidationException;
 use SpsFW\Core\Http\Request;
-use SpsFW\Core\Validation\Enums\ParamsIn;
-use SpsFW\Core\Validation\ValidationRules\ValidationRule;
+use SpsFW\Core\Utils\DateTimeHelper;
+use SpsFW\Core\Validation\Enum\ParamsIn;
 
 class Validator
 {
 
-    private static array $attributesOpenApi = [
+    public static array $attributesOpenApi = [
         'required' => true,
         'type' => true,
         'minimum' => true,
@@ -27,23 +26,92 @@ class Validator
      * @template T of object
      * @param ParamsIn $in
      * @param class-string<T> $dtoClass
+     * @param array|null $cachedRules Кэшированные правила валидации
      * @return T
      */
-
-    public static function validate(ParamsIn $in, string $dtoClass): object
+    public static function validate(ParamsIn $in, string $dtoClass, ?array $cachedRules = null): object
     {
         /** @var array $reqParams */
         $reqParams = Request::getInstance()->{$in->value}();
 
+        if ($cachedRules !== null) {
+            return self::validateDtoWithCachedRules($dtoClass, $reqParams, $cachedRules);
+        }
+
+        // Fallback на старый метод, если правила не кэшированы
         return self::validateDto($dtoClass, $reqParams);
     }
 
     /**
-     * @param string $dtoClass
-     * @param array $reqParams
-     * @return mixed
-     * @throws ValidationException
-     * @throws \ReflectionException
+     * Валидация с использованием кэшированных правил
+     */
+    private static function validateDtoWithCachedRules(string $dtoClass, array $reqParams, array $cachedRules): object
+    {
+        $dto = new $dtoClass();
+
+        foreach ($cachedRules as $propertyName => $rules) {
+            $rawValue = $reqParams[$propertyName] ?? null;
+
+            // Обработка вложенных объектов
+            if (isset($rules['ref'])) {
+                if (isset($rules['type']) && $rules['type'] === 'array') {
+                    $nestedDtos = [];
+                    if (!is_array($rawValue)) {
+                        throw new ValidationException("$propertyName ожидает массив");
+                    }
+                    foreach ($rawValue as $rawNestedDto) {
+                        if (!is_array($rawNestedDto)) {
+                            throw new ValidationException("$propertyName ожидает массив");
+                        }
+                        $nestedDtos[] = self::validateDtoWithCachedRules(
+                            $rules['ref'],
+                            $rawNestedDto,
+                            $rules['nested_rules']
+                        );
+                    }
+                    self::setPropertyValue($dto, $rules['real_name'], $nestedDtos);
+                } else {
+                    $nestedDto = self::validateDtoWithCachedRules(
+                        $rules['ref'],
+                        $rawValue,
+                        $rules['nested_rules']
+                    );
+                    self::setPropertyValue($dto, $rules['real_name'], $nestedDto);
+                }
+                continue;
+            }
+
+            // Применяем правила валидации
+            $validatedValue = $rawValue;
+            foreach ($rules as $ruleName => $ruleValue) {
+                if (isset(self::$attributesOpenApi[$ruleName])) {
+                    $validatedValue = self::validateOpenApi(
+                        $propertyName,
+                        $validatedValue,
+                        $ruleName,
+                        $ruleValue
+                    );
+                }
+            }
+
+            self::setPropertyValue($dto, $rules['real_name'], $validatedValue);
+        }
+
+        return $dto;
+    }
+
+     /**
+     * Установка значения свойства через рефлексию
+     */
+    private static function setPropertyValue(object $dto, string $propertyName, mixed $value): void
+    {
+        $reflection = new \ReflectionClass($dto);
+        $property = $reflection->getProperty($propertyName);
+        $property->setValue($dto, $value);
+    }
+
+    /**
+     * Старый метод для обратной совместимости
      */
     private static function validateDto(string $dtoClass, array $reqParams): mixed
     {
@@ -84,17 +152,17 @@ class Validator
             foreach ($propertyAttributes as $propertyAttribute) {
                 $attributesOpenApi = $propertyAttribute->getArguments();
                 $propertyName = $attributesOpenApi['property'] ?? $property->getName();
-                $rawValue = $reqParams[$propertyName];
+                $rawValue = isset($reqParams[$propertyName]) ? $reqParams[$propertyName] : null;
                 foreach ($attributesOpenApi as $attributeOpenApiKey => $attributeOpenApiValue) {
-
                     if ($attributeOpenApiKey === 'ref') {
                         if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
                             $nestedDtos = [];
                             foreach ($rawValue as $rawNestedDto) {
-                                if (!is_array($rawNestedDto))
+                                if (!is_array($rawNestedDto)) {
                                     throw new ValidationException(
                                         "$propertyName ожидает массив"
                                     );
+                                }
                                 $value = self::validateDto($attributeOpenApiValue, $rawNestedDto);
                                 $nestedDtos[] = $value;
                             }
@@ -149,12 +217,13 @@ class Validator
                 $property->setValue($dto, $reqParams[$propertyName]);
             } elseif ($property->getValue($dto) === null) {
                 throw new ValidationException("Не передан обязательный параметр: $propertyName");
-
             }
         }
 
         return $dto;
     }
+
+private static $notRequired = [];
 
     /**
      * @throws ValidationException
@@ -167,8 +236,10 @@ class Validator
     ): mixed {
         switch ($ruleName) {
             case 'required':
-                if ($ruleValue[0] === true && empty($rawValue) && $rawValue !== 0) {
+                if ($ruleValue[0] === true && empty($rawValue) && $rawValue !== [] && $rawValue !== 0) {
                     throw new ValidationException("Не передан обязательный параметр: $propertyName");
+                } else {
+                    self::$notRequired[$propertyName] = true;
                 }
                 return $rawValue;
             case 'type':
@@ -203,6 +274,8 @@ class Validator
                         if (is_array($rawValue)) {
                             return $rawValue;
                         }
+                        if (!isset($rawValue) and self::$notRequired[$propertyName]) return null;
+
                         $value = json_decode($rawValue, true);
                         if (!is_array($value)) {
                             throw new ValidationException("В поле '$propertyName' ожидается массив");
@@ -242,14 +315,9 @@ class Validator
                 return $rawValue;
             case 'format':
                 if ($ruleValue === 'date') {
-                    $date = DateTimeHelper::try_create($rawValue);
-                    if ($date) {
-                        return $date->format('Y-m-d');
-                    } else {
-                        throw new ValidationException('Передана невалидная дата в $propertyName');
-                    }
+                    $date = DateTimeHelper::toUTC($rawValue);
+                    return $date->format('Y-m-d');
                 }
-
         }
         throw new ValidationException("Ошибку вызвал $propertyName проверьте параметр");
     }
