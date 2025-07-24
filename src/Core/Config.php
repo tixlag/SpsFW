@@ -10,8 +10,6 @@ use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorageI;
 use SpsFW\Core\Auth\Util\AccessRuleRegistry;
 
-
-
 class Config
 {
     private static array $config = [];
@@ -20,62 +18,51 @@ class Config
         AuthTokenStorageI::class => AuthTokenStorage::class,
         AccessRuleServiceI::class => AccessRuleService::class,
         AccessRuleStorageI::class => AccessRuleStorage::class,
-        // Добавляй другие интерфейсы здесь, чтобы DI мог выдать конкретные реализации
+        // ÐÐ¾Ð±Ð°Ð²Ð»ÑÐ¹ Ð´ÑÑÐ³Ð¸Ðµ Ð¸Ð½ÑÐµÑÑÐµÐ¹ÑÑ Ð·Ð´ÐµÑÑ, ÑÑÐ¾Ð±Ñ DI Ð¼Ð¾Ð³ Ð²ÑÐ´Ð°ÑÑ ÐºÐ¾Ð½ÐºÑÐµÑÐ½ÑÐµ ÑÐµÐ°Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸
     ];
-
-
-
 
     public static function get($key)
     {
-//        if (empty(self::$config)) {
-//            self::init();
-//        }
         return self::$config[$key];
     }
 
     public static function init(array $customConfig = []): void
     {
-
-
-        $url = sprintf("%s://%s:%u", getenv('HTTP_SCHEME'), getenv('HOST'), getenv('PORT'));
-        $host = sprintf("%s:%u", getenv('HOST'), getenv('PORT'));
+        $url = sprintf("%s://%s:%u", $_ENV['HTTP_SCHEME'], $_ENV['HOST'], $_ENV['PORT']);
+        $host = sprintf("%s:%u", $_ENV['HOST'], $_ENV['PORT']);
         $now = time();
         $baseConfig = [
             'app' => [
-                'name' => getenv('APP_NAME'),
-                'version' => getenv('APP_VERSION'),
-                'env' => getenv('APP_ENV'),
+                'name' => $_ENV['APP_NAME'],
+                'version' => $_ENV['APP_VERSION'],
+                'env' => $_ENV['APP_ENV'],
                 'host' => $host,
                 'url' => $url,
-                'debugMode' => getenv('DEBUG_MODE'),
-                'masterPassword' => getenv('MASTER_PASSWORD')
+                'debugMode' => $_ENV['DEBUG_MODE'],
+                'masterPassword' => $_ENV['MASTER_PASSWORD']
             ],
             'db' => [
-                'adapter' => getenv('DB_ADAPTER'),
-                'host' => getenv('DB_HOST'),
-                'port' => getenv('DB_PORT'),
-                'user' => getenv('DB_USER'),
-                'password' => getenv('DB_PASS'),
-                'dbname' => getenv('DB_NAME'),
-                'debugMode' => getenv('DEBUG_MODE')
+                'adapter' => $_ENV['DB_ADAPTER'],
+                'host' => $_ENV['DB_HOST'],
+                'port' => $_ENV['DB_PORT'],
+                'user' => $_ENV['DB_USER'],
+                'password' => $_ENV['DB_PASS'],
+                'dbname' => $_ENV['DB_NAME'],
+                'debugMode' => $_ENV['DEBUG_MODE']
             ],
             'auth' => [
-                'refreshTokenExpiresIn' => getenv('REFRESH_TOKEN_EXPIRES_IN'),
+                'refreshTokenExpiresIn' => $_ENV['REFRESH_TOKEN_EXPIRES_IN'],
                 'jwt' => [
-                    'secret' => getenv('JWT_SECRET'),
+                    'secret' => $_ENV['JWT_SECRET'],
                     'header' => [
-                        "alg" => getenv('JWT_ALG'),
+                        "alg" => $_ENV['JWT_ALG'],
                         'typ' => 'JWT'
                     ],
                     'payload' => [
-                        'exp' => $now + getenv('JWT_EXP_SECONDS'),
+                        'exp' => $now + $_ENV['JWT_EXP_SECONDS'],
                     ],
-
-
                 ],
             ],
-
         ];
 
         self::$config = array_merge_recursive($baseConfig, $customConfig);
@@ -85,5 +72,4 @@ class Config
     {
         self::$bindings = self::$bindings + $bindings;
     }
-
 }
