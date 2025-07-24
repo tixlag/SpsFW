@@ -11,14 +11,14 @@ class DICacheBuilder
 {
     private DIContainer $container;
     private array $compiled = [];
+    private string $cachePath;
 
 //    public static string $DIDir = __DIR__ . '/../../../../../../var/cache/DI';
-    public static string $DIDir =  '';
 
-    public function __construct(DIContainer $container)
+    public function __construct(DIContainer $container, string $cachePath)
     {
-        self::$DIDir = PathManager::getCachePath() . '/DI';
         $this->container = $container;
+        $this->cachePath = $cachePath;
 
     }
 
@@ -83,9 +83,8 @@ class DICacheBuilder
 
     private function writeToFile(): void
     {
-        self::$DIDir = PathManager::getCachePath() . '/DI';
-        if (!is_dir(self::$DIDir)) {
-            mkdir(self::$DIDir, 0777, true);
+        if (!is_dir($this->cachePath)) {
+            mkdir($this->cachePath , 0777, true);
         }
         $this->writeCompiledMap();
     }
@@ -94,7 +93,7 @@ class DICacheBuilder
     {
         $export = var_export($this->compiled, true);
         $php = "<?php\n\nreturn $export;\n";
-        file_put_contents(self::$DIDir . '/compiled_di.php', $php);
+        file_put_contents($this->cachePath  . '/compiled_di.php', $php);
     }
 
 
@@ -119,7 +118,7 @@ class DICacheBuilder
             $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
         }
 
-        $compiler = new DICacheBuilder($container ?? new DIContainer($cachePath));
+        $compiler = new DICacheBuilder($container ?? new DIContainer($cachePath), $cachePath);
         $compiler->compile($allClasses);
     }
 }
