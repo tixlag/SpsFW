@@ -18,7 +18,6 @@ use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Validation\Enum\ParamsIn;
-use SpsNew\Auth\AccessRules\MasterRule;
 
 
 class AuthController extends RestController
@@ -96,8 +95,6 @@ class AuthController extends RestController
     )]
     #[Route('/api/auth/register', ["POST"])]
     #[NoAuthAccess]
-    #[AccessRulesAll([MasterRule::DIGITAL_LINK_MASTER_ALLOW_FILTER, MasterRule::DIGITAL_LINK_MASTER_ALLOWED_LOCATIONS])]
-    #[AccessRulesAny([MasterRule::DIGITAL_LINK_MASTER_ALLOW_FILTER, MasterRule::DIGITAL_LINK_MASTER_ALLOWED_LOCATIONS])]
 
     public function register(): Response
     {

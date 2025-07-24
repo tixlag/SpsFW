@@ -17,10 +17,14 @@ class SchemaMigrationGenerator
 
     public function __construct(string $projectRoot)
     {
+     //   $this->paths[] = __DIR__ . '/../../'; todo new-core
         $this->paths[] = __DIR__ . '/../../';
         $this->paths[] = $projectRoot;
-        $this->versionFile = $projectRoot . '/../db/.schema_versions.json';
-        $this->migrationHistoryFile = $projectRoot . '/../db/.migration_history.json';
+//        $this->versionFile = $projectRoot . '/../db/.schema_versions.json'; todo new-core
+//        $this->migrationHistoryFile = $projectRoot . '/../db/.migration_history.json';
+
+        $this->versionFile = $projectRoot . '/db/.schema_versions.json';
+        $this->migrationHistoryFile = $projectRoot . '/db/.migration_history.json';
         $this->modelGenerator = new ModelGenerator($projectRoot);
 
         if (!file_exists($this->versionFile)) {

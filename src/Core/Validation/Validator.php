@@ -256,8 +256,8 @@ private static $notRequired = [];
                         }
                         throw new ValidationException("В поле '$propertyName' ожидается целое число");
                     case 'boolean':
-                        if (is_bool($rawValue)) {
-                            return $rawValue;
+                        if (is_bool($rawValue) || $rawValue == 1 || $rawValue == 0) {
+                            return (bool)$rawValue;
                         }
                         throw new ValidationException("В поле '$propertyName' ожидается целое число");
                     case 'string':

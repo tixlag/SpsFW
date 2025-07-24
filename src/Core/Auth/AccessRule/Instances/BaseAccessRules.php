@@ -3,6 +3,10 @@ namespace SpsFW\Core\Auth\AccessRule\Instances;
 
 abstract class BaseAccessRules
 {
+    const array RULES = [];
+    const string ROLE = "";
+    const int PREFIX = 0;
+
     /**
      * Получить все правила группы
      */

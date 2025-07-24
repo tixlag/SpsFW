@@ -9,9 +9,7 @@ use SpsFW\Core\Auth\AccessRule\AccessRuleStorageI;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorageI;
 use SpsFW\Core\Auth\Util\AccessRuleRegistry;
-use SpsNew\Auth\AccessRules\MasterRule;
-use SpsNew\Auth\AccessRules\PtoRule;
-use SpsNew\Auth\AccessRules\SystemRule;
+
 
 
 class Config

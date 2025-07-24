@@ -327,8 +327,8 @@ class Response
     {
         $errorBody = self::createErrorBody($exception, $message, $statusCode);
         $error = new self(
-            $statusCode ??
-            (is_int($exception->getCode()) && $exception->getCode() > 0 ? $exception->getCode() : 500)
+            $statusCode ?? ($exception instanceof BaseException ?
+            (is_int($exception->getCode()) && $exception->getCode() > 0 ? $exception->getCode() : 500) : 500)
         )
             ->createJson($errorBody);
         error_log(

@@ -21,11 +21,12 @@ class DIContainer
      * @throws ReflectionException
      * @throws BaseException
      */
-    public function __construct()
+    public function __construct(string $cachePath)
     {
-        $compiledPath = DICacheBuilder::$DIDir . '/compiled_di.php';
-        if (file_exists($compiledPath)) {
-            $this->compiledMap = require $compiledPath;
+//        $compiledPath = DICacheBuilder::$DIDir . '/compiled_di.php';
+        $cachePath =  $cachePath . '/compiled_di.php';
+        if (file_exists($cachePath)) {
+            $this->compiledMap = require $cachePath;
         }
     }
 

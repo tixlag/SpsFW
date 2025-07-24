@@ -12,11 +12,14 @@ class DICacheBuilder
     private DIContainer $container;
     private array $compiled = [];
 
-    public static string $DIDir = __DIR__ . '/../../../../../../var/cache/DI';
+//    public static string $DIDir = __DIR__ . '/../../../../../../var/cache/DI';
+    public static string $DIDir =  '';
 
     public function __construct(DIContainer $container)
     {
+       self::$DIDir = PathManager::getCachePath() . '/DI';
         $this->container = $container;
+
     }
 
     /**
@@ -80,6 +83,7 @@ class DICacheBuilder
 
     private function writeToFile(): void
     {
+        self::$DIDir = PathManager::getCachePath() . '/DI';
         if (!is_dir(self::$DIDir)) {
             mkdir(self::$DIDir, 0777, true);
         }
@@ -106,19 +110,16 @@ class DICacheBuilder
      * @throws BaseException
      * @throws ReflectionException
      */
-    public static function compileDI(?DIContainer $container = null): void
+    public static function compileDI(?DIContainer $container = null, string $cachePath = "/../../../../../../.cache"): void
     {
         $allClasses = [];
 
-        $scannerDirs = [
-            __DIR__ . '/../',              // фреймворк
-             __DIR__ . '/../../../../../../src/',    // приложение
-        ];
+        $scannerDirs = PathManager::getControllersDirs();
         foreach ($scannerDirs as $dir) {
             $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
         }
 
-        $compiler = new DICacheBuilder($container ?? new DIContainer());
+        $compiler = new DICacheBuilder($container ?? new DIContainer($cachePath));
         $compiler->compile($allClasses);
     }
 }

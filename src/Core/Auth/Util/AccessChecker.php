@@ -12,7 +12,7 @@ class AccessChecker
     /**
      * Проверить, есть ли у пользователя определенное правило
      * @param array $userRoles
-     * @param int $ruleId передаем int вида PtoRule::DIGITAL_LINK_PTO_ACCESS
+     * @param int $ruleId передаем int вида PtoRules::DIGITAL_LINK_PTO_ACCESS
      * @return bool
      */
     public static function hasRule(array $userRoles, int $ruleId): bool

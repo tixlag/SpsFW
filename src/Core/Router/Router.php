@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core\Router;
 
+use Error;
 use OpenApi\Attributes\Property;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -66,7 +67,6 @@ class Router
         __DIR__ . '/../../../../../../src',
     ];
 
-    protected string $cacheDir = __DIR__ . '/../../../../../../var/cache';
 
 //    protected ?RedisHelper $redis = null;
 
@@ -80,8 +80,12 @@ class Router
     public function __construct(
         ?string $controllersDir = null,
         protected bool $useCache = true,
+        protected string $cacheDir = '/../../../../../../.cache/',
         array $dependencies = []
     ) {
+//        $this->cacheDir =  PathManager::getCachePath();
+//        $this->controllersDirs = PathManager::getControllersDirs();
+        PathManager::ensureDirectoryExists($this->cacheDir);
 //        $scannerDirs = [
 //            __DIR__ . '/../../',              // фреймворк
 //            // __DIR__ . '/../../../../',    // приложение
@@ -108,7 +112,7 @@ class Router
 //        } catch (RedisException $e) {
 //            $this->redis = null;
 //        }
-        $this->container = new DIContainer();
+        $this->container = new DIContainer($this->cacheDir);
 
         $this->loadRoutes();
     }
@@ -135,6 +139,7 @@ class Router
                     $this->routes = require $compiledRoutesFile;
                     return;
                 }
+                throw new Error();
             } catch (\Error $e) {
                 $this->scanControllers();
                 $this->createRoutesCache();
@@ -156,6 +161,10 @@ class Router
         $this->routes = [];
 
         foreach ($this->controllersDirs as $dir) {
+            if (!is_dir($dir)) {
+                error_log("Router: Директория контроллеров не найдена: $dir");
+                continue; // Пропускаем несуществующие директории
+            }
             $dir = new RecursiveDirectoryIterator($dir);
             $iterator = new RecursiveIteratorIterator($dir);
             $controllerFiles = [];
@@ -551,7 +560,7 @@ class Router
     ): object|null {
         // тестируем DI
         $globalStartTime = hrtime(true);
-        if (!file_exists(DICacheBuilder::$DIDir . '/compiled_di.php')) {
+        if (!file_exists($this->cacheDir . '/compiled_di.php')) {
             DICacheBuilder::compileDI($this->container);
         }
         $res = $this->container->get($className);
@@ -773,6 +782,21 @@ class Router
         ], $status);
     }
 
+
+    private function getControllersDirs(): array
+    {
+        $libraryDir = __DIR__ . '/../';
+
+        // Определяем корень проекта через composer.json
+        $currentDir = __DIR__;
+        while ($currentDir !== '/' && !file_exists($currentDir . '/composer.json')) {
+            $currentDir = dirname($currentDir);
+        }
+
+        $srcDir = $currentDir . '/src';
+
+        return [$libraryDir, $srcDir];
+    }
 
 
 
