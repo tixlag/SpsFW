@@ -17,7 +17,7 @@ class DICacheBuilder
 
     public function __construct(DIContainer $container)
     {
-       self::$DIDir = PathManager::getCachePath() . '/DI';
+        self::$DIDir = PathManager::getCachePath() . '/DI';
         $this->container = $container;
 
     }
@@ -110,7 +110,7 @@ class DICacheBuilder
      * @throws BaseException
      * @throws ReflectionException
      */
-    public static function compileDI(?DIContainer $container = null, string $cachePath = "/../../../../../../.cache"): void
+    public static function compileDI(?DIContainer $container = null, string $cachePath = __DIR__  . "/../../../../../../.cache"): void
     {
         $allClasses = [];
 

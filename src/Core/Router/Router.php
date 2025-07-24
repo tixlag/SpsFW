@@ -80,7 +80,7 @@ class Router
     public function __construct(
         ?string $controllersDir = null,
         protected bool $useCache = true,
-        protected string $cacheDir = '/../../../../../../.cache/',
+        protected string $cacheDir = __DIR__ . '/../../../../../../.cache/',
         array $dependencies = []
     ) {
 //        $this->cacheDir =  PathManager::getCachePath();
