@@ -1,6 +1,6 @@
 <?php
 
-namespace SpsFW\Core\Router;
+namespace SpsFW\Core\Router\CleanCodeRouter;
 
 use ReflectionClass;
 use ReflectionNamedType;
