@@ -1,6 +1,6 @@
 <?php
 
-namespace SpsFW\Core\Router;
+namespace SpsFW\Core\Router\CleanCodeRouter;
 
 use SpsFW\Core\Exceptions\RouteNotFoundException;
 use SpsFW\Core\Http\Request;

@@ -1,9 +1,8 @@
 <?php
 
-namespace SpsFW\Core\Router;
+namespace SpsFW\Core\Router\CleanCodeRouter;
 
 use SpsFW\Core\Exceptions\BaseException;
-use SpsFW\Core\Exceptions\RouteNotFoundException;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Middleware\MiddlewareInterface;
@@ -44,7 +43,7 @@ class NewRouter
 
         // Инициализация сканера маршрутов
         $controllersDirs = [
-            __DIR__ . '/../',
+            __DIR__ . '/Core/',
             __DIR__ . '/../../../../../../src',
         ];
 

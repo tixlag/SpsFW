@@ -89,6 +89,15 @@ class AccessChecker
     }
 
     /**
+     * Получить значение правила доступа пользователя
+     * @throws AuthorizationException
+     */
+    public static function getValue(int $ruleId): array|null
+    {
+        return Auth::getOrThrow()->accessRules[$ruleId];
+    }
+
+    /**
      * @throws AuthorizationException
      */
     public static function checkAccess(mixed $access_rules_arrays): void {

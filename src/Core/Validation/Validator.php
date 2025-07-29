@@ -4,7 +4,6 @@ namespace SpsFW\Core\Validation;
 
 use OpenApi\Attributes\Property;
 use ReflectionClass;
-use ReflectionException;
 use SpsFW\Core\Exceptions\ValidationException;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Utils\DateTimeHelper;

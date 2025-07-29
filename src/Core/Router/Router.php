@@ -13,11 +13,14 @@ use ReflectionMethod;
 use ReflectionNamedType;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
-use SpsFW\Core\Attributes\JsonBody;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
-use SpsFW\Core\Attributes\Validate;
+use SpsFW\Core\Attributes\Validation\FormDataBody;
+use SpsFW\Core\Attributes\Validation\JsonBody;
+use SpsFW\Core\Attributes\Validation\PostBody;
+use SpsFW\Core\Attributes\Validation\QueryParams;
+use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Auth\Util\AccessChecker;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
@@ -71,11 +74,12 @@ class Router
 //    protected ?RedisHelper $redis = null;
 
     /**
-     * @param string $controllersDir Путь к директории с контроллерами
+     * @param string|null $controllersDir Путь к директории с контроллерами
      * @param bool $useCache Использовать ли кеширование маршрутов
-     * @param string $cacheFile Путь к файлу кеша
+     * @param string $cacheDir Путь к директории с кешем
      * @param array<string, mixed> $dependencies Зависимости для внедрения в конструкторы классов и middleware
      * @throws BaseException
+     * @throws ReflectionException
      */
     public function __construct(
         ?string $controllersDir = null,
@@ -229,16 +233,30 @@ class Router
             $validationParams = [];
             foreach ($methodParameters as $methodParameter) {
                 $dtoClass = $methodParameter->getType()->getName();
-                $validationAttributes = $methodParameter->getAttributes(Validate::class, ReflectionAttribute::IS_INSTANCEOF);
+                $validationAttributes = $methodParameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF);
                 if (empty($validationAttributes)) continue;
                 $validationAttribute = $validationAttributes[0];
-                if ($validationAttribute->newInstance() instanceof JsonBody) {
-                    $validationParams[] = [
-                        'in' => ParamsIn::Json,
-                        'dto' => $dtoClass,
-                        'rules' => $this->extractValidationRules($dtoClass), // Извлекаем правила
-                    ];
+                $validationAttributeInstance = $validationAttribute->newInstance();
+
+                $paramsIn = null;
+                if ($validationAttributeInstance instanceof JsonBody) {
+                    $paramsIn = ParamsIn::Json;
                 }
+                if ($validationAttributeInstance instanceof QueryParams) {
+                    $paramsIn = ParamsIn::Query;
+                }
+                if ($validationAttributeInstance instanceof PostBody) {
+                    $paramsIn = ParamsIn::Post;
+                }
+                if ($validationAttributeInstance instanceof FormDataBody) {
+                    $paramsIn = ParamsIn::Post;
+                }
+
+                $validationParams[] = [
+                    'in' => $paramsIn,
+                    'dto' => $dtoClass,
+                    'rules' => $this->extractValidationRules($dtoClass), // Извлекаем правила
+                ];
             }
             foreach ($httpMethods as $httpMethod) {
                 $httpMethodString = is_string($httpMethod) ? $httpMethod : $httpMethod->value;
@@ -559,16 +577,16 @@ class Router
         string $className
     ): object|null {
         // тестируем DI
-        $globalStartTime = hrtime(true);
+//        $globalStartTime = hrtime(true);
         if (!file_exists($this->cacheDir . '/compiled_di.php')) {
             DICacheBuilder::compileDI($this->container);
         }
         $res = $this->container->get($className);
-        $endTime = hrtime(true);
-        $duration = ($endTime - $globalStartTime) / 1e6; // В миллисекундах
-        if (!headers_sent()) {
-            header(sprintf('X-DI-speed: %s', number_format($duration, 2)));
-        }
+//        $endTime = hrtime(true);
+//        $duration = ($endTime - $globalStartTime) / 1e6; // В миллисекундах
+//        if (!headers_sent()) {
+//            header(sprintf('X-DI-speed: %s', number_format($duration, 2)));
+//        }
         return $res;
 
         //todo Вернуть поодержу Middlewares

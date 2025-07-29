@@ -8,7 +8,6 @@ use SpsFW\Core\Auth\AccessRule\AccessRuleStorage;
 use SpsFW\Core\Auth\AccessRule\AccessRuleStorageI;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorageI;
-use SpsFW\Core\Auth\Util\AccessRuleRegistry;
 
 class Config
 {
@@ -18,7 +17,6 @@ class Config
         AuthTokenStorageI::class => AuthTokenStorage::class,
         AccessRuleServiceI::class => AccessRuleService::class,
         AccessRuleStorageI::class => AccessRuleStorage::class,
-        // ÐÐ¾Ð±Ð°Ð²Ð»ÑÐ¹ Ð´ÑÑÐ³Ð¸Ðµ Ð¸Ð½ÑÐµÑÑÐµÐ¹ÑÑ Ð·Ð´ÐµÑÑ, ÑÑÐ¾Ð±Ñ DI Ð¼Ð¾Ð³ Ð²ÑÐ´Ð°ÑÑ ÐºÐ¾Ð½ÐºÑÐµÑÐ½ÑÐµ ÑÐµÐ°Ð»Ð¸Ð·Ð°ÑÐ¸Ð¸
     ];
 
     public static function get($key)

@@ -6,18 +6,12 @@ use DateMalformedIntervalStringException;
 use DateMalformedStringException;
 use OpenApi\Attributes as OA;
 use Random\RandomException;
-use SpsFW\Core\Attributes\AccessRulesAll;
-use SpsFW\Core\Attributes\AccessRulesAny;
 use SpsFW\Core\Attributes\Inject;
-use SpsFW\Core\Attributes\JsonBody;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
-use SpsFW\Core\Attributes\Validate;
-use SpsFW\Core\Auth\Util\AccessRuleRegistry;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
-use SpsFW\Core\Validation\Enum\ParamsIn;
 
 
 class AuthController extends RestController
@@ -72,6 +66,7 @@ class AuthController extends RestController
 
     /**
      */
+
     #[OA\Post(
         path: "/api/auth/register",
         operationId: "registerUser",
@@ -95,10 +90,10 @@ class AuthController extends RestController
     )]
     #[Route('/api/auth/register', ["POST"])]
     #[NoAuthAccess]
-
     public function register(): Response
     {
-        return Response::error(message: "Необходимо реализовать свои AuthController");    }
+        return Response::error(message: "Необходимо реализовать свои AuthController");
+    }
 
     #[OA\Post(
         path: "/api/auth/login",

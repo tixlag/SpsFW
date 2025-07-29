@@ -23,11 +23,11 @@ class DIContainer
      */
     public function __construct(string $cachePath)
     {
-//        $compiledPath = DICacheBuilder::$DIDir . '/compiled_di.php';
-        $cachePath =  $cachePath . '/compiled_di.php';
-        if (file_exists($cachePath)) {
-            $this->compiledMap = require $cachePath;
+        $cacheDIPath =  $cachePath . '/compiled_di.php';
+        if (file_exists($cacheDIPath)) {
+            $this->compiledMap = require $cacheDIPath;
         }
+
     }
 
     /**

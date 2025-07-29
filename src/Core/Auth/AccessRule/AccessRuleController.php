@@ -5,10 +5,10 @@ namespace SpsFW\Core\Auth\AccessRule;
 use OpenApi\Attributes as OA;
 use SpsFW\Core\Attributes\Inject;
 use SpsFW\Core\Attributes\Route;
-use SpsFW\Core\Attributes\Validate;
+use SpsFW\Core\Attributes\Validation\JsonBody;
+use SpsFW\Core\Attributes\Validation\Validate;
 use SpsFW\Core\Auth\Dto\AccessRulesArrayDto;
 use SpsFW\Core\Auth\Instances\UserAbstract;
-use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Validation\Enum\ParamsIn;
 
@@ -98,8 +98,7 @@ class AccessRuleController extends RestController
         ]
     )]
     #[Route('/api/auth/set-access-rules', ['POST'])]
-    #[Validate(ParamsIn::Json, AccessRulesArrayDto::class)]
-    public function setAccessRules(AccessRulesArrayDto $accessRulesDto): UserAbstract
+    public function setAccessRules(#[JsonBody] AccessRulesArrayDto $accessRulesDto): UserAbstract
     {
         return $this->accessRulesService->setAccessRules($accessRulesDto);
     }

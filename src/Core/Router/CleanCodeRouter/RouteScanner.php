@@ -1,6 +1,6 @@
 <?php
 
-namespace SpsFW\Core\Router;
+namespace SpsFW\Core\Router\CleanCodeRouter;
 
 use OpenApi\Attributes\Property;
 use RecursiveDirectoryIterator;
@@ -10,12 +10,13 @@ use ReflectionClass;
 use ReflectionMethod;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
-use SpsFW\Core\Attributes\JsonBody;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
-use SpsFW\Core\Attributes\Validate;
+use SpsFW\Core\Attributes\Validation\JsonBody;
+use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Middleware\MiddlewareInterface;
+use SpsFW\Core\Router\ClassScanner;
 use SpsFW\Core\Validation\Enum\ParamsIn;
 use SpsFW\Core\Validation\Validator;
 
@@ -157,7 +158,7 @@ class RouteScanner
 
         foreach ($methodParameters as $methodParameter) {
             $dtoClass = $methodParameter->getType()->getName();
-            $validationAttributes = $methodParameter->getAttributes(Validate::class, ReflectionAttribute::IS_INSTANCEOF);
+            $validationAttributes = $methodParameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF);
 
             if (empty($validationAttributes)) {
                 continue;
