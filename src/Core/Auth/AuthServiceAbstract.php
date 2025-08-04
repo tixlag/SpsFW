@@ -119,7 +119,7 @@ abstract class AuthServiceAbstract implements AuthServiceI
             throw new BadPasswordException("Неверный пароль");
         }
 
-        $accessRules = $this->accessRulesService->extractAccessRules($user->uuid);
+        $accessRules = $this->accessRulesService->extractAccessRules($user->code_1c);
 
         $user->setAccessRules($accessRules);
 

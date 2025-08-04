@@ -11,10 +11,10 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
 
 
     /**
-     * @param string $userUuid
+     * @param string $userCode1C
      * @return array<int, mixed>
      */
-    public function extractAccessRules(string $userUuid): array
+    public function extractAccessRules(string $userCode1C): array
     {
         $stmt = $this->getPdo()->prepare(
         /** @lang MariaDB */
@@ -23,10 +23,10 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
                     uar.value
                     FROM
                         users__access_rules uar
-                    WHERE user_uuid = UUID_TO_BIN(:uuid)
+                    WHERE user_code_1c = UUID_TO_BIN(:uuid)
                     "
         );
-        $stmt->execute(['uuid' => $userUuid]);
+        $stmt->execute(['uuid' => $userCode1C]);
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         if (!$rows) return [];
         $accessRules = [];
@@ -36,7 +36,7 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
         return $accessRules;
     }
 
-    public function addAccessRules(string $userUuid, array $accessRules): bool
+    public function addAccessRules(string $userCode1C, array $accessRules): bool
     {
 
         $transactionStarted = false;
@@ -64,13 +64,13 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
 
                 $stmt = $this->getPdo()->prepare(
                 /** @lang MariaDB */
-                    "INSERT INTO users__access_rules (user_uuid, access_rule_id, value)
-                    VALUES (UUID_TO_BIN(:user_uuid), :access_rule_id, :value)
+                    "INSERT INTO users__access_rules (user_code_1c, access_rule_id, value)
+                    VALUES (:user_code_1c, :access_rule_id, :value)
                 ON DUPLICATE KEY UPDATE value = VALUES(value)
                     "
                 );
                 $stmt->execute([
-                    'user_uuid' => $userUuid,
+                    'user_code_1c' => $userCode1C,
                     'access_rule_id' => $accessRuleId,
                     'value' => json_encode($accessRuleValue)
                 ]);
@@ -88,15 +88,15 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
         }
     }
 
-    public function setAccessRules(string $userUuid, array $accessRules): bool
+    public function setAccessRules(string $userCode1C, array $accessRules): bool
     {
         try {
             $this->getPdo()->beginTransaction();
 
-            $stmt = $this->getPdo()->prepare(/** @lang MariaDB */ "DELETE FROM users__access_rules WHERE user_uuid = UUID_TO_BIN(:user_id)");
-            $stmt->execute(['user_id' => $userUuid]);
+            $stmt = $this->getPdo()->prepare(/** @lang MariaDB */ "DELETE FROM users__access_rules WHERE user_code_1c = :user_code_1c");
+            $stmt->execute(['user_code_1c' => $userCode1C]);
 
-            $this->addAccessRules($userUuid, $accessRules);
+            $this->addAccessRules($userCode1C, $accessRules);
 
             return $this->getPdo()->commit();
         } catch (PDOException $e) {

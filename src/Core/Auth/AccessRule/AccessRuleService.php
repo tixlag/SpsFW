@@ -23,9 +23,9 @@ class AccessRuleService implements AccessRuleServiceI
 
 
 
-    public function extractAccessRules(string $userUuid): array
+    public function extractAccessRules(string $userCode1C): array
     {
-        return $this->accessRulesStorage->extractAccessRules($userUuid);
+        return $this->accessRulesStorage->extractAccessRules($userCode1C);
     }
 
     public function addAccessRules(AccessRulesArrayDto $accessRulesDto): ?UserAbstract
@@ -34,10 +34,10 @@ class AccessRuleService implements AccessRuleServiceI
         foreach ($accessRulesDto->rules as $rule) {
             $accessRules += $rule->toArray();
         }
-        $user = $this->usersService->getById($accessRulesDto->userUuid);
-        $isAdded = $this->accessRulesStorage->addAccessRules($user->uuid, $accessRules);
+        $user = $this->usersService->getById($accessRulesDto->userCode1C);
+        $isAdded = $this->accessRulesStorage->addAccessRules($user->code_1c, $accessRules);
         if ($isAdded) {
-            $accessRules = $this->extractAccessRules($user->uuid);
+            $accessRules = $this->extractAccessRules($user->code_1c);
             $user->addAccessRules($accessRules);
         }
 
@@ -52,8 +52,8 @@ class AccessRuleService implements AccessRuleServiceI
         foreach ($accessRulesDto->rules as $rule) {
             $accessRules += $rule->toArray();
         }
-        $user = $this->usersService->getById($accessRulesDto->userUuid);
-        $isSet = $this->accessRulesStorage->setAccessRules($user->uuid, $accessRules);
+        $user = $this->usersService->getByCode1C($accessRulesDto->userCode1C);
+        $isSet = $this->accessRulesStorage->setAccessRules($user->code_1c, $accessRules);
         if ($isSet) {
             $user->setAccessRules($accessRules);
             $this->authTokenService->sendNewJwtToken($user);
