@@ -37,6 +37,8 @@ class Auth extends UserAbstract
                 } else {
                     throw new AuthorizationException('Требуется аутентификация', 401);
                 }
+            } else {
+                throw new AuthorizationException('Требуется аутентификация', 401);
             }
         }
         return self::$userAuth;
@@ -81,8 +83,6 @@ class Auth extends UserAbstract
         }
         return self::$userAuth;
     }
-
-
 
 
 }
