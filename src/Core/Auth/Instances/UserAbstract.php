@@ -7,12 +7,14 @@ use SpsFW\Core\Db\Models\BaseModel;
 abstract class UserAbstract extends BaseModel
 {
     protected(set) ?string $uuid;
+    protected(set) ?string $code_1c;
     protected(set) ?array $accessRules = [];
     protected(set) ?string $hashedPassword;
 
-    public function __construct(?string $uuid = null, ?array $accessRules = null, ?string $hashedPassword = null)
+    public function __construct(?string $uuid = null,?string $code_1c = null, ?array $accessRules = null, ?string $hashedPassword = null)
     {
         $this->uuid = $uuid;
+        $this->code_1c = $code_1c;
         $this->accessRules = $accessRules ?? [];
         $this->hashedPassword = $hashedPassword;
     }
