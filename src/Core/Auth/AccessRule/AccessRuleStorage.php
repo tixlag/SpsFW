@@ -23,10 +23,10 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
                     uar.value
                     FROM
                         users__access_rules uar
-                    WHERE user_code_1c = UUID_TO_BIN(:uuid)
+                    WHERE user_code_1c = :code_1c
                     "
         );
-        $stmt->execute(['uuid' => $userCode1C]);
+        $stmt->execute(['code_1c' => $userCode1C]);
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
         if (!$rows) return [];
         $accessRules = [];
