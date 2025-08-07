@@ -27,7 +27,7 @@ class Config
     public static function init(array $customConfig = []): void
     {
         $url = sprintf("%s://%s:%u", $_ENV['HTTP_SCHEME'], $_ENV['HOST'], $_ENV['PORT']);
-        $host = sprintf("%s:%u", $_ENV['HOST'], $_ENV['PORT']);
+        $host = !empty($_ENV['PORT']) ? sprintf("%s:%u", $_ENV['HOST'], $_ENV['PORT']) : $_ENV['HOST'];
         $now = time();
         $baseConfig = [
             'app' => [

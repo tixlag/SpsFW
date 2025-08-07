@@ -25,6 +25,7 @@ class Response
         string $contentType = 'text/html'
     ) {
         $this->headers['Content-Type'] = $contentType;
+//        $this->headers['Access-Control-Allow-Origin'] = Config::get('app')['host'];
         $this->headers['Access-Control-Allow-Origin'] = Config::get('app')['host'];
         $this->headers['Access-Control-Allow-Credentials'] = 'true';
         $this->headers['Access-Control-Allow-Headers'] = 'Content-type, Authorization';
