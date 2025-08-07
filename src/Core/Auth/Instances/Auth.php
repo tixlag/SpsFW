@@ -13,9 +13,9 @@ class Auth extends UserAbstract
 
     private static ?self $userAuth = null;
 
-    private function __construct(string $uuid, array $accessRules = [])
+    private function __construct(string $uuid, ?string $code_1c = null, array $accessRules = [])
     {
-        parent::__construct($uuid, $accessRules);
+        parent::__construct($uuid, $code_1c, $accessRules);
     }
 
     /**
@@ -33,7 +33,7 @@ class Auth extends UserAbstract
                     } catch (Exception $e) {
                         throw new AuthorizationException($e->getMessage(), 401, $e);
                     }
-                    self::$userAuth = new self($jwtDecoded->id, is_array($jwtDecoded->accessRules) ? $jwtDecoded->accessRules : get_object_vars($jwtDecoded->accessRules));
+                    self::$userAuth = new self($jwtDecoded->id, $jwtDecoded->code_1c, is_array($jwtDecoded->accessRules) ? $jwtDecoded->accessRules : get_object_vars($jwtDecoded->accessRules));
                 } else {
                     throw new AuthorizationException('Требуется аутентификация', 401);
                 }
@@ -74,7 +74,7 @@ class Auth extends UserAbstract
             // Вернем только если токен просрочен
             if ($jwtException instanceof ExpiredException) {
                 $payload = $jwtException->getPayload();
-                return new self($payload['id'], $payload['accessRules']);
+                return new self($payload['id'], $payload['code_1c'], $payload['accessRules']);
             } else {
                 return null;
             }

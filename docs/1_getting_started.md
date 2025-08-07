@@ -16,32 +16,41 @@
 ```
 your-project/
 ├── src/                 # Ваш код приложения
-│   ├── Controllers/     # Контроллеры
-│   ├── Services/        # Сервисы
-│   ├── DTOs/            # DTO для валидации
-│   └── ...
+│   ├── Domain/     # Доменная область
+│   │   ├── Controllers/     # Контроллеры
+│   │   ├── Services/        # Сервисы
+│   │   ├── Storages/        # Репозитории
+│   │   ├── DTOs/            # DTO для валидации
+│   │   └── ...
 ├── .env                 # Файл конфигурации окружения
 ├── .env.dev             # Файл конфигурации окружения для dev среды
 ├── .env.prod            # Файл конфигурации окружения для prod среды
 ├── preload.php          # Предзагрузка (опционально, для кэширования)
-├── public/              # Публичная директория
-│   └── index.php        # Точка входа
-└── vendor/              # Зависимости Composer
+
+├── vendor/              # Зависимости Composer
+└── index.php/           # Точка входа
 ```
 
-## Точка входа (`public/index.php`)
+## Точка входа (`index.php`)
 
 ```php
 <?php
 require_once '../vendor/autoload.php';
 
 // Инициализация конфигурации
-\SpsFW\Core\Config::init();
+\SpsFW\Core\Config::init([
+     'custom' =>
+        [
+            'param1' => $_ENV['PARAM1'],
+        ],
+     'otherCustom' => $_ENV['PARAM2']
+]);
 
-// Настройка DI-биндингов (если нужно)
-// \SpsFW\Core\Config::setDIBindings([
-//     App\Services\UserServiceInterface::class => App\Services\UserService::class,
-// ]);
+// Настройка DI-биндингов 
+// Здесь указываем, какая реализация абстракций должна быть использована
+ \SpsFW\Core\Config::setDIBindings([
+     App\Services\UserServiceInterface::class => App\Services\UserService::class,
+ ]);
 
 // Создание и запуск маршрутизатора
 $router = new \SpsFW\Core\Router\Router();
@@ -87,4 +96,4 @@ cd public
 php -S localhost:8080
 ```
 
-Или настройте веб-сервер (Apache/Nginx) так, чтобы все запросы направлялись в `public/index.php`.
+Или настройте веб-сервер (Apache/Nginx) так, чтобы все запросы направлялись в `index.php`.

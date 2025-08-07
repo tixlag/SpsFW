@@ -41,7 +41,7 @@ class AuthTokenStorage extends PdoStorage implements AuthTokenStorageI
         RETURNING *
     ");
         $stmt->execute([$selector]);
-        return $stmt->fetch();
+        return $stmt->fetch(\PDO::FETCH_ASSOC);
     }
 
 }
