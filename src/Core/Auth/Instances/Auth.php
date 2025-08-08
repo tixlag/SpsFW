@@ -33,7 +33,7 @@ class Auth extends UserAbstract
                     } catch (Exception $e) {
                         throw new AuthorizationException($e->getMessage(), 401, $e);
                     }
-                    self::$userAuth = new self($jwtDecoded->id, $jwtDecoded->code_1c, is_array($jwtDecoded->accessRules) ? $jwtDecoded->accessRules : get_object_vars($jwtDecoded->accessRules));
+                    self::$userAuth = new self($jwtDecoded->uuid, $jwtDecoded->code_1c, is_array($jwtDecoded->accessRules) ? $jwtDecoded->accessRules : get_object_vars($jwtDecoded->accessRules));
                 } else {
                     throw new AuthorizationException('Требуется аутентификация', 401);
                 }
