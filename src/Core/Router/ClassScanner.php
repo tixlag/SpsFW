@@ -28,7 +28,7 @@ class ClassScanner
                 $namespace = '';
             }
 
-            if (preg_match_all('/class\s+([a-zA-Z0-9_]+)/', $content, $classMatches)) {
+            if (preg_match_all('/class\s+([A-Z][a-zA-Z0-9_]*)/', $content, $classMatches)) {
                 foreach ($classMatches[1] as $className) {
                     $full = $namespace ? "$namespace\\$className" : $className;
                     $classes[] = $full;
