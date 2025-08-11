@@ -92,7 +92,13 @@ abstract class AuthServiceAbstract implements AuthServiceI
             $userId = $refreshTokenInfo['user_id'];
 
             // если в header нет AccessToken, то получаем пользователя из базы
-            $user = Auth::getUnsafe() ?? $this->usersService->getById($userId);
+            $user = Auth::getUnsafe();
+
+            if (!$user) {
+                $user = $this->usersService->getById($userId);
+                $accessRules = $this->accessRulesService->extractAccessRules($user->code_1c);
+                $user->setAccessRules($accessRules);
+            }
 
             $this->addNewRefreshToken($user);
             $this->sendNewJwtToken($user);
