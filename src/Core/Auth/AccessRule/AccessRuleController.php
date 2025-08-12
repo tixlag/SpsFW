@@ -60,8 +60,6 @@ class AccessRuleController extends RestController
     #[Validate(ParamsIn::Json, AccessRulesArrayDto::class)]
     public function addAccessRules(AccessRulesArrayDto $accessRulesDto): UserAbstract
     {
-
-
         return $this->accessRulesService->addAccessRules($accessRulesDto);
     }
 

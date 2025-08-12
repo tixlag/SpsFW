@@ -5,7 +5,7 @@ namespace SpsFW\Core\Auth\AccessRule;
 use PDOException;
 use SpsFW\Core\Auth\Util\AccessRuleRegistry;
 use SpsFW\Core\Storage\PdoStorage;
-
+//todo сделать сторедж универсальным
 class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
 {
 

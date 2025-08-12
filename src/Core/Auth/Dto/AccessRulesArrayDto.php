@@ -10,8 +10,8 @@ use OpenApi\Attributes as OA;
 class AccessRulesArrayDto
 {
 
-    #[OA\Property(property: 'user_code_1c', type: 'string')]
-    private(set) string $userCode1C;
+    #[OA\Property(property: 'user_uuid', type: 'string')]
+    private(set) string $userUuid;
     /**
      * @var array<AccessRulesDto>
      */

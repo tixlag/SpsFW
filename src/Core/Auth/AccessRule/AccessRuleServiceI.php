@@ -9,7 +9,7 @@ interface AccessRuleServiceI
 {
     public function extractAccessRules(string $userCode1C): array;
 
-    public function addAccessRules(AccessRulesArrayDto $accessRulesDto): ?UserAbstract;
+    public function addAccessRules(object $accessRulesDto): ?UserAbstract;
 
-    public function setAccessRules(AccessRulesArrayDto $accessRulesDto): ?UserAbstract;
+    public function setAccessRules(object $accessRulesDto): ?UserAbstract;
 }

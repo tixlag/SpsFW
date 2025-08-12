@@ -28,13 +28,17 @@ class AccessRuleService implements AccessRuleServiceI
         return $this->accessRulesStorage->extractAccessRules($userCode1C);
     }
 
-    public function addAccessRules(AccessRulesArrayDto $accessRulesDto): ?UserAbstract
+    /**
+     * @param AccessRulesArrayDto $accessRulesDto
+     * @return UserAbstract|null
+     */
+    public function addAccessRules($accessRulesDto): ?UserAbstract
     {
         $accessRules = [];
         foreach ($accessRulesDto->rules as $rule) {
             $accessRules += $rule->toArray();
         }
-        $user = $this->usersService->getById($accessRulesDto->userCode1C);
+        $user = $this->usersService->getByUuid($accessRulesDto->userUuid);
         $isAdded = $this->accessRulesStorage->addAccessRules($user->code_1c, $accessRules);
         if ($isAdded) {
             $accessRules = $this->extractAccessRules($user->code_1c);
@@ -46,13 +50,17 @@ class AccessRuleService implements AccessRuleServiceI
     }
 
 
-    public function setAccessRules(AccessRulesArrayDto $accessRulesDto): ?UserAbstract
+    /**
+     * @param AccessRulesArrayDto $accessRulesDto
+     * @return UserAbstract|null
+     */
+    public function setAccessRules($accessRulesDto): ?UserAbstract
     {
         $accessRules = [];
         foreach ($accessRulesDto->rules as $rule) {
             $accessRules += $rule->toArray();
         }
-        $user = $this->usersService->getByCode1C($accessRulesDto->userCode1C);
+        $user = $this->usersService->getByUuid($accessRulesDto->userUuid);
         $isSet = $this->accessRulesStorage->setAccessRules($user->code_1c, $accessRules);
         if ($isSet) {
             $user->setAccessRules($accessRules);
