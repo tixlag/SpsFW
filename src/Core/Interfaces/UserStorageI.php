@@ -23,6 +23,12 @@ interface UserStorageI
     public function getById(string $id): ?UserAbstract;
 
     /**
+     * @param string $userUuid
+     * @return mixed
+     */
+    public function getByUuid(string $userUuid): ?UserAbstract;
+
+    /**
      * @param string $userId
      * @param array $accessRules
      * @return bool
