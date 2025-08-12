@@ -55,7 +55,6 @@ class CoreUtilController extends RestController
      * @throws ReflectionException
      */
     #[Route(path: '/core/update', httpMethods: ['POST'])]
-    #[NoAuthAccess]
     public function coreUpdate(): string
     {
         $router = new Router();
@@ -65,6 +64,16 @@ class CoreUtilController extends RestController
         DocsUtil::updateDocs();
 
         return 'ok';
+    }
+
+
+    #[OA\Post(path: '/swagger/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
+    #[OA\Response(response: 200, description: "Успешно обновлено")]
+    #[Route('/swagger/update', ['POST'])]
+    public function updateDocs(): array
+    {
+        DocsUtil::updateDocs();
+        return ['result' => 'ok'];
     }
 
 

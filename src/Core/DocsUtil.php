@@ -4,9 +4,11 @@ namespace SpsFW\Core;
 
 use OpenApi\Generator;
 use OpenApi\Loggers\DefaultLogger;
+use SpsFW\Core\Router\PathManager;
 
 class DocsUtil
 {
+     const string FILE_PATH = "./../../../../../../.cache/swagger/openapi.yaml";
     /**
      * Генерирует OpenAPI документацию, используя относительные пути.
      * Поднимается на 2 уровня вверх от текущего файла для определения корня проекта.
@@ -14,9 +16,9 @@ class DocsUtil
     public static function updateDocs(): void
     {
         // Получаем путь к корневой директории проекта (две директории вверх от __FILE__)
-        $frameworkPath = dirname(__DIR__, 1);
-        $projectPath = dirname(__DIR__, 5);
-        $cacheDir = $projectPath . '/var/cache/openapi';
+        $frameworkPath = PathManager::getLibraryRoot();
+        $projectPath = PathManager::getSrcPath();
+
 
         // Пути для сканирования аннотаций
         $scanPaths = [
@@ -25,7 +27,7 @@ class DocsUtil
         ];
 
         // Путь для сохранения YAML-файла
-        $outputPath = $cacheDir. '/openapi.yaml';
+        $outputPath = self::FILE_PATH;
 
         // Убедимся, что целевая директория существует
         if (!is_dir(dirname($outputPath))) {

@@ -6,7 +6,9 @@ use OpenApi\Attributes as OA;
 use SpsFW\Core\Attributes\Controller;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
+use SpsFW\Core\DocsUtil;
 use SpsFW\Core\Http\Response;
+use SpsFW\Core\Route\RestController;
 
 
 #[OA\Info(
@@ -14,7 +16,7 @@ use SpsFW\Core\Http\Response;
     title: "Websps API"
 )]
 #[Controller]
-class SwaggerController
+class SwaggerController extends RestController
 {
     #[Route(path: "/swagger")]
     public function index(): Response
@@ -26,6 +28,6 @@ class SwaggerController
     #[NoAuthAccess]
     public function yaml(): Response
     {
-        return Response::html(file_get_contents('View/openapi.yaml', true));
+        return Response::html(file_get_contents(DocsUtil::FILE_PATH, true));
     }
 }
