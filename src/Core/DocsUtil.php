@@ -2,6 +2,8 @@
 
 namespace SpsFW\Core;
 
+use OpenApi\Annotations\OpenApi as OpenApiAlias;
+use OpenApi\Attributes\OpenApi;
 use OpenApi\Generator;
 use OpenApi\Loggers\DefaultLogger;
 use SpsFW\Core\Router\PathManager;
@@ -38,8 +40,15 @@ class DocsUtil
             }
         });
 
+        $openapi->setConfig([
+            'operationId.hash' => false,
+            'vaersion' => OpenApiAlias::VERSION_3_1_0
+        ]);
+
         // Запускаем генерацию из найденных путей
         $generatedOpenApi = $openapi->generate($scanPaths);
+
+
 
         // Сохраняем результат
         file_put_contents($outputPath, $generatedOpenApi->toYaml());

@@ -5,7 +5,8 @@ namespace SpsFW\Core\Auth\Dto;
 use OpenApi\Attributes as OA;
 
 #[OA\Schema(
-    description: 'Dto для выдачи прав пользователю'
+    description: 'Dto для выдачи прав пользователю',
+
 )]
 class AccessRulesArrayDto
 {
