@@ -9,6 +9,7 @@ use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\DocsUtil;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
+use SpsFW\Core\Router\PathManager;
 
 
 #[OA\Info(
@@ -28,6 +29,8 @@ class SwaggerController extends RestController
     #[NoAuthAccess]
     public function yaml(): Response
     {
-        return Response::html(file_get_contents(DocsUtil::FILE_PATH, true));
+        return Response::html(file_get_contents(PathManager::getProjectRoot() . '/.cache/swagger/openapi.yml', true));
+
+
     }
 }

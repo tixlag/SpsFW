@@ -8,7 +8,7 @@ use SpsFW\Core\Router\PathManager;
 
 class DocsUtil
 {
-     const string FILE_PATH = "./../../../../../../.cache/swagger/openapi.yaml";
+    // TODO доделать сохранине щзутфзш
     /**
      * Генерирует OpenAPI документацию, используя относительные пути.
      * Поднимается на 2 уровня вверх от текущего файла для определения корня проекта.
@@ -20,6 +20,7 @@ class DocsUtil
         $projectPath = PathManager::getSrcPath();
 
 
+
         // Пути для сканирования аннотаций
         $scanPaths = [
             $frameworkPath,
@@ -27,7 +28,7 @@ class DocsUtil
         ];
 
         // Путь для сохранения YAML-файла
-        $outputPath = self::FILE_PATH;
+        $outputPath = PathManager::getProjectRoot() . '/.cache/swagger/openapi.yml';
 
         // Убедимся, что целевая директория существует
         if (!is_dir(dirname($outputPath))) {
