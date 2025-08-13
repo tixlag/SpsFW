@@ -11,7 +11,6 @@ use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Router\PathManager;
 
-
 #[OA\Info(
     version: "0.8",
     title: "Websps API"
@@ -19,12 +18,25 @@ use SpsFW\Core\Router\PathManager;
 #[Controller]
 class SwaggerController extends RestController
 {
+
+    #[OA\Get(
+        path: "/swagger",
+        description: "Swagger UI",
+        summary: "Swagger UI",
+        tags: ["Swagger"]
+    )]
     #[Route(path: "/swagger")]
     public function index(): Response
     {
         return Response::html(file_get_contents('View/index.html', true));
     }
 
+    #[OA\Get(
+        path: "/api/docs/openapi.yaml",
+        description: "OpenAPI YAML",
+        summary: "OpenAPI YAML",
+        tags: ["Swagger"]
+    )]
     #[Route(path: "/api/docs/openapi.yaml")]
     #[NoAuthAccess]
     public function yaml(): Response
