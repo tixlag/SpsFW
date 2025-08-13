@@ -26,6 +26,7 @@ class DocsUtil
         // Путь для сохранения YAML-файла
         $outputPath = PathManager::getProjectRoot() . '/.cache/swagger/openapi.yml';
 
+        unlink($outputPath);
         // Убедимся, что целевая директория существует
         if (!is_dir(dirname($outputPath))) {
             mkdir(dirname($outputPath), 0777, true);
@@ -42,8 +43,9 @@ class DocsUtil
 
         $openapi->setConfig([
             'operationId.hash' => false,
-            'vaersion' => OpenApiAlias::VERSION_3_1_0
+            'version' => OpenApiAlias::VERSION_3_1_0
         ]);
+        $openapi->setVersion(OpenApiAlias::VERSION_3_1_0);
 
         // Запускаем генерацию из найденных путей
         $generatedOpenApi = $openapi->generate($scanPaths);
