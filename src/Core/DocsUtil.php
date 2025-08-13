@@ -11,20 +11,14 @@ class DocsUtil
     // TODO доделать сохранине щзутфзш
     /**
      * Генерирует OpenAPI документацию, используя относительные пути.
-     * Поднимается на 2 уровня вверх от текущего файла для определения корня проекта.
      */
     public static function updateDocs(): void
     {
-        // Получаем путь к корневой директории проекта (две директории вверх от __FILE__)
-        $frameworkPath = PathManager::getLibraryRoot();
-        $projectPath = PathManager::getSrcPath();
-
-
 
         // Пути для сканирования аннотаций
         $scanPaths = [
-            $frameworkPath,
-            $projectPath . '/src/',
+            PathManager::getLibraryRoot(),
+            PathManager::getSrcPath() ,
         ];
 
         // Путь для сохранения YAML-файла
