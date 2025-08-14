@@ -19,11 +19,12 @@ class Response
      * @param string $contentType Тип содержимого
      */
     public function __construct(
-        private int $status = 200,
-        private array $headers = [],
+        private int    $status = 200,
+        private array  $headers = [],
         private string $body = '',
-        string $contentType = 'text/html'
-    ) {
+        string         $contentType = 'text/html'
+    )
+    {
         $this->headers['Content-Type'] = $contentType;
 //        $this->headers['Access-Control-Allow-Origin'] = Config::get('app')['host'];
         $this->headers['Access-Control-Allow-Origin'] = Config::get('app')['host'];
@@ -134,7 +135,7 @@ class Response
                             foreach ($properties as $property) {
                                 try {
                                     $serialized[$property->getName()] = $property->getValue($arg);
-                                } catch ( \Throwable $e) {
+                                } catch (\Throwable $e) {
                                     $serialized[$property->getName()] = "";
                                 }
                             }
@@ -179,9 +180,12 @@ class Response
                 } else {
                     $sanitized[] = self::sanitizeTraceArgs($arg);
                 }
+            } elseif (is_string($arg)) {
+                $sanitized[] = mb_check_encoding($arg) ? $arg : 'binary_value';
             } else {
-                // Примитивные типы - строки, числа, bool, null
+                // примитивы
                 $sanitized[] = $arg;
+
             }
         }
 
