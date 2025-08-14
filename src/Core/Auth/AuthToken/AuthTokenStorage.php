@@ -35,7 +35,7 @@ class AuthTokenStorage extends PdoStorage implements AuthTokenStorageI
     }
 
     public function getAndDeleteRefreshToken(string $selector) {
-        $stmt = $this->getPdo()->prepare("
+        $stmt = $this->getPdo()->prepare(/** @lang MariaDB */"
         DELETE FROM users__refresh_tokens 
         WHERE selector = ? 
         RETURNING *

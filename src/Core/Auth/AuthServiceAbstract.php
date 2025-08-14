@@ -14,6 +14,7 @@ use SpsFW\Core\Auth\Instances\UserAbstract;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BadPasswordException;
+use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\UserNotFoundException;
 use SpsFW\Core\Interfaces\UserServiceI;
 use SpsFW\Core\Utils\CookieHelper;
@@ -61,7 +62,11 @@ abstract class AuthServiceAbstract implements AuthServiceI
 
     public function getAndDeleteRefreshToken(string $selector): array
     {
-        return $this->authTokenStorage->getAndDeleteRefreshToken($selector);
+        $oldToken = $this->authTokenStorage->getAndDeleteRefreshToken($selector);
+        if (!$oldToken) {
+            throw new AuthorizationException("Refresh token not found", 400);
+        }
+        return $oldToken;
     }
 
     /**
