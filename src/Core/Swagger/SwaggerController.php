@@ -26,6 +26,7 @@ class SwaggerController extends RestController
         tags: ["Swagger"]
     )]
     #[Route(path: "/swagger")]
+    #[NoAuthAccess]
     public function index(): Response
     {
         return Response::html(file_get_contents('View/index.html', true));
@@ -38,7 +39,6 @@ class SwaggerController extends RestController
         tags: ["Swagger"]
     )]
     #[Route(path: "/api/docs/openapi.yaml")]
-    #[NoAuthAccess]
     public function yaml(): Response
     {
         return Response::html(file_get_contents(PathManager::getProjectRoot() . '/.cache/swagger/openapi.yml', true));
