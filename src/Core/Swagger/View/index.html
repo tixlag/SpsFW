@@ -13,57 +13,82 @@
 <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-bundle.js" crossorigin></script>
 <script src="https://unpkg.com/swagger-ui-dist@5.11.0/swagger-ui-standalone-preset.js"></script>
 <script>
-    window.onload = function() {
-        // Сначала обновляем токен через refresh endpoint
-        fetch('/api/auth/refresh-tokens', {
-            method: 'POST',
-            credentials: 'include' // важно для передачи cookies и получения новых
-        })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Failed to refresh token');
-                }
+  window.onload = function() {
+    let currentAccessToken = null;
 
-                // Получаем access token из заголовка Authorization
-                const accessToken = response.headers.get('Authorization');
+    // Функция для обновления токена
+    function refreshAccessToken() {
+      return fetch('/api/auth/refresh-tokens', {
+        method: 'POST',
+        credentials: 'include'
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Failed to refresh token');
+        }
 
-                if (accessToken) {
-                    // Инициализируем Swagger UI с полученным токеном
-                    const ui = SwaggerUIBundle({
-                        url: '/swagger/openapi.yaml',
-                        dom_id: '#swagger-ui',
-                        presets: [
-                            SwaggerUIBundle.presets.apis,
-                            SwaggerUIStandalonePreset
-                        ],
-                        plugins: [
-                            SwaggerUIBundle.plugins.DownloadUrl
-                        ],
-                        layout: "StandaloneLayout",
-                        requestInterceptor: function(request) {
-                            request.headers['Authorization'] = accessToken;
-                            return request;
-                        },
-                        // Дополнительно: можно указать, что загрузка спецификации тоже требует авторизации
-                        fetch: function(url, init) {
-                            // Добавляем токен для загрузки самой спецификации
-                            if (url.includes('/api/docs/openapi.yaml')) {
-                                init.headers = init.headers || {};
-                                init.headers['Authorization'] = accessToken;
-                            }
-                            return SwaggerUIBundle.fn.fetch(url, init);
-                        }
-                    });
-                } else {
-                    throw new Error('No access token in response headers');
-                }
-            })
-            .catch(error => {
-                console.error('Ошибка обновления токена:', error);
-                alert('Не удалось получить доступ к API. Пожалуйста, авторизуйтесь в основном приложении.');
-                // window.location.href = '/public';
-            });
-    };
+        const accessToken = response.headers.get('Authorization');
+        if (accessToken) {
+          currentAccessToken = accessToken.replace('Bearer ', '');
+          return currentAccessToken;
+        } else {
+          throw new Error('No access token in response');
+        }
+      });
+    }
+
+    // Функция для выполнения запроса с автоматическим обновлением токена
+    function authenticatedRequest(url, options = {}) {
+      options.headers = options.headers || {};
+
+      if (currentAccessToken) {
+        options.headers['Authorization'] = 'Bearer ' + currentAccessToken;
+      }
+
+      return fetch(url, options).then(response => {
+        // Если получили 401, пробуем обновить токен и повторить запрос
+        if (response.status === 401 && currentAccessToken) {
+          return refreshAccessToken().then(newToken => {
+            // Повторяем оригинальный запрос с новым токеном
+            options.headers['Authorization'] = 'Bearer ' + newToken;
+            return fetch(url, options);
+          });
+        }
+        return response;
+      });
+    }
+
+    // Сначала получаем токен
+    refreshAccessToken()
+      .then(token => {
+        // Инициализируем Swagger UI
+        const ui = SwaggerUIBundle({
+          url: '/api/docs/openapi.yaml',
+          dom_id: '#swagger-ui',
+          presets: [
+            SwaggerUIBundle.presets.apis
+          ],
+          plugins: [
+            SwaggerUIBundle.plugins.DownloadUrl
+          ],
+          requestInterceptor: function(request) {
+            if (currentAccessToken) {
+              request.headers['Authorization'] = 'Bearer ' + currentAccessToken;
+            }
+            return request;
+          },
+          // Кастомный fetch для обработки 401 ошибок
+          fetch: function(url, init) {
+            return authenticatedRequest(url, init);
+          }
+        });
+      })
+      .catch(error => {
+        console.error('Ошибка инициализации:', error);
+        alert('Не удалось получить доступ к API. Пожалуйста, авторизуйтесь.');
+        window.location.href = '/public';
+      });
+  };
 </script>
 </body>
 </html>
