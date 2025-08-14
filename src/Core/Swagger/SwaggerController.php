@@ -33,12 +33,12 @@ class SwaggerController extends RestController
     }
 
     #[OA\Get(
-        path: "/api/docs/openapi.yaml",
+        path: "/swagger/openapi.yaml",
         description: "OpenAPI YAML",
         summary: "OpenAPI YAML",
         tags: ["Swagger"]
     )]
-    #[Route(path: "/api/docs/openapi.yaml")]
+    #[Route(path: "/swagger/openapi.yaml")]
     public function yaml(): Response
     {
         return Response::html(file_get_contents(PathManager::getProjectRoot() . '/.cache/swagger/openapi.yml', true));
