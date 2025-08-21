@@ -21,8 +21,8 @@ class DocsUtil
 
         // Пути для сканирования аннотаций
         $scanPaths = [
-            PathManager::getLibraryRoot(),
             PathManager::getSrcPath() ,
+            PathManager::getLibraryRoot(),
         ];
 
         // Путь для сохранения YAML-файла
