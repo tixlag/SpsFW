@@ -66,8 +66,24 @@ class Config
         self::$config = array_merge_recursive($baseConfig, $customConfig);
     }
 
-    public static function setDIBindings(array $bindings)
+    /**
+     * Устанавливает привязки зависимостей.
+     *
+     * @param array<string, string|object|array> $bindings
+     *   - 'Interface::class' => 'Concrete::class'          → стандартная привязка
+     *   - 'Interface::class' => new Concrete()             → инстанс
+     *   - 'Interface::class' => ['class' => ..., 'args' => [...]] → с аргументами
+     */
+    public static function setDIBindings(array $bindings): void
     {
-        self::$bindings = self::$bindings + $bindings;
+        self::$bindings = array_merge(self::$bindings, $bindings);
+    }
+
+    /**
+     * Получает привязку по ключу
+     */
+    public static function getDIBinding(string $abstract): string|object|array|null
+    {
+        return self::$bindings[$abstract] ?? null;
     }
 }

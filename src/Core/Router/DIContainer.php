@@ -132,9 +132,62 @@ class DIContainer
         }
     }
 
-    public function resolveAbstract(string $abstract): string
+    /**
+     * Разрешает абстракцию в реальный класс или инстанс.
+     * Поддерживает:
+     * - Простые привязки: Interface::class => Concrete::class
+     * - Инстансы: Interface::class => new Concrete()
+     * - Конфигурация с аргументами: Interface::class => ['class' => ..., 'args' => [...]]
+     *
+     * @throws BaseException
+     */
+    public function resolveAbstract(string $abstract): object|string
     {
-        return Config::$bindings[$abstract] ?? $abstract;
+        $binding = Config::getDIBinding($abstract);
+
+        if ($binding === null) {
+            return $abstract; // Нет привязки — используем сам класс
+        }
+
+        // Случай 1: Это уже готовый объект
+        if (is_object($binding)) {
+            return $binding;
+        }
+
+        // Случай 2: Это строка — обычный класс
+        if (is_string($binding)) {
+            return $binding;
+        }
+
+        // Случай 3: Это массив — конфигурация с аргументами
+        if (is_array($binding)) {
+            if (!isset($binding['class'])) {
+                throw new BaseException("Binding for '$abstract' is an array but missing 'class' key.");
+            }
+
+            $class = $binding['class'];
+            $args = $binding['args'] ?? [];
+
+            // Если есть аргументы — создаём объект прямо здесь!
+            $resolvedArgs = [];
+            foreach ($args as $arg) {
+                if (is_string($arg) && class_exists($arg)) {
+                    // Это класс — разрешаем его через DI
+                    $resolvedArgs[] = $this->get($arg);
+                } elseif (is_object($arg)) {
+                    // Это уже инстанс — просто передаём
+                    $resolvedArgs[] = $arg;
+                } else {
+                    // Это скаляр — например, строка URL или int timeout
+                    $resolvedArgs[] = $arg;
+                }
+            }
+
+            // Создаём объект с аргументами
+            return new $class(...$resolvedArgs);
+        }
+
+        throw new BaseException("Invalid binding type for '$abstract'");
     }
 
 
