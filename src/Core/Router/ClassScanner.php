@@ -17,7 +17,9 @@ class ClassScanner
         );
 
         foreach ($files as $file) {
-            if ($file->getExtension() !== 'php' || !(str_ends_with($file->getFileName(), 'Controller.php') || str_ends_with($file->getFileName(), 'Service.php') || str_ends_with($file->getFileName(), 'Storage.php'))) {
+            if ($file->getExtension() !== 'php'
+//                || !(str_ends_with($file->getFileName(), 'Controller.php') || str_ends_with($file->getFileName(), 'Service.php') || str_ends_with($file->getFileName(), 'Storage.php'))
+            ) {
                 continue;
             }
 
@@ -28,8 +30,8 @@ class ClassScanner
                 $namespace = '';
             }
 
-            if (preg_match_all('/class\s+([A-Z][a-zA-Z0-9_]*)/', $content, $classMatches)) {
-                foreach ($classMatches[1] as $className) {
+            if (preg_match_all('/(class\s)+([A-Z][a-zA-Z0-9_]*)/', $content, $classMatches)) {
+                foreach ($classMatches[2] as $className) {
                     $full = $namespace ? "$namespace\\$className" : $className;
                     $classes[] = $full;
                 }

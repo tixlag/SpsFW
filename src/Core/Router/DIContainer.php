@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core\Router;
 
+use ReflectionClass;
 use ReflectionException;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\BaseException;
@@ -15,19 +16,13 @@ class DIContainer
     {
         $this->compiledMap = $compiledMap;
     }
-    private array $resolved = []; // Кэш разрешённых зависимостей
 
-    /**
-     * @throws ReflectionException
-     * @throws BaseException
-     */
     public function __construct(string $cachePath)
     {
-        $cacheDIPath =  $cachePath . '/compiled_di.php';
+        $cacheDIPath = $cachePath . '/compiled_di.php';
         if (file_exists($cacheDIPath)) {
             $this->compiledMap = require $cacheDIPath;
         }
-
     }
 
     /**
@@ -35,43 +30,67 @@ class DIContainer
      * @param class-string<T> $class
      * @return T
      */
-    public function get(string $class): object|null
+    public function get(string $class): ?object
     {
         // Уже создан — вернуть singleton
         if (isset($this->singletons[$class])) {
             return $this->singletons[$class];
         }
 
-        if (!isset($this->compiledMap[$class])) {
+        // Разрешаем абстракцию сразу на входе
+        $resolvedClass = $this->resolveAbstract($class);
+
+        // Если вернулся готовый инстанс — кэшируем и возвращаем
+        if (is_object($resolvedClass)) {
+            $this->singletons[$class] = $resolvedClass;
+            return $resolvedClass;
+        }
+
+        // Если не строка — ошибка
+        if (!is_string($resolvedClass)) {
+            throw new BaseException("Invalid resolved class type for '$class'");
+        }
+
+        // Теперь мы точно знаем: нужно создать объект класса $resolvedClass
+        // Но сохраняем исходный $class как ключ в singletons — для совместимости
+        if (!isset($this->compiledMap[$resolvedClass])) {
             return null;
         }
 
-        // Создаём все объекты в правильном порядке
-        return $this->createWithDependencies($class);
+        return $this->createWithDependencies($resolvedClass, $class);
     }
 
-    private function createWithDependencies(string $class): object|null
+    /**
+     * Создаёт объект с зависимостями.
+     * $targetClass — класс, который нужно создать (например, GuzzleHttpClientAdapter)
+     * $originalKey — ключ, по которому запросили (например, HttpClientInterface::class)
+     */
+    private function createWithDependencies(string $targetClass, string $originalKey): ?object
     {
-        if (isset($this->singletons[$class])) {
-            return $this->singletons[$class];
+        if (isset($this->singletons[$originalKey])) {
+            return $this->singletons[$originalKey];
         }
 
-        if (!isset($this->compiledMap[$class])) {
+        if (!isset($this->compiledMap[$targetClass])) {
             return null;
         }
 
-        $info = $this->compiledMap[$class];
+        $info = $this->compiledMap[$targetClass];
 
-        // Создаём временные объекты для всех зависимостей
         $tempObjects = [];
-        $this->createAllDependencies([$class], $tempObjects);
+        $this->createAllDependencies([$targetClass], $tempObjects);
 
-        // Теперь у нас есть все объекты, инициализируем их в правильном порядке
         $this->initializeObjects($tempObjects);
 
-        return $this->singletons[$class] ?? null;
+        // Сохраняем singleton по ОРИГИНАЛЬНОМУ ключу (интерфейсу или реальному классу)
+        $this->singletons[$originalKey] = $this->singletons[$targetClass] ?? null;
+
+        return $this->singletons[$originalKey];
     }
 
+    /**
+     * Рекурсивно создает все зависимости, но не меняет ключи
+     */
     private function createAllDependencies(array $classes, array &$tempObjects): void
     {
         foreach ($classes as $class) {
@@ -79,16 +98,44 @@ class DIContainer
                 continue;
             }
 
-            if (!isset($this->compiledMap[$class])) {
+            $resolvedClass = $this->resolveAbstract($class);
+
+            if (is_object($resolvedClass)) {
+                $this->singletons[$class] = $resolvedClass;
                 continue;
             }
 
-            $info = $this->compiledMap[$class];
+            if (!is_string($resolvedClass)) {
+                throw new BaseException("Invalid resolved class type for '$class'");
+            }
 
-            // Создаём пустой объект (используем serialize trick - быстрее рефлексии)
-            $tempObjects[$class] = $this->createEmptyObject($info['class']);
+            // 👇 НОВАЯ ЗАЩИТА: НЕ СОЗДАЁМ ИНТЕРФЕЙСЫ И АБСТРАКТНЫЕ КЛАССЫ
+            if (interface_exists($resolvedClass) || $this->abstract_class_exists($resolvedClass)) {
+                // Пропускаем — это должна быть реализация, а не интерфейс
+                // Должна быть привязка в Config, иначе — ошибка
+                throw new BaseException(
+                    "Cannot instantiate interface or abstract class: $resolvedClass. " .
+                    "Did you forget to bind it in Config::setDIBindings()?"
+                );
+            }
 
-            // Рекурсивно создаём зависимости
+            if (!class_exists($resolvedClass)) {
+                throw new BaseException("Class does not exist: $resolvedClass");
+            }
+
+            if (!isset($this->compiledMap[$resolvedClass])) {
+                // Не компилировался — возможно, это внешний класс без #[Inject]
+                // Пропускаем — он не будет использоваться как зависимость в DI-цепочке
+                continue;
+            }
+
+            $info = $this->compiledMap[$resolvedClass];
+
+            // 👇 СОЗДАЁМ ПУСТОЙ ОБЪЕКТ — ЭТО НАША ЗАГЛУШКА ДЛЯ ЦИКЛОВ
+            $tempObjects[$resolvedClass] = $this->createEmptyObject($info['class']);
+            $tempObjects[$class] = $tempObjects[$resolvedClass];
+
+            // 👇 РЕКУРСИВНО СОЗДАЁМ ЗАВИСИМОСТИ — ДАЖЕ ЕСЛИ ОНИ ПОЗЖЕ УПОМИНАЮТСЯ В ЦИКЛЕ
             if (!empty($info['args'])) {
                 $this->createAllDependencies($info['args'], $tempObjects);
             }
@@ -97,7 +144,6 @@ class DIContainer
 
     private function createEmptyObject(string $className): object
     {
-        // Самый быстрый способ создать объект без конструктора
         return unserialize(sprintf('O:%d:"%s":0:{}', strlen($className), $className));
     }
 
@@ -110,24 +156,22 @@ class DIContainer
 
             $info = $this->compiledMap[$class];
 
-            // Собираем аргументы для конструктора
             $args = [];
             foreach ($info['args'] as $depClass) {
+                // Сначала смотрим в singletons — там могут быть инстансы от resolveAbstract()
                 if (isset($this->singletons[$depClass])) {
                     $args[] = $this->singletons[$depClass];
                 } elseif (isset($tempObjects[$depClass])) {
-                    $args[] = $tempObjects[$depClass];
+                    $args[] = $tempObjects[$depClass]; // ← Это может быть пустой объект!
                 } else {
                     throw new \RuntimeException("Cannot resolve dependency: $depClass");
                 }
             }
 
-            // Вызываем конструктор напрямую
             if (!empty($args)) {
-                $object->__construct(...$args);
+                $object->__construct(...$args); // ← ВЫЗЫВАЕМ КОНСТРУКТОР — ДАЖЕ ЕСЛИ ОБЪЕКТ БЫЛ "ПУСТЫМ"
             }
 
-            // Сохраняем как singleton
             $this->singletons[$class] = $object;
         }
     }
@@ -168,11 +212,10 @@ class DIContainer
             $class = $binding['class'];
             $args = $binding['args'] ?? [];
 
-            // Если есть аргументы — создаём объект прямо здесь!
             $resolvedArgs = [];
             foreach ($args as $arg) {
-                if (is_string($arg) && class_exists($arg)) {
-                    // Это класс — разрешаем его через DI
+                if (is_string($arg) && (class_exists($arg) || interface_exists($arg))) {
+                    // Это класс/интерфейс — разрешаем рекурсивно через DI
                     $resolvedArgs[] = $this->get($arg);
                 } elseif (is_object($arg)) {
                     // Это уже инстанс — просто передаём
@@ -190,5 +233,60 @@ class DIContainer
         throw new BaseException("Invalid binding type for '$abstract'");
     }
 
+    public function resolveAbstractForBuild(string $abstract): object|string
+    {
+        $binding = Config::getDIBinding($abstract);
 
+        if ($binding === null) {
+            return $abstract; // Нет привязки — используем сам класс
+        }
+
+        // Случай 1: Это уже готовый объект
+        if (is_object($binding)) {
+            return $binding::class;
+        }
+
+        // Случай 2: Это строка — обычный класс
+        if (is_string($binding)) {
+            return $binding;
+        }
+
+        // Случай 3: Это массив — конфигурация с аргументами
+        if (is_array($binding)) {
+            if (!isset($binding['class'])) {
+                throw new BaseException("Binding for '$abstract' is an array but missing 'class' key.");
+            }
+
+            $class = $binding['class'];
+//            $args = $binding['args'] ?? [];
+//
+//            $resolvedArgs = [];
+//            foreach ($args as $arg) {
+//                if (is_string($arg) && (class_exists($arg) || interface_exists($arg))) {
+//                    // Это класс/интерфейс — разрешаем рекурсивно через DI
+//                    $resolvedArgs[] = $this->resolveAbstractForBuild($arg);
+//                } elseif (is_object($arg)) {
+//                    // Это уже инстанс — просто передаём
+//                    $resolvedArgs[] = $arg::class;
+//                } else {
+//                    // Это скаляр — например, строка URL или int timeout
+//                    $resolvedArgs[] = $arg;
+//                }
+//            }
+
+            // Создаём объект с аргументами
+            return $class;
+        }
+
+        throw new BaseException("Invalid binding type for '$abstract'");
+    }
+
+    private function abstract_class_exists(string $class): bool
+    {
+        if (!class_exists($class)) {
+            return false;
+        }
+        $reflection = new ReflectionClass($class);
+        return $reflection->isAbstract();
+    }
 }

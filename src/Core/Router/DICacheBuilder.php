@@ -5,6 +5,7 @@ namespace SpsFW\Core\Router;
 use ReflectionClass;
 use ReflectionException;
 use SpsFW\Core\Attributes\Inject;
+use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\BaseException;
 
 class DICacheBuilder
@@ -29,6 +30,10 @@ class DICacheBuilder
     public function compile(array $classList): void
     {
         foreach ($classList as $class) {
+            $binding = Config::getDIBinding($class);
+            if (is_array($binding) && isset($binding['class'])) {
+                continue;
+            }
             $this->compiled[$class] = $this->analyze($class);
         }
 
@@ -43,6 +48,7 @@ class DICacheBuilder
     private function analyze(string $class): array
     {
         $reflection = new ReflectionClass($class);
+//        if ( $reflection->isInterface() || $reflection->isAbstract()) return;
         $constructor = $reflection->getConstructor();
 
         $args = [];
@@ -51,8 +57,8 @@ class DICacheBuilder
         if ($constructor) {
             foreach ($constructor->getParameters() as $param) {
                 $injectAttr = $param->getAttributes(Inject::class);
-                if (empty($injectAttr)) {
-                    // Пропускаем параметры без #[Inject]
+                if (empty($injectAttr) and Config::getDIBinding($class) == null) {
+                    // Пропускаем параметры без #[Inject] или не описанные в DIBindings
                     continue;
                 }
 
@@ -61,8 +67,8 @@ class DICacheBuilder
                     throw new BaseException("Cannot inject builtin or missing type for parameter \${$param->getName()} in $class");
                 }
 
-                $resolvedClass = $type->getName();
-//                $resolvedClass = $this->container->resolveAbstract($type->getName());
+//                $resolvedClass = $type->getName();
+                $resolvedClass = $this->container->resolveAbstractForBuild($type->getName());
                 $args[] = $resolvedClass;
 
                 // Сохраняем информацию о параметре для генерации фабрики
@@ -72,6 +78,14 @@ class DICacheBuilder
                     'position' => $param->getPosition()
                 ];
             }
+        }
+
+        if ($argsFromConfig =  Config::getDIBinding($class)) {
+            if (is_array($argsFromConfig)) {
+                $argsFromConfig = $argsFromConfig['args'] ?? $argsFromConfig;
+                $args = array_merge($args, $argsFromConfig);
+            }
+
         }
 
         return [
