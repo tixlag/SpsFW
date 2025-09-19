@@ -97,8 +97,13 @@ class DIContainer
             if (isset($tempObjects[$class]) || isset($this->singletons[$class])) {
                 continue;
             }
-
-            $resolvedClass = $this->resolveAbstract($class);
+            try {
+                $resolvedClass = $this->resolveAbstract($class);
+            } catch (\Exception $e) {
+                //todo логгировать, если при создании одного из объектов все сломалось
+                // не получилось создать объект, вставили заглушку, чтобы работать дальше
+                $resolvedClass = $this->createEmptyObject(Config::getDIBinding($class)['class']);
+            }
 
             if (is_object($resolvedClass)) {
                 $this->singletons[$class] = $resolvedClass;

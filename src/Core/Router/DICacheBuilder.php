@@ -67,8 +67,8 @@ class DICacheBuilder
                     throw new BaseException("Cannot inject builtin or missing type for parameter \${$param->getName()} in $class");
                 }
 
-//                $resolvedClass = $type->getName();
-                $resolvedClass = $this->container->resolveAbstractForBuild($type->getName());
+                $resolvedClass = $type->getName();
+//                $resolvedClass = $this->container->resolveAbstractForBuild($type->getName());
                 $args[] = $resolvedClass;
 
                 // Сохраняем информацию о параметре для генерации фабрики
