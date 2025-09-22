@@ -155,10 +155,9 @@ class DIContainer
     private function initializeObjects(array $tempObjects): void
     {
         foreach ($tempObjects as $class => $object) {
-            if (isset($this->singletons[$class])) {
+            if (isset($this->singletons[$class]) or !isset($this->compiledMap[$class])) {
                 continue;
             }
-
             $info = $this->compiledMap[$class];
 
             $args = [];
