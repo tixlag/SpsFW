@@ -23,13 +23,13 @@ class RabbitMQWorkerRunner
 
     public function __construct(
         RabbitMQClient           $client,
-        JobRegistry              $jobRegistry,
+        ?JobRegistry              $jobRegistry = null,
         ?WorkerHeartbeat         $heartbeat = null,
         ?WorkerStrategyInterface $strategy = null
     )
     {
         $this->client = $client;
-        $this->jobRegistry = $jobRegistry;
+        $this->jobRegistry = $jobRegistry ?? JobRegistry::loadFromCache();
         $this->heartbeat = $heartbeat;
         $this->strategy = $strategy;
     }

@@ -10,7 +10,11 @@ use SpsFW\Core\Http\Response;
 use SpsFW\Core\Queue\WorkerHeartbeat;
 use SpsFW\Core\Route\RestController;
 
+// Импортируем атрибуты OpenAPI
+use OpenApi\Attributes as OA;
+
 #[Controller]
+#[OA\Tag(name: "Worker Health", description: "Проверка работоспособности фоновых воркеров")]
 class WorkerHealthController extends RestController
 {
     public function __construct(
@@ -19,7 +23,42 @@ class WorkerHealthController extends RestController
         parent::__construct();
     }
 
+    /**
+     * Проверка статуса работоспособности воркеров
+     */
     #[Route(path: "/api/worker-health", httpMethods: ['GET'])]
+    #[OA\Get(
+        path: "/api/worker-health",
+        description: "Возвращает список воркеров и флаг их активности (heartbeat за последние 60 секунд)",
+        summary: "Получить статус работоспособности всех воркеров",
+        tags: ["Worker Health"],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: "Успешный ответ",
+                content: new OA\JsonContent(
+                    properties: [
+                        new OA\Property(
+                            property: "workers",
+                            type: "object",
+                            example: [
+                                "order_notification_worker" => true,
+                                "import_employees_worker" => false,
+                                "visited_worker" => true
+                            ], // динамические ключи
+                            additionalProperties: true
+                        ),
+                        new OA\Property(
+                            property: "timestamp",
+                            type: "integer",
+                            example: 1743849600
+                        ),
+                    ],
+                    type: "object"
+                )
+            )
+        ]
+    )]
     public function check(): Response
     {
         $workers = [
