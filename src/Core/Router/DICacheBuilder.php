@@ -7,11 +7,15 @@ use ReflectionException;
 use SpsFW\Core\Attributes\Inject;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\BaseException;
+use SpsFW\Core\Queue\Attributes\QueueJob;
+use SpsFW\Core\Queue\Interfaces\JobInterface;
+
 
 class DICacheBuilder
 {
     private DIContainer $container;
     private array $compiled = [];
+    private array $jobRegistryMap = [];
     private string $cachePath;
 
 //    public static string $DIDir = __DIR__ . '/../../../../../../var/cache/DI';
@@ -29,6 +33,8 @@ class DICacheBuilder
      */
     public function compile(array $classList): void
     {
+
+        // Анализируем DI-зависимости
         foreach ($classList as $class) {
             $binding = Config::getDIBinding($class);
             if (is_array($binding) && isset($binding['class'])) {
@@ -41,6 +47,7 @@ class DICacheBuilder
         $this->container->setCompiledMap($this->compiled);
     }
 
+
     /**
      * @throws ReflectionException
      * @throws BaseException
@@ -48,6 +55,9 @@ class DICacheBuilder
     private function analyze(string $class): array
     {
         $reflection = new ReflectionClass($class);
+
+        $this->analyzeJobQueue($reflection, $class); // todo требуется рефакторинг. В anylyze должен приходить понятный класс - в какую мапу потом передать
+
 //        if ( $reflection->isInterface() || $reflection->isAbstract()) return;
         $constructor = $reflection->getConstructor();
 
@@ -80,7 +90,7 @@ class DICacheBuilder
             }
         }
 
-        if ($argsFromConfig =  Config::getDIBinding($class)) {
+        if ($argsFromConfig = Config::getDIBinding($class)) {
             if (is_array($argsFromConfig)) {
                 $argsFromConfig = $argsFromConfig['args'] ?? $argsFromConfig;
                 $args = array_merge($args, $argsFromConfig);
@@ -99,16 +109,75 @@ class DICacheBuilder
     private function writeToFile(): void
     {
         if (!is_dir($this->cachePath)) {
-            mkdir($this->cachePath , 0777, true);
+            mkdir($this->cachePath, 0777, true);
         }
         $this->writeCompiledMap();
+        $this->writeJobRegistryMap(); // ← Добавляем запись маппинга задач
+
     }
 
     private function writeCompiledMap(): void
     {
         $export = var_export($this->compiled, true);
         $php = "<?php\n\nreturn $export;\n";
-        file_put_contents($this->cachePath  . '/compiled_di.php', $php);
+        file_put_contents($this->cachePath . '/compiled_di.php', $php);
+    }
+
+    private function writeJobRegistryMap(): void
+    {
+        $export = var_export($this->jobRegistryMap, true);
+        $php = "<?php\n\nreturn $export;\n";
+        file_put_contents($this->cachePath . '/job_registry.php', $php);
+    }
+
+    /**
+     * @param ReflectionClass $reflection
+     * @param string $class
+     * @return void
+     */
+    public function analyzeJobQueue(ReflectionClass $reflection, string $class): void
+    {
+        try {
+            $attribute = $reflection->getAttributes(QueueJob::class)[0] ?? null;
+
+            if ($attribute && is_subclass_of($class, JobInterface::class)) {
+                /** @var QueueJob $queueJob */
+                $queueJob = $attribute->newInstance();
+                $this->jobRegistryMap[$queueJob->name] = $class;
+            }
+
+
+
+            $attrs = $reflection->getAttributes();
+            foreach ($attrs as $attr) {
+                $attrName = $attr->getName();
+                if ($attrName === \SpsFW\Core\Queue\Attributes\QueueJob::class) {
+                    $args = $attr->getArguments();
+                    $jobName = $args[0] ?? null;
+                    if ($jobName) {
+                        if (!isset($this->jobRegistryMap[$jobName])) {
+                            $this->jobRegistryMap[$jobName] = [];
+                            $this->jobRegistryMap[$jobName]['jobClass'] = $class;
+                        } else {
+                            $this->jobRegistryMap[$jobName]['jobClass'] = $class;
+                        }
+                    }
+                }
+                if ($attrName === \SpsFW\Core\Queue\Attributes\JobHandler::class) {
+                    $args = $attr->getArguments();
+                    $jobName = $args[0] ?? null;
+                    if ($jobName) {
+                        if (!isset($this->jobRegistryMap[$jobName])) {
+                            $this->jobRegistryMap[$jobName] = [];
+                            $this->jobRegistryMap[$jobName]['handlerClass'] = $class;
+                        } else {
+                            $this->jobRegistryMap[$jobName]['handlerClass'] = $class;
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+        }
     }
 
 
@@ -124,7 +193,7 @@ class DICacheBuilder
      * @throws BaseException
      * @throws ReflectionException
      */
-    public static function compileDI(?DIContainer $container = null, string $cachePath = __DIR__  . "/../../../../../../.cache"): void
+    public static function compileDI(?DIContainer $container = null, string $cachePath = __DIR__ . "/../../../../../../.cache"): void
     {
         $allClasses = [];
 

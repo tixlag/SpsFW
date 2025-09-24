@@ -2,12 +2,16 @@
 
 namespace SpsFW\Core;
 
+use Psr\Log\LoggerInterface;
+use Psr\SimpleCache\CacheInterface;
 use SpsFW\Core\Auth\AccessRule\AccessRuleService;
 use SpsFW\Core\Auth\AccessRule\AccessRuleServiceI;
 use SpsFW\Core\Auth\AccessRule\AccessRuleStorage;
 use SpsFW\Core\Auth\AccessRule\AccessRuleStorageI;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorageI;
+use SpsFW\Core\Psr\Cache\FileCache;
+use SpsFW\Core\Psr\FileLogger;
 
 class Config
 {
@@ -17,6 +21,8 @@ class Config
         AuthTokenStorageI::class => AuthTokenStorage::class,
         AccessRuleServiceI::class => AccessRuleService::class,
         AccessRuleStorageI::class => AccessRuleStorage::class,
+        CacheInterface::class => FileCache::class,
+        LoggerInterface::class => FileLogger::class,
     ];
 
     public static function get($key)

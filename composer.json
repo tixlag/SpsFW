@@ -7,9 +7,13 @@
   "require": {
     "ext-mbstring": "*",
     "ext-pdo": "*",
+    "ext-pcntl": "*",
     "robmorgan/phinx": "^0.16.9",
     "firebase/php-jwt": "^6.11",
-    "zircote/swagger-php": "^5.1"
+    "zircote/swagger-php": "^5.1",
+    "php-amqplib/php-amqplib": "^3.0",
+    "guzzlehttp/guzzle": "^7.10",
+    "ext-posix": "*"
   },
   "autoload": {
     "psr-4": {
