@@ -5,7 +5,7 @@ use SpsFW\Core\Attributes\Controller;
 use SpsFW\Core\Attributes\Inject;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Http\Response;
-use SpsFW\Core\Queue\QueuePublisherFactory;
+use SpsFW\Core\Queue\QueueClientAndPublisherFactory;
 use SpsFW\Core\Queue\JobRegistry;
 use SpsFW\Core\Queue\WorkerHeartbeat;
 use SpsFW\Core\Route\RestController;
@@ -37,9 +37,9 @@ class QueueManagerController extends RestController
     ];
 
     public function __construct(
-        #[Inject] private QueuePublisherFactory $queueFactory,
-        #[Inject] private CacheInterface $cache,
-        private ?JobRegistry $jobRegistry = null,
+        #[Inject] private QueueClientAndPublisherFactory $queueFactory,
+        #[Inject] private CacheInterface                 $cache,
+        private ?JobRegistry                             $jobRegistry = null,
     ) {
         $this->jobRegistry = $jobRegistry ?? JobRegistry::loadFromCache();
         parent::__construct();

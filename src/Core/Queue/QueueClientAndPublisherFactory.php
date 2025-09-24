@@ -7,7 +7,7 @@ use PhpAmqpLib\Exchange\AMQPExchangeType;
  * Factory builds transport clients and publishers.
  * Keep retry/DLX configuration centralized here.
  */
-class QueuePublisherFactory
+class QueueClientAndPublisherFactory
 {
     private RabbitMQConfig $config;
 
@@ -26,6 +26,17 @@ class QueuePublisherFactory
             config: $this->buildConfig()
         );
         return new RabbitMQQueuePublisher($client, $routingKey);
+    }
+
+    public function createClient(string $queueName, string $exchange = '', string $routingKey = ''): RabbitMQClient
+    {
+        return new RabbitMQClient(
+            exchange: $exchange,
+            exchangeType: AMQPExchangeType::DIRECT,
+            queue: $queueName,
+            routingKey: $routingKey,
+            config: $this->buildConfig()
+        );
     }
 
     /**
