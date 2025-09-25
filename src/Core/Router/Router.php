@@ -22,6 +22,7 @@ use SpsFW\Core\Attributes\Validation\PostBody;
 use SpsFW\Core\Attributes\Validation\QueryParams;
 use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Auth\Util\AccessChecker;
+use SpsFW\Core\DI\DIContainer;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\RouteNotFoundException;
@@ -116,7 +117,7 @@ class Router
 //        } catch (RedisException $e) {
 //            $this->redis = null;
 //        }
-        $this->container = new DIContainer($this->cacheDir);
+        $this->container = DIContainer::getInstance($this->cacheDir);
 
         $this->loadRoutes();
     }

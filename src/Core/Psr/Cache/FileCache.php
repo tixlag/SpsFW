@@ -199,7 +199,7 @@ class FileCache implements CacheInterface
             throw new InvalidArgumentException('Cache key cannot be empty');
         }
 
-        if (preg_match('/[{}()\/@:]/', $key)) {
+        if (preg_match('/[{}()\/@]/', $key)) {
             throw new InvalidArgumentException('Cache key contains illegal characters');
         }
     }

@@ -6,6 +6,7 @@ use ReflectionClass;
 use ReflectionException;
 use SpsFW\Core\Attributes\Inject;
 use SpsFW\Core\Config;
+use SpsFW\Core\DI\DIContainer;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Queue\Attributes\QueueJob;
 use SpsFW\Core\Queue\Interfaces\JobInterface;
@@ -140,11 +141,11 @@ class DICacheBuilder
         try {
             $attribute = $reflection->getAttributes(QueueJob::class)[0] ?? null;
 
-            if ($attribute && is_subclass_of($class, JobInterface::class)) {
-                /** @var QueueJob $queueJob */
-                $queueJob = $attribute->newInstance();
-                $this->jobRegistryMap[$queueJob->name] = $class;
-            }
+//            if ($attribute && is_subclass_of($class, JobInterface::class)) {
+//                /** @var QueueJob $queueJob */
+//                $queueJob = $attribute->newInstance();
+//                $this->jobRegistryMap[$queueJob->name] = $class;
+//            }
 
 
 
@@ -202,7 +203,7 @@ class DICacheBuilder
             $allClasses = array_merge($allClasses, ClassScanner::getClassesFromDir($dir));
         }
 
-        $compiler = new DICacheBuilder($container ?? new DIContainer($cachePath), $cachePath);
+        $compiler = new DICacheBuilder($container ?? DIContainer::getInstance($cachePath), $cachePath);
         $compiler->compile($allClasses);
     }
 }

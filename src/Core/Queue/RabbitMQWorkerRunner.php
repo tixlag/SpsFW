@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core\Queue;
 
+use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use SpsFW\Core\Queue\Heartbeat\WorkerStrategyInterface;
 
@@ -79,7 +80,13 @@ class RabbitMQWorkerRunner
             $this->heartbeat->setStatus('running', $this->stats);
         }
 
-        $this->client->waitOne(5.0);
+        try {
+            // Ждём до 30 сек — достаточно для heartbeat и быстрого завершения
+            $this->client->waitOne(30.0);
+        } catch (AMQPTimeoutException $e) {
+            // Нормально: просто проверяем, не пора ли завершаться
+            // Ничего не делаем — цикл while сам проверит $this->running
+        }
     }
 
     public function stop(): void

@@ -1,6 +1,6 @@
 <?php
 
-namespace SpsFW\Core\Router;
+namespace SpsFW\Core\DI;
 
 use ReflectionClass;
 use ReflectionException;
@@ -17,12 +17,29 @@ class DIContainer
         $this->compiledMap = $compiledMap;
     }
 
-    public function __construct(string $cachePath)
+    private static ?self $instance = null;
+
+    private function __construct(string $cachePath)
     {
         $cacheDIPath = $cachePath . '/compiled_di.php';
         if (file_exists($cacheDIPath)) {
             $this->compiledMap = require $cacheDIPath;
         }
+    }
+
+    public static function getInstance(string $cachePath = ''): self
+    {
+        if (self::$instance === null) {
+            if ($cachePath === '') {
+                // Путь по умолчанию — можно вынести в константу или Config
+                $cachePath = __DIR__ . '/../../../../.cache/';
+                if (!is_dir($cachePath)) {
+                    mkdir($cachePath, 0777, true);
+                }
+            }
+            self::$instance = new self($cachePath);
+        }
+        return self::$instance;
     }
 
     /**
