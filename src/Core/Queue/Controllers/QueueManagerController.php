@@ -49,12 +49,12 @@ class QueueManagerController extends RestController
 
 
     #[OA\Get(
-        path: "/workers",
+        path: "/api/workers",
         description: "Workers Management",
         summary: "Управление воркерами очередей и прочими",
         tags: ["Queue Management"]
     )]
-    #[Route(path: "/workers")]
+    #[Route(path: "/api/workers")]
     public function index(): Response
     {
         return Response::html(file_get_contents('worker-dashboard.html', true));
