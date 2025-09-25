@@ -43,9 +43,10 @@ class DIContainer
     }
 
     /**
-     * @template T of object|null
+     * @template T of object
      * @param class-string<T> $class
      * @return T
+     * @throws BaseException
      */
     public function get(string $class): ?object
     {
