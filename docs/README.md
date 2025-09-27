@@ -14,3 +14,4 @@ SpsFW - это PHP фреймворк, ориентированный на со�
 8.  [Миграции базы данных (Database Migrations)](8_database_migrations.md)
 9.  [Управление доступом (Access Control)](9_access_control.md)
 10. [Исключения (Exceptions)](10_exceptions.md)
+10. [Очереди и воркеры (Queue and Workers)](11_queue_workes.md)
