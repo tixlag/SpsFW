@@ -12,6 +12,11 @@ class JobRegistry
 
     private array $registeredJobs = [];
 
+    public function __construct(string $cachePath = __DIR__ . "/../../../../../../.cache")
+    {
+        $this->fromCache($cachePath);
+    }
+
     public function getRegisteredJobs(): array
     {
         return $this->registeredJobs;
@@ -37,6 +42,20 @@ class JobRegistry
         }
 
         return $instance;
+    }
+
+    public function fromCache(string $cachePath = __DIR__ . "/../../../../../../.cache"): self
+    {
+        $cacheFile = $cachePath . '/job_registry.php';
+
+        if (file_exists($cacheFile)) {
+            $map = require $cacheFile;
+            if (is_array($map)) {
+                $this->registeredJobs = $map;
+            }
+        }
+
+        return $this;
     }
 
 

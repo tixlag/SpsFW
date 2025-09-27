@@ -22,8 +22,8 @@ class WorkerConfig
      * @param string $workerName
      * @return array{type?: string, queue: string, exchange: string, routing_key: string}
      */
-    public function getConfig($workerName): array
+    public function getConfig($workerName): ?array
     {
-        return $this->config[$workerName];
+        return $this->config[$workerName] ?? null;
     }
 }
