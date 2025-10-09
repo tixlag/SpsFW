@@ -481,7 +481,7 @@ class Router
             array_shift($matches); // Удаляем полное совпадение
             $counter = 0;
             foreach ($route['params'] as $paramName => $null) {
-                $matchParams[$paramName] =  $matches[$counter] ?? '';
+                $matchParams[$paramName] = urldecode($matches[$counter] ?? '');
                 $counter++;
             }
 
