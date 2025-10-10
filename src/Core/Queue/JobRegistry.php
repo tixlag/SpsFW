@@ -12,11 +12,9 @@ class JobRegistry
 
 
     private array $registeredJobs = [];
-    private DIContainer $container;
 
     public function __construct(string $cachePath = __DIR__ . "/../../../../../../.cache")
     {
-        $this->container = DIContainer::getInstance();
         $this->fromCache($cachePath);
     }
 
@@ -132,7 +130,7 @@ class JobRegistry
         }
 
         // Use DI container to create handler with dependencies
-        return $this->container->get($handlerClass);
+        return DIContainer::getInstance()->get($handlerClass);
     }
 
     /**
