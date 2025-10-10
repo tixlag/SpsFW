@@ -3,6 +3,7 @@
 namespace SpsFW\Core\Queue;
 
 use RuntimeException;
+use SpsFW\Core\DI\DIContainer;
 use SpsFW\Core\Queue\Interfaces\JobHandlerInterface;
 use SpsFW\Core\Queue\Interfaces\JobInterface;
 
@@ -11,9 +12,11 @@ class JobRegistry
 
 
     private array $registeredJobs = [];
+    private DIContainer $container;
 
     public function __construct(string $cachePath = __DIR__ . "/../../../../../../.cache")
     {
+        $this->container = DIContainer::getInstance();
         $this->fromCache($cachePath);
     }
 
@@ -127,7 +130,9 @@ class JobRegistry
         if (!$handlerClass) {
             throw new RuntimeException("No handler registered for job: $jobName");
         }
-        return new $handlerClass();
+
+        // Use DI container to create handler with dependencies
+        return $this->container->get($handlerClass);
     }
 
     /**
