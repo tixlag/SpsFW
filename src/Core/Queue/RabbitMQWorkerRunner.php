@@ -102,7 +102,7 @@ class RabbitMQWorkerRunner
 
     private function processMessage(AMQPMessage $message): void
     {
-        $decoded = json_decode($message->body, true);
+        $decoded = json_decode($message->getBody(), true);
         $jobName = $decoded['jobName'] ?? null;
         $payload = $decoded['payload'] ?? null;
 
