@@ -32,7 +32,7 @@ class DIContainer
         if (self::$instance === null) {
             if ($cachePath === '') {
                 // Путь по умолчанию — можно вынести в константу или Config
-                $cachePath = __DIR__ . '/../../../../.cache/';
+                $cachePath = __DIR__ . '/../../../../../../.cache/';
                 if (!is_dir($cachePath)) {
                     mkdir($cachePath, 0777, true);
                 }
