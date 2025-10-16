@@ -21,6 +21,12 @@ your-project/
 │   │   ├── Services/        # Сервисы
 │   │   ├── Storages/        # Репозитории
 │   │   ├── DTOs/            # DTO для валидации
+│   │   ├── Subdomain/            # Поддомен
+│   │   │   ├── Controllers/     # Контроллеры
+│   │   │   ├── Services/        # Сервисы
+│   │   │   ├── Storages/        # Репозитории
+│   │   │   ├── DTOs/            # DTO для валидации
+│   │   │   └── ...
 │   │   └── ...
 ├── .env                 # Файл конфигурации окружения
 ├── .env.dev             # Файл конфигурации окружения для dev среды
@@ -35,26 +41,37 @@ your-project/
 
 ```php
 <?php
-require_once '../vendor/autoload.php';
 
-// Инициализация конфигурации
-\SpsFW\Core\Config::init([
-     'custom' =>
-        [
-            'param1' => $_ENV['PARAM1'],
-        ],
-     'otherCustom' => $_ENV['PARAM2']
-]);
+use SpsFW\Core\Router\Router;
 
-// Настройка DI-биндингов 
-// Здесь указываем, какая реализация абстракций должна быть использована
- \SpsFW\Core\Config::setDIBindings([
-     App\Services\UserServiceInterface::class => App\Services\UserService::class,
- ]);
+date_default_timezone_set('UTC');
+const allowedOrigins = [
+    'http://localhost:5173',
+    'https://localhost:5173',
+    'https://next.localhost:12443',
+    'https://next.sps38.pro'
+];
+$origin = $_SERVER['HTTP_X_ORIGIN'] ?? $_SERVER['HTTP_ORIGIN'] ?? null;
+if ($origin && in_array($origin, allowedOrigins)) {
+    header("Access-Control-Allow-Origin: " . $origin);
+    header('Access-Control-Allow-Credentials: true');
+}
 
-// Создание и запуск маршрутизатора
-$router = new \SpsFW\Core\Router\Router();
+
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === "OPTIONS") {
+    header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS");
+    header('Access-Control-Allow-Credentials: true');
+    header("Access-Control-Allow-Headers: Origin, X-Requested-With, Content-Type, Accept, Authorization, WithCredentials, Set-Cookie, X-Origin");
+    header("Access-Control-Max-Age: 3600");
+    exit();
+}
+
+require_once __DIR__ . '/bootstrap.php';
+
+$router = new Router();
+
 $response = $router->dispatch();
+
 $response->send();
 ?>
 ```
