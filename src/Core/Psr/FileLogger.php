@@ -25,11 +25,12 @@ class FileLogger implements LoggerInterface
         $timestamp = date('Y-m-d H:i:s');
         $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? 'CLI';
         $formatted = sprintf(
-            "[%s] [%s] %s - %s\n",
+            "[%s] [%s] %s - %s\n%s\n\n",
             $timestamp,
             strtoupper($level),
             $remoteAddr,
-            $this->formatMessage($message, $context)
+            $message,
+            var_export($context, true)
         );
 
         file_put_contents($this->logFile, $formatted, FILE_APPEND | LOCK_EX);
@@ -43,7 +44,7 @@ class FileLogger implements LoggerInterface
             } elseif (is_array($value)) {
                 $value = var_export($value, true);
             }
-            $message = str_replace('{'.$key.'}', $value, $message);
+            $message = str_replace('{'.$key.'}', $value ?? '', $message);
         }
         return $message;
     }
