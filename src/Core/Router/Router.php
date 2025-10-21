@@ -4,6 +4,7 @@ namespace SpsFW\Core\Router;
 
 use Error;
 use OpenApi\Attributes\Property;
+use PHPUnit\Exception;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use ReflectionAttribute;
@@ -233,7 +234,12 @@ class Router
             $methodParameters = $method->getParameters();
             $validationParams = [];
             foreach ($methodParameters as $methodParameter) {
-                $dtoClass = $methodParameter->getType()->getName();
+                try {
+                    $dtoClass = $methodParameter->getType()->getName();
+                } catch (\Throwable $e) {
+                    error_log("Router: не указан тип параметра в: " . $methodParameter->getName() . ". Класс: ". $reflection->getName());
+                    $dtoClass = 'string';
+                }
                 $validationAttributes = $methodParameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF);
                 if (empty($validationAttributes)) continue;
                 $validationAttribute = $validationAttributes[0];
