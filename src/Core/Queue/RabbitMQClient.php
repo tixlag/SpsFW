@@ -34,7 +34,7 @@ class RabbitMQClient
         string $exchangeType = AMQPExchangeType::DIRECT,
         string $queue = '',
         string $routingKey = '',
-        ?array  $config = null
+        ?array $config = null
     )
     {
         //$this->validateConfig($config);
@@ -45,10 +45,10 @@ class RabbitMQClient
         try {
             // Установка соединения
             $this->connection = new AMQPStreamConnection(
-                $config['host'] ,
-                $config['port'] ,
-                $config['user'] ,
-                $config['password'] ,
+                $config['host'],
+                $config['port'],
+                $config['user'],
+                $config['password'],
                 $config['vhost'] ?? '/',
                 $config['insist'] ?? false,
                 $config['login_method'] ?? 'AMQPLAIN',
@@ -66,15 +66,53 @@ class RabbitMQClient
 
             // Объявление обменника
             if ($exchange) {
-            $this->channel->exchange_declare($exchange, $exchangeType, false, $config['exchange_durable'] ?? true);
+                // Если переданы аргументы из конфигурации — преобразуем в AMQPTable
+                $exchangeArgs = $config['exchange_arguments'] ?? null;
+                if (is_array($exchangeArgs)) {
+                    $exchangeArgs = new AMQPTable($exchangeArgs);
+                }
+
+                // Специальный случай: delayed exchange
+                if ($exchangeType === 'x-delayed-message') {
+                    // Если явным образом не указали аргументы, установим x-delayed-type
+                    $exchangeArgs = $exchangeArgs ?? new AMQPTable(['x-delayed-type' => 'direct']);
+                }
+
+                // exchange_declare(
+                //   string $exchange, string $type, bool $passive = false,
+                //   bool $durable = false, bool $auto_delete = false, bool $internal = false,
+                //   bool $nowait = false, AMQPTable $arguments = null, int $ticket = null
+                // )
+                $this->channel->exchange_declare(
+                    $exchange,
+                    $exchangeType,
+                    false,
+                    $config['exchange_durable'] ?? true,
+                    false,
+                    false,
+                    false,
+                    $exchangeArgs
+                );
             }
 
             // Объявление очереди
             if ($queue) {
-            $this->channel->queue_declare($queue, false, $config['queue_durable'] ?? true, false, false, false, $config['queue_arguments'] ?? []);
+                $queueArgs = $config['queue_arguments'] ?? null;
+                if (is_array($queueArgs)) {
+                    $queueArgs = new AMQPTable($queueArgs);
+                }
+                $this->channel->queue_declare(
+                    $queue,
+                    false,
+                    $config['queue_durable'] ?? true,
+                    false,
+                    false,
+                    false,
+                    $queueArgs
+                );
             }
 
-            // Привязка очереди к обменнику
+            // привязка как раньше
             if ($exchange && $queue && $routingKey) {
                 $this->channel->queue_bind($queue, $exchange, $routingKey);
             }
@@ -90,9 +128,10 @@ class RabbitMQClient
      * @param array $properties Свойства сообщения
      * @param string|null $routingKey Ключ маршрутизации (если нужно переопределить)
      */
-    public function publish(mixed $data, array $properties = [], ?string $routingKey = null): void
+    public function publish(mixed $data, array $properties = [], ?string $routingKey = null, ?string $exchange = null): void
     {
         $routingKey = $routingKey ?? $this->routingKey;
+        $exchange = $exchange ?? $this->exchange;
 
         $message = new AMQPMessage(
             json_encode($data, JSON_UNESCAPED_UNICODE),
@@ -102,10 +141,10 @@ class RabbitMQClient
             ], $properties)
         );
 
-        $this->channel->basic_publish($message, $this->exchange, $routingKey);
+        $this->channel->basic_publish($message, $exchange, $routingKey);
     }
 
-        public function startConsuming(callable $callback, ?string $queue = null, bool $noAck = false): void
+    public function startConsuming(callable $callback, ?string $queue = null, bool $noAck = false): void
     {
         $queue = $queue ?? $this->queue;
         $this->consumerTag = 'consumer_' . getmypid() . '_' . uniqid();

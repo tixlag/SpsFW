@@ -15,17 +15,37 @@ class QueueClientAndPublisherFactory
     {
         $this->config = $config;
     }
-
-    public function create(string $queueName, string $exchange = '', string $routingKey = ''): RabbitMQQueuePublisher
+    // ... ваш existing code ...
+    /**
+     * Создаёт базовый publisher. Можно указать exchangeType и exchangeArguments (например для x-delayed-message).
+     *
+     * @param string $queueName
+     * @param string $exchange
+     * @param string $routingKey
+     * @param string $exchangeType - e.g. AMQPExchangeType::DIRECT or 'x-delayed-message'
+     * @param array $exchangeArguments - аргументы для exchange (например ['x-delayed-type' => 'direct'])
+     */
+    public function create(string $queueName,
+                           string $exchange = '',
+                           string $routingKey = '',
+                           string $exchangeType = AMQPExchangeType::DIRECT,
+                           array $exchangeArguments = []
+    ): RabbitMQQueuePublisher
     {
+        $cfg = array_merge($this->buildConfig(), [
+            'exchange_arguments' => $exchangeArguments,
+            // по умолчанию указываем queue_arguments пустыми
+            'queue_arguments' => []
+        ]);
+
         $client = new RabbitMQClient(
             exchange: $exchange,
-            exchangeType: AMQPExchangeType::DIRECT,
+            exchangeType: $exchangeType,
             queue: $queueName,
             routingKey: $routingKey,
-            config: $this->buildConfig()
+            config: $cfg
         );
-        return new RabbitMQQueuePublisher($client, $routingKey);
+        return new RabbitMQQueuePublisher($client, $routingKey, $exchange);
     }
 
     public function createClient(string $queueName, string $exchange = '', string $routingKey = ''): RabbitMQClient
@@ -42,13 +62,33 @@ class QueueClientAndPublisherFactory
     /**
      * Create queue + retry queue + DLX. Retry delay in ms.
      */
-    public function createWithRetry(string $queueName, string $exchange = '', string $routingKey = '', int $retryDelayMs = 10000, int $maxRetries = 5): RabbitMQQueuePublisher
+    /**
+     * Создаёт publisher, опционально с retry через DLX.
+     * Поддерживает использование x-delayed-message в качестве main exchange.
+     *
+     * @param string $queueName
+     * @param string $exchange
+     * @param string $routingKey
+     * @param int $retryDelayMs
+     * @param int $maxRetries
+     * @param string $exchangeType
+     * @param array $exchangeArguments
+     */
+    public function createWithRetry(
+        string $queueName,
+        string $exchange = '',
+        string $routingKey = '',
+        int $retryDelayMs = 10000,
+        int $maxRetries = 5,
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = []
+    ): RabbitMQQueuePublisher
     {
         $dlxExchange = $exchange . '.dlx';
         $retryQueue = $queueName . '.retry';
         $retryRouting = $routingKey . '.retry';
 
-        // main queue bound to exchange and has DLX pointing to dlxExchange -> retryQueue
+        // main queue DLX -> dlxExchange
         $mainArgs = ['x-dead-letter-exchange' => $dlxExchange, 'x-dead-letter-routing-key' => $retryRouting];
 
         // retry queue sends messages back to main exchange after TTL
@@ -58,12 +98,31 @@ class QueueClientAndPublisherFactory
             'x-message-ttl' => $retryDelayMs
         ];
 
-        $mainClient = new RabbitMQClient($exchange, AMQPExchangeType::DIRECT, $queueName, $routingKey, array_merge($this->buildConfig(), ['queue_arguments' => $mainArgs]));
-        $retryClient = new RabbitMQClient($dlxExchange, AMQPExchangeType::DIRECT, $retryQueue, $retryRouting, array_merge($this->buildConfig(), ['queue_arguments' => $retryArgs]));
-        // ensure dlx exchange exists
+        // create main client (could be x-delayed-message)
+        $mainClient = new RabbitMQClient(
+            exchange: $exchange,
+            exchangeType: $exchangeType,
+            queue: $queueName,
+            routingKey: $routingKey,
+            config: array_merge($this->buildConfig(), [
+                'exchange_arguments' => $exchangeArguments,
+                'queue_arguments' => $mainArgs
+            ])
+        );
+
+        // ensure dlx exchange exists (direct)
         $dlxClient = new RabbitMQClient($dlxExchange, AMQPExchangeType::DIRECT, '', '', $this->buildConfig());
 
-        return new RabbitMQQueuePublisher($mainClient, $routingKey);
+        // create retry queue bound to dlxExchange
+        $retryClient = new RabbitMQClient(
+            $dlxExchange,
+            AMQPExchangeType::DIRECT,
+            $retryQueue,
+            $retryRouting,
+            array_merge($this->buildConfig(), ['queue_arguments' => $retryArgs])
+        );
+
+        return new RabbitMQQueuePublisher($mainClient, $routingKey, $exchange);
     }
 
     private function buildConfig(): array

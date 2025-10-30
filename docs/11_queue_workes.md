@@ -5,7 +5,7 @@
 **5 шагов для создания новой очереди:**
 
 1. **Написать Job и Handler классы** с атрибутами `#[QueueJob]` и `#[JobHandler]`
-2. **Зарегистрировать в JobRegistry** (через кеш-файл или автосканирование)
+2. **Зарегистрировать в JobRegistry** (автоматически после перезапуска контейнера _главное указать атрибуты_)
 3. **Добавить конфиг воркера в DI** в `WorkerConfig`
 4. **Запустить воркера:** `php bin/worker.php my_worker`
 5. **Отправлять задачи** используя `WorkerConfig` для получения параметров очереди
@@ -28,11 +28,11 @@ $publisher->publish($job);
 
 Система очередей построена на RabbitMQ и состоит из следующих основных компонентов:
 
-- **Jobs** — задачи, которые нужно выполнить
-- **Handlers** — обработчики, которые выполняют задачи
-- **Publishers** — отправляют задачи в очередь
-- **Workers** — читают задачи из очереди и выполняют их
-- **Registry** — реестр задач и их обработчиков
+* **Jobs** — задачи, которые нужно выполнить
+* **Handlers** — обработчики, которые выполняют задачи
+* **Publishers** — отправляют задачи в очередь
+* **Workers** — читают задачи из очереди и выполняют их
+* **Registry** — реестр задач и их обработчиков (не нужен в клиентском коде)
 
 ## 1. Создание новой задачи (Job)
 
@@ -164,7 +164,8 @@ class SendNotificationHandler implements JobHandlerInterface
 ## 2. Регистрация задач и обработчиков
 
 #### После перезапуска контейнера, задачи и обработчики зарегистрируются автоматически
-___
+
+---
 
 ## 3. Настройка Workers
 
@@ -334,10 +335,11 @@ sudo systemctl status notification-worker
 Откройте в браузере: `http://your-domain/api/workers`
 
 Dashboard позволяет:
-- Просматривать статус всех воркеров
-- Запускать/останавливать воркеров
-- Отправлять тестовые задачи
-- Мониторить статистику обработки
+
+* Просматривать статус всех воркеров
+* Запускать/останавливать воркеров
+* Отправлять тестовые задачи
+* Мониторить статистику обработки
 
 ### API для управления
 
@@ -609,3 +611,156 @@ done
 ```
 
 Это позволит обрабатывать задачи параллельно и повысит throughput системы.
+
+---
+
+# Дополнение: Отложенная отправка (rabbitmq_delayed_message_exchange) и поддержка множества delayed-очередей
+
+Необходим плагин **`rabbitmq_delayed_message_exchange`**.
+
+## Ключевые идеи (вкратце)
+
+* Используем exchange типа `x-delayed-message` и header `x-delay` (миллисекунды) для отложенной доставки.
+* `RabbitMQQueuePublisher` получил удобные опции `delayMs` и `executeAt` (через `publish()` / `publishAt()`), не меняя `JobInterface`.
+* Фабрика `QueueClientAndPublisherFactory` умеет создавать delayed-exchange и множество очередей/routing keys, а также `createWithRetry()` поддерживает delayed exchange.
+* В payload автоматически кладём мета-поле `meta.executeAt` (если было передано) — это страховка на стороне consumer.
+* Всегда используем UTC для расчёта времени/задержки.
+
+---
+
+## Где и какие изменения появились (коротко)
+
+1. **RabbitMQClient**
+
+    * `exchange_declare` / `queue_declare` теперь поддерживают `exchange_arguments` и `queue_arguments` (преобразуются в `AMQPTable`).
+    * `publish()` теперь имеет сигнатуру с опциональным параметром `exchange` — можно публиковать в любой exchange.
+
+2. **RabbitMQQueuePublisher**
+
+    * Новый `publish(JobInterface $job, array $options = [])`:
+
+        * `delayMs` — задержка в миллисекундах,
+        * `executeAt` — `DateTimeInterface`, рассчитывается `delayMs`,
+        * `exchange`, `routingKey`, `properties` — переопределение параметров.
+    * Удобный `publishAt(JobInterface $job, DateTimeInterface $when, array $options = [])`.
+    * Не требует изменения `JobInterface` — `serialize()`/`deserialize()` остаются прежними.
+
+3. **QueueClientAndPublisherFactory**
+
+    * `create()` принимает `exchangeType` и `exchangeArguments` — можно создать exchange `x-delayed-message` (`['x-delayed-type' => 'direct']`).
+    * `createWithRetry()` поддерживает тот же `exchangeType` — можно иметь retry для delayed-очередей тоже.
+
+---
+
+## Инструкция: как создавать delayed-очереди и публиковать задачи
+
+### 1) Создание publishers через фабрику (пример — один delayed-exchange + три очереди)
+
+```php
+$factory = DIContainer::getInstance()->get(QueueClientAndPublisherFactory::class);
+
+$delayedExchange = 'delayed_notifications';
+$exchangeType = 'x-delayed-message';
+$exchangeArgs = ['x-delayed-type' => 'direct'];
+
+// Email publisher
+$emailPublisher = $factory->create(
+    queueName: 'notifications_email',
+    exchange: $delayedExchange,
+    routingKey: 'notification.email',
+    exchangeType: $exchangeType,
+    exchangeArguments: $exchangeArgs
+);
+
+// Push publisher
+$pushPublisher = $factory->create(
+    queueName: 'notifications_push',
+    exchange: $delayedExchange,
+    routingKey: 'notification.push',
+    exchangeType: $exchangeType,
+    exchangeArguments: $exchangeArgs
+);
+```
+
+> Рекомендуется: **один delayed-exchange + много routing keys** (экономично и удобно). При необходимости можно создать отдельные delayed-exchange для отдельных доменов.
+
+### 2) Публикация задач
+
+#### Немедленная отправка (как раньше)
+
+```php
+$publisher->publish($job);
+```
+
+#### Отложенная отправка по времени (publishAt)
+
+```php
+$when = new \DateTimeImmutable('2025-11-01 12:30:00', new \DateTimeZone('UTC'));
+$emailPublisher->publishAt($job, $when);
+// Внутри автоматически рассчитает delayMs и поставит x-delay header
+```
+
+#### Отложенная отправка по задержке (delayMs)
+
+```php
+$emailPublisher->publish($job, ['delayMs' => 120000]); // 2 минуты (ms)
+```
+
+#### Переопределение exchange/routingKey при публикации
+
+```php
+$publisher->publish($job, [
+    'delayMs' => 60000,
+    'exchange' => 'delayed_notifications',
+    'routingKey' => 'notification.email'
+]);
+```
+
+---
+
+## Примеры конфигурации DI (фрагменты)
+
+Если вы генерируете publishers в DI, можно добавить биндинги примерно так:
+_пока нет возможности создавать объекты по ключу, но будет_
+```php
+// В bootstrap/config — пример создания через фабрику
+$factory = $container->get(\SpsFW\Core\Queue\QueueClientAndPublisherFactory::class);
+$delayedExchange = 'delayed_notifications';
+$exchangeArgs = ['x-delayed-type' => 'direct'];
+
+$container->set('publisher.email', fn() => $factory->create(
+    'notifications_email', $delayedExchange, 'notification.email', 'x-delayed-message', $exchangeArgs
+));
+```
+
+---
+
+## Consumer: двойная страховка — проверяем meta.executeAt
+
+Даже если вы уверены в delayed-exchange, consumer **должен** проверять `meta.executeAt` — на случай нестабильной доставки или ручного publish без delay.
+_(реализовано)_
+
+> Внутри consumer можно либо восстановить `Job` через `deserialize()`, либо обработать payload напрямую — в зависимости от вашей архитектуры.
+
+---
+
+## Retry / DLX + delayed-exchange
+
+* `createWithRetry()` поддерживает создание main queue с DLX и retry-очереди. Этот механизм работает и если main exchange — `x-delayed-message`.
+* Для retry-очереди используется `x-message-ttl` и `x-dead-letter-exchange`, как раньше; фабрика автоматизирует создание `main` + `retry` + `dlx` exchange.
+
+---
+
+## Важные замечания и best-practices
+
+1. **UTC** — всегда использовать `DateTimeImmutable` в UTC при передаче `executeAt`. В коде выше это делается по умолчанию.
+2. **x-delay в миллисекундах** — плагин ожидает миллисекунды. `publishAt()` конвертирует секунды в миллисекунды.
+3. **meta.executeAt** — кладём в полезную нагрузку как страховку и для логов/мониторинга.
+4. **Не меняем JobInterface** — все изменения происходят через опции публикации (`publish()`/`publishAt()`), поэтому существующие Job классы не требуют правки.
+5. **Тестируйте в среде с плагином** — локально плагин может отсутствовать; для локального fallback используйте TTL+DLX или тестовый режим.
+6. **Мониторинг** — логируйте `publishedAt`, `executeAt`, `delayMs` и `jobId` (если есть) для удобства расследования задержек и дублирования.
+
+
+# TODO
+**Dedup / idempotency** — при высоких нагрузках/повторах подумать о `jobId` и идемпотентной обработке в handler.
+

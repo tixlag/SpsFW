@@ -66,8 +66,8 @@ class QueueManagerController extends RestController
     #[Route(path: "/api/queue/dashboard", httpMethods: ['GET'])]
     #[OA\Get(
         path: "/api/queue/dashboard",
-        tags: ["Queue Management"],
         summary: "Получить статус всех воркеров",
+        tags: ["Queue Management"],
         responses: [
             new OA\Response(
                 response: 200,
@@ -131,8 +131,8 @@ class QueueManagerController extends RestController
     #[Route(path: "/api/queue/stats", httpMethods: ['GET'])]
     #[OA\Get(
         path: "/api/queue/stats",
-        tags: ["Queue Management"],
         summary: "Получить общую статистику очередей",
+        tags: ["Queue Management"],
         responses: [
             new OA\Response(
                 response: 200,
@@ -166,7 +166,6 @@ class QueueManagerController extends RestController
     #[Route(path: "/api/queue/send", httpMethods: ['POST'])]
     #[OA\Post(
         path: "/api/queue/send",
-        tags: ["Queue Management"],
         summary: "Отправить задачу в очередь",
         requestBody: new OA\RequestBody(
             required: true,
@@ -185,6 +184,7 @@ class QueueManagerController extends RestController
                 type: "object"
             )
         ),
+        tags: ["Queue Management"],
         responses: [
             new OA\Response(
                 response: 200,
@@ -257,7 +257,7 @@ class QueueManagerController extends RestController
             } else {
                 $publisher = $this->queueFactory->create($queue, $exchange, $routingKey);
             }
-
+// todo добавить поддержку отправки отложенных сообщений
             // Публикуем
             $publisher->publish($job);
 
@@ -283,8 +283,8 @@ class QueueManagerController extends RestController
     #[Route(path: "/api/queue/worker/{workerId}/{action}", httpMethods: ['POST'])]
     #[OA\Post(
         path: "/api/queue/worker/{workerId}/{action}",
-        tags: ["Queue Management"],
         summary: "Управление воркером: start, stop, restart",
+        tags: ["Queue Management"],
         parameters: [
             new OA\Parameter(name: "workerId", in: "path", required: true, schema: new OA\Schema(type: "string")),
             new OA\Parameter(name: "action", in: "path", required: true, schema: new OA\Schema(type: "string", enum: ["start", "stop", "restart"]))
@@ -391,8 +391,8 @@ class QueueManagerController extends RestController
     #[Route(path: "/api/queue/worker/{workerId}/clear", httpMethods: ['DELETE'])]
     #[OA\Delete(
         path: "/api/queue/worker/{workerId}/clear",
-        tags: ["Queue Management"],
         summary: "Очистить данные heartbeat воркера",
+        tags: ["Queue Management"],
         parameters: [
             new OA\Parameter(name: "workerId", in: "path", required: true, schema: new OA\Schema(type: "string"))
         ],
@@ -434,8 +434,8 @@ class QueueManagerController extends RestController
     #[Route(path: "/api/queue/jobs", httpMethods: ['GET'])]
     #[OA\Get(
         path: "/api/queue/jobs",
-        tags: ["Queue Management"],
         summary: "Получить список зарегистрированных задач",
+        tags: ["Queue Management"],
         responses: [
             new OA\Response(
                 response: 200,
