@@ -99,7 +99,7 @@ class Validator
         return $dto;
     }
 
-     /**
+    /**
      * Установка значения свойства через рефлексию
      */
     private static function setPropertyValue(object $dto, string $propertyName, mixed $value): void
@@ -222,7 +222,7 @@ class Validator
         return $dto;
     }
 
-private static $notRequired = [];
+    private static $notRequired = [];
 
     /**
      * @throws ValidationException
@@ -303,12 +303,12 @@ private static $notRequired = [];
                 }
                 return $value;
             case 'maxLength':
-                if (strlen($rawValue) > (int)$ruleValue) {
+                if (mb_strlen($rawValue) > (int)$ruleValue) {
                     throw new ValidationException("Длина $propertyName максимум $ruleValue символов");
                 }
                 return $rawValue;
             case 'minLength':
-                if (strlen($rawValue) < (int)$ruleValue) {
+                if (mb_strlen($rawValue) < (int)$ruleValue) {
                     throw new ValidationException("Длина $propertyName минимум $ruleValue символов");
                 }
                 return $rawValue;
