@@ -16,9 +16,9 @@ interface UserServiceI
 
     public function changeAvatar($email, $newAvatar);
 
-    public function getById(string|int $userId): UserAbstract;
-    public function getByUuid(string $userUuid): UserAbstract;
-    public function getByCode1C(string $userId): UserAbstract;
+    public function getById(string|int $userId): ?UserAbstract;
+    public function getByUuid(string $userUuid): ?UserAbstract;
+    public function getByCode1C(string $code1c): ?UserAbstract;
 
     public function getByLogin(string $login): ?UserAbstract;
 
