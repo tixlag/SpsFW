@@ -307,7 +307,10 @@ class Router
                 foreach ($attributesOpenApi as $attributeKey => $attributeValue) {
                     $propertyRules['real_name'] = $realPropertyName;
                     if ($attributeKey === 'ref' || !$propertyType->isBuiltin()) {
-                        $attributeValue = $attributeValue ??  !$propertyType->getName();
+                        if (!$propertyType->isBuiltin()) {
+                            $attributeValue = $propertyType->getName();
+                        }
+                        if (!class_exists($attributeValue)) break;
                         if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
                             $propertyRules['ref'] = $attributeValue;
                             $propertyRules['type'] = 'array';
