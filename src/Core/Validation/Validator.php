@@ -47,7 +47,8 @@ class Validator
     private static function validateDtoWithCachedRules(string $dtoClass, array $reqParams, array $cachedRules): object
     {
 //        /** @var $dtoClass $dto */
-        $dto = new ReflectionClass($dtoClass)->newInstanceWithoutConstructor();
+        $dtoReflection = new ReflectionClass($dtoClass);
+        $dto = $dtoReflection->newInstanceWithoutConstructor();
 
 
         foreach ($cachedRules as $propertyName => $rules) {
@@ -70,14 +71,14 @@ class Validator
                             $rules['nested_rules']
                         );
                     }
-                    self::setPropertyValue($dto, $rules['real_name'], $nestedDtos);
+                    self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $nestedDtos);
                 } else {
                     $nestedDto = self::validateDtoWithCachedRules(
                         $rules['ref'],
                         $rawValue,
                         $rules['nested_rules']
                     );
-                    self::setPropertyValue($dto, $rules['real_name'], $nestedDto);
+                    self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $nestedDto);
                 }
                 continue;
             }
@@ -95,7 +96,7 @@ class Validator
                 }
             }
 
-            self::setPropertyValue($dto, $rules['real_name'], $validatedValue);
+            self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $validatedValue);
         }
 
         return $dto;
@@ -104,9 +105,9 @@ class Validator
     /**
      * Установка значения свойства через рефлексию
      */
-    private static function setPropertyValue(object $dto, string $propertyName, mixed $value): void
+    private static function setPropertyValue(object $dto, ReflectionClass $reflection, string $propertyName, mixed $value): void
     {
-        $reflection = new \ReflectionClass($dto);
+//        $reflection = new \ReflectionClass($dto);
         $property = $reflection->getProperty($propertyName);
         $property->setValue($dto, $value);
     }
