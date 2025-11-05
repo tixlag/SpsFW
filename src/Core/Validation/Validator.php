@@ -46,7 +46,9 @@ class Validator
      */
     private static function validateDtoWithCachedRules(string $dtoClass, array $reqParams, array $cachedRules): object
     {
-        $dto = new $dtoClass();
+//        /** @var $dtoClass $dto */
+        $dto = new ReflectionClass($dtoClass)->newInstanceWithoutConstructor();
+
 
         foreach ($cachedRules as $propertyName => $rules) {
             $rawValue = $reqParams[$propertyName] ?? null;

@@ -165,9 +165,12 @@ class DIContainer
         }
     }
 
+    /**
+     * @throws ReflectionException
+     */
     private function createEmptyObject(string $className): object
     {
-        return unserialize(sprintf('O:%d:"%s":0:{}', strlen($className), $className));
+        return new ReflectionClass($className)->newInstanceWithoutConstructor();
     }
 
     private function initializeObjects(array $tempObjects): void
