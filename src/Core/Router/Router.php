@@ -425,7 +425,8 @@ class Router
             $this->currentRoute = $this->findRoute();
             return $this->processRoute($this->currentRoute);
         } catch (\Throwable $e) {
-            if (!($e instanceof BaseException)) {
+//            if (!($e instanceof BaseException)) {
+            if (!($e instanceof AuthorizationException)) {
                 error_log(
                     sprintf(
                         "ApplicationError exception: %s on %u in %s\nTrace: %s\n--- End of trace",
