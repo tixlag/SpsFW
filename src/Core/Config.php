@@ -69,7 +69,7 @@ class Config
             ],
         ];
 
-        self::$config = array_merge_recursive($baseConfig, $customConfig);
+        self::$config = array_merge($baseConfig, $customConfig);
     }
 
     /**
