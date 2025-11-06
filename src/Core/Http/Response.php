@@ -339,8 +339,8 @@ class Response
         )
             ->createJson($errorBody);
 
-        if ($exception instanceof AuthorizationException::class ||
-            $exception instanceof RouteNotFoundException::class
+        if ($exception instanceof AuthorizationException ||
+            $exception instanceof RouteNotFoundException
         )
             return $error;
 
