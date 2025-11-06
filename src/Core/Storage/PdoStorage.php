@@ -3,27 +3,31 @@
 namespace SpsFW\Core\Storage;
 
 use PDO;
-use Ramsey\Uuid\Uuid;
 use SpsFW\Core\Db\Db;
 use SpsFW\Core\Db\Models\BaseModel;
 
 abstract class PdoStorage
 {
 
-    protected ?PDO $pdo = null;
+    /**
+     * @var array<PDO>
+     */
+    protected array $pdo = [];
 
-    protected function getPdo(): PDO
+    protected function getPdo(string $id = 'db'): PDO
     {
-        if ($this->pdo === null) {
-            $this->pdo = Db::get();
+        if ($this->pdo[$id] === null) {
+            $this->pdo[$id] = Db::getByConfig($id);
         }
-        return $this->pdo;
+        return $this->pdo[$id];
     }
 
-    protected function generateId(): string
-    {
-        return Uuid::uuid7()->toString();
-    }
+
+
+//    protected function generateId(): string
+//    {
+//        return Uuid::uuid7()->toString();
+//    }
 
     protected function insertModel(BaseModel $model): bool
     {
@@ -35,7 +39,7 @@ abstract class PdoStorage
         $paramsValues = array_values($params);
         $paramsKeysForInsert = ':' . implode(', :', array_keys($params));
 
-        $stmt = $this->pdo->prepare(/** @lang MariaDB */"
+        $stmt = $this->pdo['db']->prepare(/** @lang MariaDB */"
             INSERT INTO $table ($paramsKeys)
             VALUES ($paramsKeysForInsert)
 ");
@@ -48,7 +52,7 @@ abstract class PdoStorage
         $paramsKeys = implode(', ', array_keys($params));
         $paramsValues = implode(', ', array_values($params));
         $paramsKeysForInsert = implode(', :', $params);
-         $this->pdo->prepare(/** @lang MariaDB */"
+         $this->pdo['db']->prepare(/** @lang MariaDB */"
             INSERT INTO $table ($paramsKeys)
             VALUES ($paramsValues)
 ");

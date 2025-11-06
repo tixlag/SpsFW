@@ -8,37 +8,48 @@ use SpsFW\Core\Config;
 class Db
 {
     /**
-     * Объект содержит объект PDO
-     * @var PDO|null
+     * Объекты PDO для разных конфигураций
+     * @var PDO[]
      */
-    protected static PDO|null $pdo = null;
+    protected static array $pdo = [];
     /**
-     * Возвращает объект PDO
+     * Возвращает объект PDO для дефолтной конфигурации
      * @return PDO
      */
     public static function get(): PDO
     {
-        if (!isset(self::$pdo)) {
-            $config = Config::get('db');
-//            $dbAdapter = $config['adapter'];
-//            $dbHost = $config['host'];
-//            $dbPort = $config['port'];
-//            $dbName = $config['dbname'];
+        return self::getByConfig('db');
+    }
+
+    /**
+     * Возвращает объект PDO по ID конфигурации
+     * @param string $configId
+     * @return PDO
+     */
+    public static function getByConfig(string $configId): PDO
+    {
+        if (!isset(self::$pdo[$configId])) {
+            $dbConfigs = Config::get($configId);
+            if (!isset($dbConfigs[$configId])) {
+                throw new \InvalidArgumentException("Database configuration '{$configId}' not found.");
+            }
+            $config = $dbConfigs[$configId];
+
             $username = $config['user'];
             $password = $config['password'];
             $debugMode = $config['debugMode'];
 
-            static $dsn = null;
-            if ($dsn === null) {
-                $dsn = sprintf("%s:host=%s;port=%u;dbname=%s;charset=UTF8",
+            static $dsns = [];
+            if (!isset($dsns[$configId])) {
+                $dsns[$configId] = sprintf("%s:host=%s;port=%u;dbname=%s;charset=UTF8",
                     $config['adapter'],
                     $config['host'],
                     $config['port'],
                     $config['dbname']);
             }
 
-            self::$pdo = new PDO(
-                $dsn,
+            self::$pdo[$configId] = new PDO(
+                $dsns[$configId],
                 $username,
                 $password,
                 array(
@@ -47,15 +58,15 @@ class Db
                 )
             );
 
-            self::$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            self::$pdo[$configId]->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
             if ($debugMode) {
-                self::$pdo->query("SET profiling = 1;");
-                self::$pdo->query("SET @@profiling_history_size = 100;");
+                self::$pdo[$configId]->query("SET profiling = 1;");
+                self::$pdo[$configId]->query("SET @@profiling_history_size = 100;");
             }
         }
 
-        return self::$pdo;
+        return self::$pdo[$configId];
     }
 
     /**
