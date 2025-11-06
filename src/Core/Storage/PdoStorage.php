@@ -16,7 +16,7 @@ abstract class PdoStorage
 
     protected function getPdo(string $id = 'db'): PDO
     {
-        if ($this->pdo[$id] === null) {
+        if (!isset($this->pdo[$id])) {
             $this->pdo[$id] = Db::getByConfig($id);
         }
         return $this->pdo[$id];

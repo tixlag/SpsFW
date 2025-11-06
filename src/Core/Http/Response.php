@@ -7,6 +7,7 @@ use SpsFW\Core\Auth\Instances\Auth;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
+use SpsFW\Core\Exceptions\RouteNotFoundException;
 
 class Response
 {
@@ -337,6 +338,13 @@ class Response
             (is_int($exception->getCode()) && $exception->getCode() > 0 ? $exception->getCode() : 500) : 500)
         )
             ->createJson($errorBody);
+
+        if ($exception instanceof AuthorizationException::class ||
+            $exception instanceof RouteNotFoundException::class
+        )
+            return $error;
+
+
         error_log(
             sprintf(
                 "REST error:\n %s\n",
