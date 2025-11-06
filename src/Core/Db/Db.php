@@ -30,10 +30,10 @@ class Db
     {
         if (!isset(self::$pdo[$configId])) {
             $dbConfigs = Config::get($configId);
-            if (!isset($dbConfigs[$configId])) {
+            if (!isset($dbConfigs)) {
                 throw new \InvalidArgumentException("Database configuration '{$configId}' not found.");
             }
-            $config = $dbConfigs[$configId];
+            $config = $dbConfigs;
 
             $username = $config['user'];
             $password = $config['password'];
