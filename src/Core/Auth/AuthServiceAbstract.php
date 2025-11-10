@@ -136,9 +136,10 @@ abstract class AuthServiceAbstract implements AuthServiceI
 
         if ($remember) {
             $this->addNewRefreshToken($user);
-        } elseif (!headers_sent()) {
-            CookieHelper::clearCookie("refresh_token");
         }
+//        elseif (!headers_sent()) {
+//            CookieHelper::clearCookie("refresh_token");
+//        }
 
         $this->sendNewJwtToken($user);
 
