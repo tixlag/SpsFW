@@ -8,8 +8,9 @@ use Psr\Log\LogLevel;
 class FileLogger implements LoggerInterface
 {
     private string $logFile;
+    private int $limitContext;
 
-    public function __construct(string $logFile = __DIR__ . "/../../../../../../.logs/sps-fw.log")
+    public function __construct(string $logFile = __DIR__ . "/../../../../../../.logs/sps-fw.log", int $limitContext = 0)
     {
         $dir = dirname($logFile);
 
@@ -17,6 +18,7 @@ class FileLogger implements LoggerInterface
             mkdir($dir, 0755, true);
         }
 
+        $this->limitContext = $limitContext;
         $this->logFile = $logFile;
     }
 
@@ -24,6 +26,10 @@ class FileLogger implements LoggerInterface
     {
         $timestamp = date('Y-m-d H:i:s');
         $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? 'CLI';
+
+        if ($this->limitContext > 0) {
+            $context = $this->limitContext($context, $this->limitContext);
+        }
         $formatted = sprintf(
             "[%s] [%s] %s - %s\n%s\n\n",
             $timestamp,
@@ -47,6 +53,23 @@ class FileLogger implements LoggerInterface
             $message = str_replace('{'.$key.'}', $value ?? '', $message);
         }
         return $message;
+    }
+
+    private function limitContext(array $context, int $maxItems = 100): array
+    {
+        $result = [];
+        $count = 0;
+        foreach ($context as $key => $value) {
+            if ($count >= $maxItems) {
+                $result['...'] = 'truncated: ' . (count($context) - $maxItems) . ' more items';
+                break;
+            }
+            $result[$key] = is_array($value)
+                ? $this->limitContext($value, $maxItems)  // рекурсивно, если нужно
+                : $value;
+            $count++;
+        }
+        return $result;
     }
 
     // Остальные методы PSR-3 — они просто делегируют в log()
