@@ -30,7 +30,7 @@ class FileLogger implements LoggerInterface
             strtoupper($level),
             $remoteAddr,
             $message,
-            var_export($context, true)
+            json_encode($context, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES |JSON_UNESCAPED_UNICODE)
         );
 
         file_put_contents($this->logFile, $formatted, FILE_APPEND | LOCK_EX);
