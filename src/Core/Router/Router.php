@@ -306,11 +306,14 @@ class Router
 
                 foreach ($attributesOpenApi as $attributeKey => $attributeValue) {
                     $propertyRules['real_name'] = $realPropertyName;
-                    if ($attributeKey === 'ref' || !$propertyType->isBuiltin()) {
+                    if ($attributeKey === 'ref' || !$propertyType->isBuiltin() || $attributeKey === 'items') {
                         if (!$propertyType->isBuiltin()) {
                             $attributeValue = $propertyType->getName();
+                        } else if ($attributeKey === 'items' and isset($attributeValue->ref)) {
+                            $attributeValue = $attributeValue->ref;
                         }
                         if (!class_exists($attributeValue)) break;
+
                         if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
                             $propertyRules['ref'] = $attributeValue;
                             $propertyRules['type'] = 'array';
