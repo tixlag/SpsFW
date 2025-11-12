@@ -64,6 +64,9 @@ class FileLogger implements LoggerInterface
                 $result['...'] = 'truncated: ' . (count($context) - $maxItems) . ' more items';
                 break;
             }
+            if (is_object($value) and count($arObj = (array) $value) >  $maxItems)
+                $value = $arObj;
+
             $result[$key] = is_array($value)
                 ? $this->limitContext($value, $maxItems)  // рекурсивно, если нужно
                 : $value;
