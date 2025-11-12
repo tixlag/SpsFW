@@ -14,7 +14,7 @@ abstract class PdoStorage
      */
     protected array $pdo = [];
 
-    protected function getPdo(string $id = 'db'): PDO
+    public function getPdo(string $id = 'db'): PDO
     {
         if (!isset($this->pdo[$id])) {
             $this->pdo[$id] = Db::getByConfig($id);
