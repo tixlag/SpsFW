@@ -56,12 +56,13 @@ class Validator
 
             // Обработка вложенных объектов
             if (isset($rules['ref'])) {
+                if ( $rawValue === null and (!isset($rules['required']) or $rules['required'] !== [true]) ) {
+                    self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $rawValue); // присвоили null
+                    continue;
+                }
                 if (isset($rules['type']) && $rules['type'] === 'array') {
                     $nestedDtos = [];
-                    if (isset($rules['required']) and $rules['required'] !== [true] and $rawValue === null) {
-                        self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $nestedDtos);
-                        continue;
-                    }
+
                     if (!is_array($rawValue)) {
                         throw new ValidationException("$propertyName ожидает массив");
                     }
