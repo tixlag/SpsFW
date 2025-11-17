@@ -58,6 +58,10 @@ class Validator
             if (isset($rules['ref'])) {
                 if (isset($rules['type']) && $rules['type'] === 'array') {
                     $nestedDtos = [];
+                    if (isset($rules['required']) and $rules['required'] !== [true] and $rawValue === null) {
+                        self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $nestedDtos);
+                        continue;
+                    }
                     if (!is_array($rawValue)) {
                         throw new ValidationException("$propertyName ожидает массив");
                     }
