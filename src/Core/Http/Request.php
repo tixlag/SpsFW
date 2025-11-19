@@ -131,7 +131,11 @@ class Request
         if ($this->content === null) {
             return null;
         }
-
+    
+        if ($this->getRequestUri() === '/api/exchange/1c/users') {
+            file_put_contents('/var/www/next.sps38.pro/.tmp/logs/erp/raw-big.json', $this->content);
+        }
+    
         $contentType = $this->getHeader('Content-Type');
         if ($contentType && str_contains($contentType, 'application/json')) {
             return json_decode($this->content, true);
