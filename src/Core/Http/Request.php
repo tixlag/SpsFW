@@ -133,7 +133,7 @@ class Request
         }
     
         if ($this->getRequestUri() === '/api/exchange/1c/users') {
-            file_put_contents('/var/www/next.sps38.pro/.tmp/logs/erp/raw-big.json', $this->content);
+            file_put_contents('/var/www/next.sps38.pro/.tmp/logs/erp/raw-big'. date('Y-m-d_H-i-s') .'.json', $this->content);
         }
     
         $contentType = $this->getHeader('Content-Type');
