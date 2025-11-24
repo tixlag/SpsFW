@@ -8,6 +8,7 @@ use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Exchange\AMQPExchangeType;
 use PhpAmqpLib\Exception\AMQPIOException;
+use PhpAmqpLib\Wire\AMQPTable;
 
 
 class RabbitMQClient
