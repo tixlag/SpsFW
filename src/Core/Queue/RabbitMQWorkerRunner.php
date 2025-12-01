@@ -181,7 +181,7 @@ class RabbitMQWorkerRunner
         // --- /проверка executeAt ---
 
         try {
-            $job = $this->jobRegistry->createJob($jobName, (string)$payload);
+            $job = $this->jobRegistry->createJob($jobName, $payload);
             $handler = $this->jobRegistry->getHandler($jobName);
 
             if ($this->heartbeat) {

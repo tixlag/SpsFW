@@ -101,12 +101,15 @@ class JobRegistry
         return $this->registeredJobs[$jobName]['handlerClass'] ?? null;
     }
 
-    public function createJob(string $jobName, string $payload): JobInterface
+    public function createJob(string $jobName, string|array $payload): JobInterface
     {
         /** @var class-string $jobClass */
         $jobClass = $this->getJobClass($jobName);
         if (!$jobClass) {
             throw new RuntimeException("Unknown job: $jobName");
+        }
+        if (is_array($payload)) {
+            return new $jobClass(...$payload);
         }
         return $jobClass::deserialize($payload);
     }
