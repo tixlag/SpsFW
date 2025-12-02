@@ -106,6 +106,16 @@ class AccessChecker
         }
         $user = Auth::getOrThrow();
 
+        // 402 - id правила Admin
+        if (key_exists(402, $user->accessRules) ) {
+            return;
+        }
+
+        // 613 - id правила забаненного
+        if (key_exists(613, $user->accessRules) ) {
+            throw new AuthorizationException("Ведутся технические работы", 403);
+        }
+
         $problemRules = [];
         if (isset($access_rules_arrays['any'])) {
             foreach ($access_rules_arrays['any'] as $requiredRules) {
