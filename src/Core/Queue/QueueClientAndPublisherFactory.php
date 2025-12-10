@@ -11,13 +11,13 @@ use SpsFW\Core\Workers\WorkerConfig;
 class QueueClientAndPublisherFactory
 {
     private RabbitMQConfig $config;
-    private WorkerConfig $workerConfig;
+    private ?WorkerConfig $workerConfig;
 
-    public function __construct(RabbitMQConfig $config)
+    public function __construct(RabbitMQConfig $config, ?WorkerConfig $workerConfig = null)
     {
         $this->config = $config;
+        $this->workerConfig = $workerConfig;
     }
-    // ... ваш existing code ...
     /**
      * Создаёт базовый publisher. Можно указать exchangeType и exchangeArguments (например для x-delayed-message).
      *
@@ -60,9 +60,9 @@ class QueueClientAndPublisherFactory
     {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
         return $this->create(
-            queueName: $workerConfig['queueName'],
+            queueName: $workerConfig['queue'],
             exchange: $workerConfig['exchange'],
-            routingKey: $workerConfig['routingKey'],
+            routingKey: $workerConfig['routing_key'],
         );
 
     }
