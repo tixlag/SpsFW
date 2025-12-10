@@ -2,6 +2,7 @@
 namespace SpsFW\Core\Queue;
 
 use PhpAmqpLib\Exchange\AMQPExchangeType;
+use SpsFW\Core\Workers\WorkerConfig;
 
 /**
  * Factory builds transport clients and publishers.
@@ -10,6 +11,7 @@ use PhpAmqpLib\Exchange\AMQPExchangeType;
 class QueueClientAndPublisherFactory
 {
     private RabbitMQConfig $config;
+    private WorkerConfig $workerConfig;
 
     public function __construct(RabbitMQConfig $config)
     {
@@ -25,6 +27,7 @@ class QueueClientAndPublisherFactory
      * @param string $exchangeType - e.g. AMQPExchangeType::DIRECT or 'x-delayed-message'
      * @param array $exchangeArguments - аргументы для exchange (например ['x-delayed-type' => 'direct'])
      */
+    #[\Deprecated('Теперь создаем публикатор через createByWorkerName')]
     public function create(string $queueName,
                            string $exchange = '',
                            string $routingKey = '',
@@ -46,6 +49,22 @@ class QueueClientAndPublisherFactory
             config: $cfg
         );
         return new RabbitMQQueuePublisher($client, $routingKey, $exchange);
+    }
+
+    /**
+     * Создает публикатор задач в очередь по ее имени
+     * @param string $workerName - название воркера
+     * @return RabbitMQQueuePublisher
+     */
+    public function createByWorkerName(string $workerName): RabbitMQQueuePublisher
+    {
+        $workerConfig = $this->workerConfig->getQueueConfig($workerName);
+        return $this->create(
+            queueName: $workerConfig['queueName'],
+            exchange: $workerConfig['exchange'],
+            routingKey: $workerConfig['routingKey'],
+        );
+
     }
 
     public function createClient(string $queueName, string $exchange = '', string $routingKey = ''): RabbitMQClient
