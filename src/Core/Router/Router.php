@@ -497,7 +497,9 @@ class Router
             array_shift($matches); // Удаляем полное совпадение
             $counter = 0;
             foreach ($route['params'] as $paramName => $null) {
-                $matchParams[$paramName] = urldecode($matches[$counter] ?? '');
+                // Преобразуем kebab-case в camelCase
+                $convertedParamName = $this->convertKebabToCamelCase($paramName);
+                $matchParams[$convertedParamName] = urldecode($matches[$counter] ?? '');
                 $counter++;
             }
 
@@ -729,8 +731,14 @@ class Router
     ): Response {
         $args = [];
 
+        // Convert exceptParams keys to camelCase for proper matching
+        $convertedExceptParams = [];
+        foreach ($exceptParams as $paramName => $value) {
+            $convertedExceptParams[$this->convertKebabToCamelCase($paramName)] = $value;
+        }
+
         foreach ($matchParams as $routeParamName => $value) {
-            if (!key_exists($routeParamName, $exceptParams)) {
+            if (!key_exists($routeParamName, $convertedExceptParams)) {
                 throw new \RuntimeException(
                     "Не удалось связать параметр '{$routeParamName}' для метода '{$methodName}'"
                 );
@@ -817,6 +825,17 @@ class Router
         ], $status);
     }
 
+
+    /**
+     * Convert kebab-case string to camelCase
+     *
+     * @param string $str
+     * @return string
+     */
+    private function convertKebabToCamelCase(string $str): string
+    {
+        return lcfirst(str_replace('-', '', ucwords($str, '-')));
+    }
 
     private function getControllersDirs(): array
     {
