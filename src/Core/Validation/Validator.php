@@ -34,6 +34,16 @@ class Validator
         $reqParams = Request::getInstance()->{$in->value}();
 
         if ($cachedRules !== null) {
+
+            if (count($cachedRules) === 1 and array_is_list($reqParams)) {
+                foreach (array_keys($cachedRules) as $key) {
+                    if ($cachedRules[$key]['type'] === 'array') {
+                        return self::validateDtoWithCachedRules($dtoClass, [$key => $reqParams], $cachedRules);
+                    }
+                }
+
+            }
+
             return self::validateDtoWithCachedRules($dtoClass, $reqParams, $cachedRules);
         }
 
