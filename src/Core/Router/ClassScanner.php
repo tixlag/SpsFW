@@ -17,7 +17,7 @@ class ClassScanner
         );
 
         foreach ($files as $file) {
-            if ($file->getExtension() !== 'php') {
+            if ($file->getExtension() !== 'php' or str_contains($file->getPath(), '/migrations')) {
                 continue;
             }
 
