@@ -301,11 +301,16 @@ class Router
                 $propertyName = $attributesOpenApi['property'] ?? $property->getName();
 
                 $propertyType = $property->getType();
+                $propertyDefaultValue = $property->getDefaultValue();
 
                 $propertyRules = [];
 
+                if (isset($propertyDefaultValue)) {
+                    $propertyRules['default'] = $propertyDefaultValue;
+                }
+                $propertyRules['real_name'] = $realPropertyName;
+
                 foreach ($attributesOpenApi as $attributeKey => $attributeValue) {
-                    $propertyRules['real_name'] = $realPropertyName;
                     if ($attributeKey === 'ref' || !$propertyType->isBuiltin() || $attributeKey === 'items') {
                         if (!$propertyType->isBuiltin()) {
                             $attributeValue = $propertyType->getName();

@@ -8,6 +8,7 @@ use SpsFW\Core\Exceptions\ValidationException;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Utils\DateTimeHelper;
 use SpsFW\Core\Validation\Enum\ParamsIn;
+use Symfony\Component\Config\Definition\Exception\Exception;
 
 class Validator
 {
@@ -63,13 +64,17 @@ class Validator
 
         foreach ($cachedRules as $propertyName => $rules) {
             $rawValue = $reqParams[$propertyName] ?? null;
-
+            if ( $rawValue === null and (($rules['required'] ?? null) !== [true] ) or ($rules['nullable'] ?? null) === true)  {
+                try {
+                    self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $rules['default'] ?? null); // если не пришло значение, устанавливаем дефолтное или null
+                } catch (Exception $e) {
+                    throw new ValidationException("$propertyName не может быть пустым");
+                }
+                continue;
+            }
             // Обработка вложенных объектов
             if (isset($rules['ref'])) {
-                if ( $rawValue === null and (!isset($rules['required']) or $rules['required'] !== [true]) ) {
-                    self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $rawValue); // присвоили null
-                    continue;
-                }
+
                 if (isset($rules['type']) && $rules['type'] === 'array') {
                     $nestedDtos = [];
 

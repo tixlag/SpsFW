@@ -195,6 +195,8 @@ class DIContainer
 
             if (!empty($args)) {
                 $object->__construct(...$args); // ← ВЫЗЫВАЕМ КОНСТРУКТОР — ДАЖЕ ЕСЛИ ОБЪЕКТ БЫЛ "ПУСТЫМ"
+            } elseif (method_exists($object, '__construct')) {
+                $object->__construct();
             }
 
             $this->singletons[$class] = $object;
