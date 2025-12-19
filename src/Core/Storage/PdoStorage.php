@@ -3,6 +3,7 @@
 namespace SpsFW\Core\Storage;
 
 use PDO;
+use phpseclib3\File\ASN1\Maps\RelativeDistinguishedName;
 use SpsFW\Core\Db\Db;
 use SpsFW\Core\Db\Models\BaseModel;
 
@@ -58,18 +59,29 @@ abstract class PdoStorage
 ");
     }
 
+    public function inTransaction(string $id = 'db'): bool
+    {
+        return $this->getPdo($id)->inTransaction();
+    }
 
-    protected function beginTransaction(string $id = 'db'): void
+    public function beginTransaction(string $id = 'db'): void
     {
         if (!$this->getPdo($id)->inTransaction()) {
             $this->getPdo($id)->beginTransaction();
         }
     }
 
-    protected function commitTransaction(string $id = 'db'): void
+    public function commitTransaction(string $id = 'db'): void
     {
         if ($this->getPdo($id)->inTransaction()) {
             $this->getPdo($id)->commit();
+        }
+    }
+
+    public function rollbackTransaction(string $id = 'db'): void
+    {
+        if ($this->getPdo($id)->inTransaction()) {
+            $this->getPdo($id)->rollBack();
         }
     }
 
