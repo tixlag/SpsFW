@@ -59,14 +59,14 @@ abstract class PdoStorage
     }
 
 
-    protected function beginTransaction(string $id = 'db'): void
+    public function beginTransaction(string $id = 'db'): void
     {
         if (!$this->getPdo($id)->inTransaction()) {
             $this->getPdo($id)->beginTransaction();
         }
     }
 
-    protected function commitTransaction(string $id = 'db'): void
+    public function commitTransaction(string $id = 'db'): void
     {
         if ($this->getPdo($id)->inTransaction()) {
             $this->getPdo($id)->commit();
