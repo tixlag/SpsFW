@@ -9,6 +9,9 @@ use SpsFW\Core\Exceptions\BaseException;
 
 class DIContainer
 {
+    private bool $testMode = false;
+    private array $testBindings = [];
+
     private array $singletons = [];
     private array $compiledMap = [];
 
@@ -43,6 +46,47 @@ class DIContainer
     }
 
     /**
+     * Включить тестовый режим
+     * В тестовом режиме можно переопределять зависимости
+     */
+    public function enableTestMode(): void
+    {
+        $this->testMode = true;
+        $this->testBindings = [];
+    }
+
+    /**
+     * Отключить тестовый режим
+     */
+    public function disableTestMode(): void
+    {
+        $this->testMode = false;
+        $this->testBindings = [];
+    }
+
+    /**
+     * Переопределить зависимость в тестовом режиме
+     *
+     * @param class-string $interface Интерфейс/класс, который переопределяем
+     * @param object $implementation Готовый объект или mock
+     */
+    public function bindForTest(string $interface, object $implementation): void
+    {
+        if (!$this->testMode) {
+            throw new BaseException("Test mode is not enabled. Call enableTestMode() first.");
+        }
+        $this->testBindings[$interface] = $implementation;
+    }
+
+    /**
+     * Очистить singleton кэш (для изоляции тестов)
+     */
+    public function clearSingletons(): void
+    {
+        $this->singletons = [];
+    }
+
+    /**
      * @template T of object
      * @param class-string<T> $class
      * @return T
@@ -50,6 +94,11 @@ class DIContainer
      */
     public function get(string $class): ?object
     {
+        // В тестовом режиме сначала смотрим в testBindings
+        if ($this->testMode && isset($this->testBindings[$class])) {
+            return $this->testBindings[$class];
+        }
+
         // Уже создан — вернуть singleton
         if (isset($this->singletons[$class])) {
             return $this->singletons[$class];
@@ -112,15 +161,25 @@ class DIContainer
     private function createAllDependencies(array $classes, array &$tempObjects): void
     {
         foreach ($classes as $class) {
+
+
+
             if (isset($tempObjects[$class]) || isset($this->singletons[$class])) {
                 continue;
             }
             try {
                 $resolvedClass = $this->resolveAbstract($class);
+                // В тестовом режиме сначала смотрим в testBindings
+
             } catch (\Exception $e) {
                 //todo логгировать, если при создании одного из объектов все сломалось
                 // не получилось создать объект, вставили заглушку, чтобы работать дальше
                 $resolvedClass = $this->createEmptyObject(Config::getDIBinding($class)['class']);
+            }
+            if ($this->testMode && isset($this->testBindings[$class])) {
+                $tempObjects[$class] = $this->testBindings[$class];
+                $tempObjects[$resolvedClass] = $this->testBindings[$class];
+                continue;
             }
 
             if (is_object($resolvedClass)) {
@@ -176,6 +235,11 @@ class DIContainer
     private function initializeObjects(array $tempObjects): void
     {
         foreach ($tempObjects as $class => $object) {
+
+            if ($this->testMode && isset($this->testBindings[$class])) {
+                continue;
+            }
+
             if (isset($this->singletons[$class]) or !isset($this->compiledMap[$class])) {
                 continue;
             }
@@ -316,4 +380,10 @@ class DIContainer
         $reflection = new ReflectionClass($class);
         return $reflection->isAbstract();
     }
+
+
+
+
+
+
 }
