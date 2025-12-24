@@ -102,7 +102,7 @@ class ClassScanner
         $handle = fopen($filePath, "r");
         if ($handle) {
             while (($line = fgets($handle)) !== false) {
-                if (str_starts_with($line, 'namespace')) {
+                if (str_starts_with(trim($line), 'namespace')) {
                     $partsPath = explode(DIRECTORY_SEPARATOR, $filePath);
                     $className = substr(array_pop($partsPath), 0, -4);
                     $parts = explode(' ', $line);
