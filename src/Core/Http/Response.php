@@ -239,7 +239,7 @@ class Response
         return $this;
     }
 
-    private function getBody(): string
+    public function getBody(): string
     {
         return $this->body;
     }

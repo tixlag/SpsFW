@@ -84,5 +84,11 @@ class Auth extends UserAbstract
         return self::$userAuth;
     }
 
+    public static function setForTest($uuid, $code_1c, $accessRules): void
+    {
+        $user =  new self($uuid, $code_1c, $accessRules);
+        $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . AuthTokenUtil::generateJwt($user);
+    }
+
 
 }
