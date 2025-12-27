@@ -37,6 +37,7 @@ class DICacheBuilder
 
         // Анализируем DI-зависимости
         foreach ($classList as $class) {
+            if (str_ends_with($class, 'Test.php') ) continue;
             $binding = Config::getDIBinding($class);
             if (is_array($binding) && isset($binding['class'])) {
                 continue;
