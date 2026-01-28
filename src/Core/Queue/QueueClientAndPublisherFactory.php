@@ -59,10 +59,14 @@ class QueueClientAndPublisherFactory
     public function createByWorkerName(string $workerName): RabbitMQQueuePublisher
     {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
+        $exchangeType = $workerConfig['delayed'] ? 'x-delayed-message' : AMQPExchangeType::DIRECT;
+
         return $this->create(
             queueName: $workerConfig['queue'],
             exchange: $workerConfig['exchange'],
             routingKey: $workerConfig['routing_key'],
+            exchangeType: $exchangeType,
+            exchangeArguments: $workerConfig['exchange_arguments'] ?? []
         );
 
     }
