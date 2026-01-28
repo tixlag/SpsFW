@@ -13,8 +13,10 @@ class QueueClientAndPublisherFactory
     private RabbitMQConfig $config;
     private ?WorkerConfig $workerConfig;
 
-    public function __construct(RabbitMQConfig $config, ?WorkerConfig $workerConfig = null)
-    {
+    public function __construct(
+        RabbitMQConfig $config,
+        ?WorkerConfig $workerConfig = null,
+    ) {
         $this->config = $config;
         $this->workerConfig = $workerConfig;
     }
@@ -27,18 +29,18 @@ class QueueClientAndPublisherFactory
      * @param string $exchangeType - e.g. AMQPExchangeType::DIRECT or 'x-delayed-message'
      * @param array $exchangeArguments - аргументы для exchange (например ['x-delayed-type' => 'direct'])
      */
-    #[\Deprecated('Теперь создаем публикатор через createByWorkerName')]
-    public function create(string $queueName,
-                           string $exchange = '',
-                           string $routingKey = '',
-                           string $exchangeType = AMQPExchangeType::DIRECT,
-                           array $exchangeArguments = []
-    ): RabbitMQQueuePublisher
-    {
+    #[\Deprecated("Теперь создаем публикатор через createByWorkerName")]
+    public function create(
+        string $queueName,
+        string $exchange = "",
+        string $routingKey = "",
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+    ): RabbitMQQueuePublisher {
         $cfg = array_merge($this->buildConfig(), [
-            'exchange_arguments' => $exchangeArguments,
+            "exchange_arguments" => $exchangeArguments,
             // по умолчанию указываем queue_arguments пустыми
-            'queue_arguments' => []
+            "queue_arguments" => [],
         ]);
 
         $client = new RabbitMQClient(
@@ -46,7 +48,7 @@ class QueueClientAndPublisherFactory
             exchangeType: $exchangeType,
             queue: $queueName,
             routingKey: $routingKey,
-            config: $cfg
+            config: $cfg,
         );
         return new RabbitMQQueuePublisher($client, $routingKey, $exchange);
     }
@@ -56,29 +58,53 @@ class QueueClientAndPublisherFactory
      * @param string $workerName - название воркера
      * @return RabbitMQQueuePublisher
      */
-    public function createByWorkerName(string $workerName): RabbitMQQueuePublisher
-    {
+    public function createByWorkerName(
+        string $workerName,
+    ): RabbitMQQueuePublisher {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
-        $exchangeType = $workerConfig['delayed'] ? 'x-delayed-message' : AMQPExchangeType::DIRECT;
+        $exchangeType = $workerConfig["delayed"]
+            ? "x-delayed-message"
+            : AMQPExchangeType::DIRECT;
 
         return $this->create(
-            queueName: $workerConfig['queue'],
-            exchange: $workerConfig['exchange'],
-            routingKey: $workerConfig['routing_key'],
+            queueName: $workerConfig["queue"],
+            exchange: $workerConfig["exchange"],
+            routingKey: $workerConfig["routing_key"],
             exchangeType: $exchangeType,
-            exchangeArguments: $workerConfig['exchange_arguments'] ?? []
+            exchangeArguments: $workerConfig["exchange_arguments"] ?? [],
         );
-
     }
 
-    public function createClient(string $queueName, string $exchange = '', string $routingKey = ''): RabbitMQClient
+    public function createClientByWorkerName(string $workerName): RabbitMQClient
     {
+        $workerConfig = $this->workerConfig->getQueueConfig($workerName);
+        $exchangeType = $workerConfig["delayed"]
+            ? "x-delayed-message"
+            : AMQPExchangeType::DIRECT;
+
+        return new RabbitMQClient(
+            exchange: $workerConfig["exchange"],
+            exchangeType: $exchangeType,
+            queue: $workerConfig["queue"],
+            routingKey: $workerConfig["routing_key"],
+            config: array_merge($this->buildConfig(), [
+                "exchange_arguments" =>
+                    $workerConfig["exchange_arguments"] ?? [],
+            ]),
+        );
+    }
+
+    public function createClient(
+        string $queueName,
+        string $exchange = "",
+        string $routingKey = "",
+    ): RabbitMQClient {
         return new RabbitMQClient(
             exchange: $exchange,
             exchangeType: AMQPExchangeType::DIRECT,
             queue: $queueName,
             routingKey: $routingKey,
-            config: $this->buildConfig()
+            config: $this->buildConfig(),
         );
     }
 
@@ -99,26 +125,28 @@ class QueueClientAndPublisherFactory
      */
     public function createWithRetry(
         string $queueName,
-        string $exchange = '',
-        string $routingKey = '',
+        string $exchange = "",
+        string $routingKey = "",
         int $retryDelayMs = 10000,
         int $maxRetries = 5,
         string $exchangeType = AMQPExchangeType::DIRECT,
-        array $exchangeArguments = []
-    ): RabbitMQQueuePublisher
-    {
-        $dlxExchange = $exchange . '.dlx';
-        $retryQueue = $queueName . '.retry';
-        $retryRouting = $routingKey . '.retry';
+        array $exchangeArguments = [],
+    ): RabbitMQQueuePublisher {
+        $dlxExchange = $exchange . ".dlx";
+        $retryQueue = $queueName . ".retry";
+        $retryRouting = $routingKey . ".retry";
 
         // main queue DLX -> dlxExchange
-        $mainArgs = ['x-dead-letter-exchange' => $dlxExchange, 'x-dead-letter-routing-key' => $retryRouting];
+        $mainArgs = [
+            "x-dead-letter-exchange" => $dlxExchange,
+            "x-dead-letter-routing-key" => $retryRouting,
+        ];
 
         // retry queue sends messages back to main exchange after TTL
         $retryArgs = [
-            'x-dead-letter-exchange' => $exchange,
-            'x-dead-letter-routing-key' => $routingKey,
-            'x-message-ttl' => $retryDelayMs
+            "x-dead-letter-exchange" => $exchange,
+            "x-dead-letter-routing-key" => $routingKey,
+            "x-message-ttl" => $retryDelayMs,
         ];
 
         // create main client (could be x-delayed-message)
@@ -128,13 +156,19 @@ class QueueClientAndPublisherFactory
             queue: $queueName,
             routingKey: $routingKey,
             config: array_merge($this->buildConfig(), [
-                'exchange_arguments' => $exchangeArguments,
-                'queue_arguments' => $mainArgs
-            ])
+                "exchange_arguments" => $exchangeArguments,
+                "queue_arguments" => $mainArgs,
+            ]),
         );
 
         // ensure dlx exchange exists (direct)
-        $dlxClient = new RabbitMQClient($dlxExchange, AMQPExchangeType::DIRECT, '', '', $this->buildConfig());
+        $dlxClient = new RabbitMQClient(
+            $dlxExchange,
+            AMQPExchangeType::DIRECT,
+            "",
+            "",
+            $this->buildConfig(),
+        );
 
         // create retry queue bound to dlxExchange
         $retryClient = new RabbitMQClient(
@@ -142,7 +176,9 @@ class QueueClientAndPublisherFactory
             AMQPExchangeType::DIRECT,
             $retryQueue,
             $retryRouting,
-            array_merge($this->buildConfig(), ['queue_arguments' => $retryArgs])
+            array_merge($this->buildConfig(), [
+                "queue_arguments" => $retryArgs,
+            ]),
         );
 
         return new RabbitMQQueuePublisher($mainClient, $routingKey, $exchange);
@@ -151,16 +187,16 @@ class QueueClientAndPublisherFactory
     private function buildConfig(): array
     {
         return [
-            'host' => $this->config->host,
-            'port' => $this->config->port,
-            'user' => $this->config->user,
-            'password' => $this->config->password,
-            'vhost' => $this->config->vhost,
-            'connection_timeout' => $this->config->connectionTimeout,
-            'read_write_timeout' => $this->config->readWriteTimeout,
-            'heartbeat' => $this->config->heartbeat,
-            'exchange_durable' => true,
-            'queue_durable' => true,
+            "host" => $this->config->host,
+            "port" => $this->config->port,
+            "user" => $this->config->user,
+            "password" => $this->config->password,
+            "vhost" => $this->config->vhost,
+            "connection_timeout" => $this->config->connectionTimeout,
+            "read_write_timeout" => $this->config->readWriteTimeout,
+            "heartbeat" => $this->config->heartbeat,
+            "exchange_durable" => true,
+            "queue_durable" => true,
         ];
     }
 }
