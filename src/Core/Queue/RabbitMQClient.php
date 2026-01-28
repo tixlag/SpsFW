@@ -67,17 +67,19 @@ class RabbitMQClient
 
             // Объявление обменника
             if ($exchange) {
-                // Если переданы аргументы из конфигурации — преобразуем в AMQPTable
-                $exchangeArgs = $config['exchange_arguments'] ?? null;
-                if (is_array($exchangeArgs)) {
-                    $exchangeArgs = new AMQPTable($exchangeArgs);
-                }
 
                 // Специальный случай: delayed exchange
                 if ($exchangeType === 'x-delayed-message') {
-                    // Если явным образом не указали аргументы, установим x-delayed-type
-                    $exchangeArgs = $exchangeArgs ?? new AMQPTable(['x-delayed-type' => 'direct']);
+
+                    if (is_array($config['exchange_arguments'])) {
+                        $config['exchange_arguments'] = array_merge($config['exchange_arguments'], ['x-delayed-type' => 'direct']);
+                    } else {
+                        $config['exchange_arguments'] = ['x-delayed-type' => 'direct'];
+                    }
+
                 }
+
+                $exchangeArgs = new AMQPTable($config['exchange_arguments'] ?? null);
 
                 // exchange_declare(
                 //   string $exchange, string $type, bool $passive = false,
