@@ -14,6 +14,7 @@ use ReflectionMethod;
 use ReflectionNamedType;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
+use SpsFW\Core\Attributes\MemoryLimit;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
@@ -33,6 +34,7 @@ use SpsFW\Core\Http\Response;
 use SpsFW\Core\Middleware\MiddlewareInterface;
 use SpsFW\Core\Validation\Enum\ParamsIn;
 use SpsFW\Core\Validation\Validator;
+use SpsFW\Core\Router\PathManager;
 
 //use SpsFW\Api\Metrics\Metrics;
 
@@ -86,11 +88,12 @@ class Router
     public function __construct(
         ?string $controllersDir = null,
         protected bool $useCache = true,
-        protected string $cacheDir = __DIR__ . '/../../../../../../.cache/',
+        protected string $cacheDir = '',
         array $dependencies = []
     ) {
-//        $this->cacheDir =  PathManager::getCachePath();
-//        $this->controllersDirs = PathManager::getControllersDirs();
+        if (empty($this->cacheDir)) {
+            $this->cacheDir = __DIR__ . '/../../../.cache/';
+        }
         PathManager::ensureDirectoryExists($this->cacheDir);
 //        $scannerDirs = [
 //            __DIR__ . '/../../',              // фреймворк
@@ -265,6 +268,14 @@ class Router
                     'rules' => $this->extractValidationRules($dtoClass), // Извлекаем правила
                 ];
             }
+            // Check for MemoryLimit attribute
+            $memoryLimitAttributes = $method->getAttributes(MemoryLimit::class);
+            $memoryLimit = null;
+            if (!empty($memoryLimitAttributes)) {
+                $memoryLimitAttribute = $memoryLimitAttributes[0]->newInstance();
+                $memoryLimit = $memoryLimitAttribute->limit;
+            }
+            
             foreach ($httpMethods as $httpMethod) {
                 $httpMethodString = is_string($httpMethod) ? $httpMethod : $httpMethod->value;
                 $key = ($httpMethodString) . ':' . $fullPath;
@@ -278,6 +289,7 @@ class Router
                     'middlewares' => $middlewares,
                     'access_rules' => $accessRules,
                     'dtos' => $validationParams,
+                    'memory_limit' => $memoryLimit,
                 ];
             }
         }
@@ -555,7 +567,7 @@ class Router
 
         // Выполняем метод контроллера
         $controller = $this->createControllerInstance($route['controller']);
-        $response = $this->executeControllerMethod($controller, $route['method'], $route['params'], $route['match_params'], $route['dtos']);
+        $response = $this->executeControllerMethod($controller, $route['method'], $route['params'], $route['match_params'], $route['dtos'], $route['memory_limit'] ?? null);
 
         // Применяем middleware после выполнения контроллера (в обратном порядке)
         foreach (array_reverse($middlewares) as $middleware) {
@@ -733,7 +745,15 @@ class Router
         array $exceptParams,
         array $matchParams,
         ?array $dtoParams = [],
+        ?string $memoryLimit = null,
     ): Response {
+        $previousMemoryLimit = null;
+        
+        // Apply memory limit if specified in route
+        if ($memoryLimit !== null) {
+            ini_set('memory_limit', $memoryLimit);
+        }
+        
         $args = [];
 
         // Convert exceptParams keys to camelCase for proper matching
@@ -754,7 +774,7 @@ class Router
             $args[] = Validator::validate($dtoParam['in'], $dtoParam['dto'], $dtoParam['rules']);
         }
 
-        $result = $controller->{$methodName}(...$args);
+            $result = $controller->{$methodName}(...$args);
 //        $reflectionMethod = new ReflectionMethod($controller, $methodName);
 //        $parameters = $reflectionMethod->getParameters();
 //        $args = [];

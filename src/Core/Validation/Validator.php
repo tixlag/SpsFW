@@ -55,7 +55,7 @@ class Validator
     /**
      * Валидация с использованием кэшированных правил
      */
-    private static function validateDtoWithCachedRules(string $dtoClass, array $reqParams, array $cachedRules): object
+    private static function validateDtoWithCachedRules(string $dtoClass,  ?array $reqParams, array $cachedRules): object
     {
 //        /** @var $dtoClass $dto */
         $dtoReflection = new ReflectionClass($dtoClass);
@@ -67,6 +67,7 @@ class Validator
             if ( $rawValue === null and (($rules['required'] ?? null) !== [true] ) or ($rules['nullable'] ?? null) === true)  {
                 try {
                     self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $rules['default'] ?? null); // если не пришло значение, устанавливаем дефолтное или null
+                    if (empty($reqParams)) throw new \Exception(); // бросаем, если вообще пустое тело, а мы что-то ждем
                 } catch (Exception $e) {
                     throw new ValidationException("$propertyName не может быть пустым");
                 }
