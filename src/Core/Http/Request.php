@@ -66,11 +66,11 @@ class Request
     }
 
     /**
-     * @return array<string, string>
+     * @return array<string, mixed>
      */
     public function getGet(): array
     {
-        return $this->get;
+        return $this->convertTypes($this->get);
     }
 
     /**
@@ -145,5 +145,61 @@ class Request
         $uri = $_SERVER['REQUEST_URI'] ?? '/';
         $path = explode('?', $uri)[0];
         return $path === '' ? '/' : $path;
+    }
+
+    /**
+     * Convert string values in an array to their appropriate types
+     *
+     * @param array $data
+     * @return array
+     */
+    private function convertTypes(array $data): array
+    {
+        $result = [];
+        foreach ($data as $key => $value) {
+            if (is_array($value)) {
+                $result[$key] = $this->convertTypes($value);
+            } else {
+                $result[$key] = $this->convertType($value);
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Convert a single value to its appropriate type
+     *
+     * @param string $value
+     * @return mixed
+     */
+    private function convertType(string $value): mixed
+    {
+        // Check for boolean values
+        if ($value === 'true') {
+            return true;
+        }
+        
+        if ($value === 'false') {
+            return false;
+        }
+        
+        // Check for null
+        if ($value === 'null') {
+            return null;
+        }
+        
+        // Check for numeric values
+        if (is_numeric($value)) {
+            // Check if it's an integer
+            if (ctype_digit($value) || (ltrim($value, '-+') !== '' && ctype_digit(ltrim($value, '+-')))) {
+                return (int) $value;
+            }
+            
+            // It's a float
+            return (float) $value;
+        }
+        
+        // Return as string if no conversion applies
+        return $value;
     }
 }
