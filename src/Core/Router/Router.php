@@ -14,7 +14,7 @@ use ReflectionMethod;
 use ReflectionNamedType;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
-use SpsFW\Core\Attributes\MemoryLimit;
+use SpsFW\Core\Attributes\PhpIni;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
@@ -267,12 +267,12 @@ class Router
                     'rules' => $this->extractValidationRules($dtoClass), // Извлекаем правила
                 ];
             }
-            // Check for MemoryLimit attribute
-            $memoryLimitAttributes = $method->getAttributes(MemoryLimit::class);
-            $memoryLimit = null;
-            if (!empty($memoryLimitAttributes)) {
-                $memoryLimitAttribute = $memoryLimitAttributes[0]->newInstance();
-                $memoryLimit = $memoryLimitAttribute->limit;
+            // Check for PhpIni attribute
+            $phpIniAttributes = $method->getAttributes(PhpIni::class);
+            $phpIniSettings = null;
+            if (!empty($phpIniAttributes)) {
+                $phpIniAttribute = $phpIniAttributes[0]->newInstance();
+                $phpIniSettings = $phpIniAttribute->settings;
             }
             
             foreach ($httpMethods as $httpMethod) {
@@ -288,7 +288,7 @@ class Router
                     'middlewares' => $middlewares,
                     'access_rules' => $accessRules,
                     'dtos' => $validationParams,
-                    'memory_limit' => $memoryLimit,
+                    'php_ini_settings' => $phpIniSettings,
                 ];
             }
         }
@@ -566,7 +566,7 @@ class Router
 
         // Выполняем метод контроллера
         $controller = $this->createControllerInstance($route['controller']);
-        $response = $this->executeControllerMethod($controller, $route['method'], $route['params'], $route['match_params'], $route['dtos'], $route['memory_limit'] ?? null);
+        $response = $this->executeControllerMethod($controller, $route['method'], $route['params'], $route['match_params'], $route['dtos'], $route['php_ini_settings'] ?? null);
 
         // Применяем middleware после выполнения контроллера (в обратном порядке)
         foreach (array_reverse($middlewares) as $middleware) {
@@ -744,13 +744,16 @@ class Router
         array $exceptParams,
         array $matchParams,
         ?array $dtoParams = [],
-        ?string $memoryLimit = null,
+        ?array $phpIniSettings = null,
     ): Response {
-        $previousMemoryLimit = null;
+        $previousIniValues = [];
         
-        // Apply memory limit if specified in route
-        if ($memoryLimit !== null) {
-            ini_set('memory_limit', $memoryLimit);
+        // Apply PHP INI settings if specified in route
+        if ($phpIniSettings !== null && is_array($phpIniSettings) && !empty($phpIniSettings)) {
+            foreach ($phpIniSettings as $setting => $value) {
+                $previousIniValues[$setting] = ini_get($setting);
+                ini_set($setting, $value);
+            }
         }
         
         $args = [];
@@ -773,7 +776,15 @@ class Router
             $args[] = Validator::validate($dtoParam['in'], $dtoParam['dto'], $dtoParam['rules']);
         }
 
+//        try {
             $result = $controller->{$methodName}(...$args);
+//        }
+//        finally {
+//            // Restore previous INI settings if they were changed
+//            foreach ($previousIniValues as $setting => $previousValue) {
+//                ini_set($setting, $previousValue);
+//            }
+//        }
 //        $reflectionMethod = new ReflectionMethod($controller, $methodName);
 //        $parameters = $reflectionMethod->getParameters();
 //        $args = [];
@@ -811,7 +822,7 @@ class Router
             return Response::json($result);
         }
 
-        // По умолчанию возвращаем успешный пустой ответ
+        // По умолчанию возвращаем успешный пустый ответ
         return new Response();
     }
 
