@@ -88,12 +88,11 @@ class Router
     public function __construct(
         ?string $controllersDir = null,
         protected bool $useCache = true,
-        protected string $cacheDir = '',
+        protected string $cacheDir = __DIR__ . '/../../../../../../.cache/',
         array $dependencies = []
     ) {
-        if (empty($this->cacheDir)) {
-            $this->cacheDir = __DIR__ . '/../../../.cache/';
-        }
+//        $this->cacheDir =  PathManager::getCachePath();
+//        $this->controllersDirs = PathManager::getControllersDirs();
         PathManager::ensureDirectoryExists($this->cacheDir);
 //        $scannerDirs = [
 //            __DIR__ . '/../../',              // фреймворк
