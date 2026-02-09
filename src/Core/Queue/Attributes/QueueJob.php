@@ -8,6 +8,7 @@ use Attribute;
 class QueueJob
 {
     public function __construct(
-        public string $name
+        public string $name,
+        public ?string $handlerClass = null
     ) {}
 }

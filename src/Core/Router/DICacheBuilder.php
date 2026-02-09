@@ -156,12 +156,16 @@ class DICacheBuilder
                 if ($attrName === \SpsFW\Core\Queue\Attributes\QueueJob::class) {
                     $args = $attr->getArguments();
                     $jobName = $args[0] ?? null;
+                    $handlerClass = $args[1] ?? null;
                     if ($jobName) {
                         if (!isset($this->jobRegistryMap[$jobName])) {
                             $this->jobRegistryMap[$jobName] = [];
                             $this->jobRegistryMap[$jobName]['jobClass'] = $class;
                         } else {
                             $this->jobRegistryMap[$jobName]['jobClass'] = $class;
+                        }
+                        if ($handlerClass) {
+                            $this->jobRegistryMap[$jobName]['handlerClass'] = $handlerClass;
                         }
                     }
                 }
