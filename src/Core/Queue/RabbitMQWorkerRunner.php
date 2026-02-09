@@ -6,6 +6,7 @@ use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
 use SpsFW\Core\Queue\Heartbeat\WorkerStrategyInterface;
+use SpsFW\Core\Queue\LargeMessage\LargeMessageHandlerInterface;
 
 
 class RabbitMQWorkerRunner
@@ -34,6 +35,14 @@ class RabbitMQWorkerRunner
         $this->jobRegistry = $jobRegistry ?? JobRegistry::loadFromCache();
         $this->heartbeat = $heartbeat;
         $this->strategy = $strategy;
+    }
+
+    /**
+     * Get the large message handler for chunk assembly.
+     */
+    public function getLargeMessageHandler(): LargeMessageHandlerInterface
+    {
+        return $this->client->getLargeMessageHandler();
     }
 
     public function run(): void
@@ -104,6 +113,14 @@ class RabbitMQWorkerRunner
     private function processMessage(AMQPMessage $message): void
     {
         $decoded = json_decode($message->getBody(), true);
+
+        // --- Handle chunked messages ---
+        if ($this->client->isChunkedMessage($decoded)) {
+            $this->handleChunkedMessage($decoded, $message);
+            return;
+        }
+        // --- /handle chunked messages ---
+
         $jobName = $decoded['jobName'] ?? null;
         $payload = $decoded['payload'] ?? null;
 
@@ -115,14 +132,75 @@ class RabbitMQWorkerRunner
             return;
         }
 
+        $this->executeJob($jobName, $payload, $message);
+    }
+
+    /**
+     * Handle a chunked message by assembling all chunks before processing.
+     */
+    private function handleChunkedMessage(array $chunk, AMQPMessage $message): void
+    {
+        $handler = $this->getLargeMessageHandler();
+        $messageId = $chunk['meta']['messageId'] ?? null;
+
+        if (!$messageId) {
+            error_log('Chunked message missing messageId, rejecting');
+            $message->nack(false, false);
+            $this->stats['failed']++;
+            return;
+        }
+
+        try {
+            $isComplete = $handler->addChunk($chunk);
+
+            if (!$isComplete) {
+                // Not all chunks received yet, wait for more
+                $message->ack();
+                return;
+            }
+
+            // All chunks received, assemble the payload
+            $assembledPayload = $handler->getAssembledPayload($messageId);
+
+            if ($assembledPayload === null) {
+                throw new \RuntimeException("Failed to assemble chunks for message $messageId");
+            }
+
+            $this->stats['processed']++;
+
+            $jobName = $assembledPayload['jobName'] ?? null;
+            $payload = $assembledPayload['payload'] ?? null;
+
+            if (!$jobName || !$payload) {
+                $message->nack();
+                $this->stats['failed']++;
+                return;
+            }
+
+            // Clear assembly buffer after successful processing
+            $handler->clearAssembly($messageId);
+
+            $this->executeJob($jobName, $payload, $message);
+
+        } catch (\Throwable $e) {
+            error_log('Error processing chunked message: ' . $e->getMessage());
+            $handler->clearAssembly($messageId);
+            $message->nack(false, false);
+            $this->stats['failed']++;
+        }
+    }
+
+    /**
+     * Execute a job with the given payload.
+     */
+    private function executeJob(string $jobName, mixed $payload, AMQPMessage $message): void
+    {
         // --- Проверка executeAt (страховка на стороне consumer) ---
         $executeAtStr = null;
 
-// meta на верхнем уровне
-        if (!empty($decoded['meta']['executeAt'])) {
-            $executeAtStr = $decoded['meta']['executeAt'];
-        } // запасной вариант — meta внутри payload
-        elseif (is_array($payload) && !empty($payload['meta']['executeAt'])) {
+        // meta на верхнем уровне - нужно брать из входящего decoded если это отложенное сообщение
+        // Для обычных сообщений executeAt может быть в meta верхнего уровня
+        if (!empty($payload['meta']['executeAt'])) {
             $executeAtStr = $payload['meta']['executeAt'];
         }
 
@@ -139,14 +217,14 @@ class RabbitMQWorkerRunner
                 if ($diffSeconds > 1) {
 
                     // защита от бесконечного ping-pong
-                    $delayAttempts = $decoded['meta']['delayAttempts'] ?? 0;
+                    $delayAttempts = $payload['meta']['delayAttempts'] ?? 0;
                     if ($delayAttempts >= 3) {
                         error_log('Max delayAttempts reached, processing job normally');
                     } else {
                         $delayMs = (int)($diffSeconds * 1000);
 
                         // увеличиваем счётчик
-                        $decoded['meta']['delayAttempts'] = $delayAttempts + 1;
+                        $payload['meta']['delayAttempts'] = $delayAttempts + 1;
 
                         // routing key
                         $routingKey = '';
@@ -166,7 +244,7 @@ class RabbitMQWorkerRunner
                         ];
 
                         try {
-                            $this->client->publish($decoded, $properties, $routingKey);
+                            $this->client->publish($payload, $properties, $routingKey);
                         } catch (\Throwable $e) {
                             error_log('Failed to republish early message with x-delay: ' . $e->getMessage());
                             $message->nack(false, true);
@@ -182,14 +260,14 @@ class RabbitMQWorkerRunner
                 }
 
                 // время наступило — чистим executeAt, чтобы больше не мешал
-                unset($decoded['meta']['executeAt']);
+                unset($payload['meta']['executeAt']);
 
             } catch (\Throwable $e) {
                 error_log('Invalid executeAt format: ' . $e->getMessage());
                 // продолжаем обычную обработку
             }
         }
-// --- /проверка executeAt ---
+    // --- /проверка executeAt ---
 
 
         try {

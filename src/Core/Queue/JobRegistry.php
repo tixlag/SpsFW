@@ -108,8 +108,11 @@ class JobRegistry
         if (!$jobClass) {
             throw new RuntimeException("Unknown job: $jobName");
         }
+
+        // Always use deserialize to properly restore nested objects (DTOs)
+        // This ensures EmployeesExchange1CDto and other nested types are correctly restored
         if (is_array($payload)) {
-            return new $jobClass(...$payload);
+            $payload = json_encode($payload, JSON_UNESCAPED_UNICODE);
         }
         return $jobClass::deserialize($payload);
     }

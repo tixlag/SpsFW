@@ -9,6 +9,8 @@ use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Exchange\AMQPExchangeType;
 use PhpAmqpLib\Exception\AMQPIOException;
 use PhpAmqpLib\Wire\AMQPTable;
+use SpsFW\Core\Queue\LargeMessage\ChunkedMessageHandler;
+use SpsFW\Core\Queue\LargeMessage\LargeMessageHandlerInterface;
 
 
 class RabbitMQClient
@@ -19,6 +21,7 @@ class RabbitMQClient
     private string $queue;
     private string $routingKey;
     private string $consumerTag = '';
+    private ?LargeMessageHandlerInterface $largeMessageHandler;
 
     /**
      * Инициализация подключения к RabbitMQ
@@ -28,6 +31,7 @@ class RabbitMQClient
      * @param string $queue Название очереди
      * @param string $routingKey Ключ маршрутизации
      * @param array|null $config Конфигурация подключения
+     * @param LargeMessageHandlerInterface|null Обработчик для больших сообщений
      * @throws Exception
      */
     public function __construct(
@@ -35,9 +39,11 @@ class RabbitMQClient
         string $exchangeType = AMQPExchangeType::DIRECT,
         string $queue = '',
         string $routingKey = '',
-        ?array $config = null
+        ?array $config = null,
+        ?LargeMessageHandlerInterface $largeMessageHandler = null
     )
     {
+        $this->largeMessageHandler = $largeMessageHandler ?? new ChunkedMessageHandler();
         //$this->validateConfig($config);
         $this->exchange = $exchange;
         $this->queue = $queue;
@@ -136,6 +142,12 @@ class RabbitMQClient
         $routingKey = $routingKey ?? $this->routingKey;
         $exchange = $exchange ?? $this->exchange;
 
+        // Check if we need to chunk the message
+        if ($this->largeMessageHandler && $this->largeMessageHandler->needsChunking($data)) {
+            $this->publishChunked($data, $properties, $routingKey, $exchange);
+            return;
+        }
+
         $message = new AMQPMessage(
             json_encode($data, JSON_UNESCAPED_UNICODE),
             array_merge([
@@ -145,6 +157,37 @@ class RabbitMQClient
         );
 
         $this->channel->basic_publish($message, $exchange, $routingKey);
+    }
+
+    /**
+     * Publish a message that exceeds size limits by splitting into chunks.
+     *
+     * @param array $data The payload to chunk and publish
+     * @param array $properties AMQP message properties
+     * @param string|null $routingKey Routing key override
+     * @param string|null $exchange Exchange override
+     */
+    private function publishChunked(array $data, array $properties, ?string $routingKey, ?string $exchange): void
+    {
+        $chunks = $this->largeMessageHandler->splitIntoChunks($data);
+
+        foreach ($chunks as $chunk) {
+            $message = new AMQPMessage(
+                json_encode($chunk, JSON_UNESCAPED_UNICODE),
+                array_merge([
+                    'content_type' => 'application/json',
+                    'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
+                    'message_id' => $chunk['meta']['messageId'],
+                    'headers' => [
+                        'x-chunk-index' => $chunk['meta']['chunkIndex'],
+                        'x-total-chunks' => $chunk['meta']['totalChunks'],
+                        'x-is-chunked' => true,
+                    ]
+                ], $properties)
+            );
+
+            $this->channel->basic_publish($message, $exchange, $routingKey);
+        }
     }
 
     public function startConsuming(callable $callback, ?string $queue = null, bool $noAck = false): void
@@ -264,5 +307,26 @@ class RabbitMQClient
     public function __destruct()
     {
         $this->close();
+    }
+
+    /**
+     * Get the large message handler for chunk reassembly.
+     *
+     * @return LargeMessageHandlerInterface
+     */
+    public function getLargeMessageHandler(): LargeMessageHandlerInterface
+    {
+        return $this->largeMessageHandler;
+    }
+
+    /**
+     * Check if a message body represents a chunk.
+     *
+     * @param array $body Decoded message body
+     * @return bool True if this is a chunk
+     */
+    public function isChunkedMessage(array $body): bool
+    {
+        return isset($body['meta']['isChunked']) && $body['meta']['isChunked'] === true;
     }
 }

@@ -125,6 +125,7 @@ class DICacheBuilder
         file_put_contents($this->cachePath . '/compiled_di.php', $php);
     }
 
+
     private function writeJobRegistryMap(): void
     {
         $export = var_export($this->jobRegistryMap, true);
