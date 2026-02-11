@@ -55,16 +55,23 @@ class Validator
     /**
      * Валидация с использованием кэшированных правил
      */
-    private static function validateDtoWithCachedRules(string $dtoClass,  ?array $reqParams, array $cachedRules): object
+    private static function validateDtoWithCachedRules(string $dtoClass, array|string|null $reqParams, array $cachedRules): ?object
     {
 //        /** @var $dtoClass $dto */
         $dtoReflection = new ReflectionClass($dtoClass);
+
+        if ($dtoReflection->isEnum()) {
+            if ($reqParams === null) {
+                return null;
+            }
+            return $dtoClass::from($reqParams);
+        }
         $dto = $dtoReflection->newInstanceWithoutConstructor();
 
 
         foreach ($cachedRules as $propertyName => $rules) {
             $rawValue = $reqParams[$propertyName] ?? null;
-            if ( $rawValue === null and (($rules['required'] ?? null) !== [true] ) or ($rules['nullable'] ?? null) === true)  {
+            if ($rawValue === null and (($rules['required'] ?? null) !== [true]) or ($rules['nullable'] ?? null) === true) {
                 try {
                     self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $rules['default'] ?? null); // если не пришло значение, устанавливаем дефолтное или null
                     if (empty($reqParams)) throw new \Exception(); // бросаем, если вообще пустое тело, а мы что-то ждем
@@ -253,10 +260,11 @@ class Validator
      */
     private static function validateOpenApi(
         string $propertyName,
-        mixed $rawValue,
+        mixed  $rawValue,
         string $ruleName,
-        mixed $ruleValue
-    ): mixed {
+        mixed  $ruleValue
+    ): mixed
+    {
         switch ($ruleName) {
             case 'required':
                 if ($ruleValue[0] === true && empty($rawValue) && $rawValue !== [] && $rawValue !== 0) {
