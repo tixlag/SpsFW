@@ -102,7 +102,20 @@ DLQ топология:
 
 Каждый запущенный процесс получает `workerInstanceId` в формате:
 
-`<workerId>@<hostname>:<pid>:<startedAt>`
+`<workerId>.<hostname>.<pid>.<startedAt>.<random>`
+
+### Читаемый `consumerTag`
+
+`RabbitMQWorkerRunner` теперь передает в `RabbitMQClient` осмысленный тег потребителя в формате:
+
+`ct.<project>.<workerId>.<queue>.<hostname>.<pid>.<script>.<rand>`
+
+Это позволяет сразу видеть:
+
+- какой проект читает очередь
+- какой `workerId` обрабатывает сообщения
+- из какой очереди идет чтение
+- на каком хосте/процессе запущен consumer
 
 ### Что теперь хранится в heartbeat
 
@@ -241,6 +254,8 @@ class MyJobHandler implements JobHandlerInterface
 
 - если `monolog/monolog` установлен, используется `Monolog\Logger` + JSON formatter
 - если пакет еще не установлен, автоматически используется fallback на `FileLogger`
+- runtime-логи воркера пишутся в `<projectRoot>/log/workers/<workerId>.log`
+- в клиентском `bin/workers/worker.php` bootstrap-события выводятся в `stdout/stderr` (для просмотра через `journalctl -u <service>`)
 
 ---
 

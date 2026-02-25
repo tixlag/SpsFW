@@ -197,10 +197,15 @@ class RabbitMQClient
         }
     }
 
-    public function startConsuming(callable $callback, ?string $queue = null, bool $noAck = false): void
+    public function startConsuming(
+        callable $callback,
+        ?string $queue = null,
+        bool $noAck = false,
+        ?string $consumerTag = null
+    ): void
     {
         $queue = $queue ?? $this->queue;
-        $this->consumerTag = 'consumer_' . getmypid() . '_' . bin2hex(random_bytes(4));
+        $this->consumerTag = $this->resolveConsumerTag($consumerTag);
 
         $this->channel->basic_consume(
             $queue,
@@ -361,6 +366,31 @@ class RabbitMQClient
     public function getConsumerTag(): string
     {
         return $this->consumerTag;
+    }
+
+    private function resolveConsumerTag(?string $consumerTag): string
+    {
+        $candidate = is_string($consumerTag) ? trim($consumerTag) : '';
+        if ($candidate === '') {
+            $pid = getmypid() ?: 0;
+            $candidate = sprintf('consumer.%d.%s', $pid, $this->generateRandomSuffix(4));
+        }
+
+        $candidate = preg_replace('/[^a-zA-Z0-9_.:-]/', '_', $candidate) ?: 'consumer';
+        if (strlen($candidate) > 255) {
+            $candidate = substr($candidate, 0, 255);
+        }
+
+        return $candidate;
+    }
+
+    private function generateRandomSuffix(int $bytes = 4): string
+    {
+        try {
+            return bin2hex(random_bytes($bytes));
+        } catch (\Throwable) {
+            return (string)mt_rand(10000000, 99999999);
+        }
     }
 
     private function toAmqpTable(mixed $value): ?AMQPTable

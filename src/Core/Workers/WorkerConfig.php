@@ -2,6 +2,8 @@
 
 namespace SpsFW\Core\Workers;
 
+use InvalidArgumentException;
+
 class WorkerConfig
 {
     /**
@@ -24,6 +26,10 @@ class WorkerConfig
      */
     public function getConfig(string $workerName): array
     {
+        if (!isset($this->config[$workerName]) || !is_array($this->config[$workerName])) {
+            throw new InvalidArgumentException("Unknown worker config: {$workerName}");
+        }
+
         return $this->config[$workerName];
     }
 
@@ -34,10 +40,21 @@ class WorkerConfig
      */
     public function getQueueConfig(string $workerName): ?array
     {
-        if ($this->config[$workerName]['type'] == 'queueConsumer')
-            return $this->config[$workerName]['config'];
-        else
+        $worker = $this->config[$workerName] ?? null;
+        if (!is_array($worker)) {
             return null;
+        }
+
+        if (($worker['type'] ?? null) !== 'queueConsumer') {
+            return null;
+        }
+
+        $config = $worker['config'] ?? null;
+        if (!is_array($config)) {
+            return null;
+        }
+
+        return $config;
     }
 
     /**

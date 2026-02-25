@@ -105,9 +105,10 @@ class RabbitMQWorkerRunner
         $this->isRunning = true;
         $this->stats['started_at'] = time();
 
+        $consumerTag = $this->buildConsumerTag();
         $this->client->startConsuming(function (AMQPMessage $message): void {
             $this->processMessage($message);
-        });
+        }, consumerTag: $consumerTag);
 
         $this->updateHeartbeatStatus('running');
         $this->logger->info('worker_started', $this->baseContext());
@@ -815,6 +816,56 @@ class RabbitMQWorkerRunner
         }
 
         return sprintf('%s.%s.%d.%d.%s', $safeWorkerId, $safeHost, $this->pid, time(), $suffix);
+    }
+
+    private function buildConsumerTag(): string
+    {
+        $project = basename($this->resolveProjectRoot()) ?: 'project';
+        $queue = $this->client->getQueue() !== '' ? $this->client->getQueue() : 'queue';
+        $scriptRaw = $_SERVER['SCRIPT_FILENAME'] ?? ($_SERVER['SCRIPT_NAME'] ?? 'worker.php');
+        $script = basename((string)$scriptRaw);
+
+        $parts = [
+            'ct',
+            $this->sanitizeConsumerTagPart($project, 24),
+            $this->sanitizeConsumerTagPart($this->workerId, 48),
+            $this->sanitizeConsumerTagPart($queue, 48),
+            $this->sanitizeConsumerTagPart($this->hostname, 48),
+            (string)$this->pid,
+            $this->sanitizeConsumerTagPart($script, 24),
+            $this->generateRandomSuffix(3),
+        ];
+
+        $tag = implode('.', array_values(array_filter($parts, static fn (string $part): bool => $part !== '')));
+
+        if (strlen($tag) > 255) {
+            $tag = substr($tag, 0, 255);
+        }
+
+        return $tag;
+    }
+
+    private function sanitizeConsumerTagPart(string $value, int $maxLength): string
+    {
+        $sanitized = preg_replace('/[^a-zA-Z0-9_.:-]/', '_', trim($value)) ?: '';
+        if ($sanitized === '') {
+            return '';
+        }
+
+        if (strlen($sanitized) > $maxLength) {
+            return substr($sanitized, 0, $maxLength);
+        }
+
+        return $sanitized;
+    }
+
+    private function generateRandomSuffix(int $bytes): string
+    {
+        try {
+            return bin2hex(random_bytes($bytes));
+        } catch (\Throwable) {
+            return (string)mt_rand(100000, 999999);
+        }
     }
 
     private function resolveProjectRoot(): string
