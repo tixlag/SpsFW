@@ -13,6 +13,8 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
     private string $defaultRoutingKey;
     private string $defaultExchange;
 
+    private const UTC = 'UTC';
+
     public function __construct(RabbitMQClient $client, string $defaultRoutingKey = '', string $defaultExchange = '')
     {
         $this->client = $client;
@@ -30,7 +32,7 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
             'jobName' => $job->getName(),
             'payload' => $isPayloadJob ? $job->toPayload() : $job->serialize(),
             'meta' => [
-                'publishedAt' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(\DateTime::ATOM),
+                'publishedAt' => (new \DateTimeImmutable('now', new \DateTimeZone(self::UTC)))->format(\DateTime::ATOM),
                 'schemaVersion' => $isPayloadJob ? 2 : 1,
                 'messageId' => $messageId,
                 'attempt' => $attempt,
@@ -60,7 +62,7 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
         if (isset($options['delayMs'])) {
             $delayMs = (int)$options['delayMs'];
         } elseif (!empty($options['executeAt']) && $options['executeAt'] instanceof \DateTimeInterface) {
-            $now = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+            $now = new \DateTimeImmutable('now', new \DateTimeZone(self::UTC));
             $delayMs = max(0, (int)(($options['executeAt']->getTimestamp() - $now->getTimestamp()) * 1000));
         }
 

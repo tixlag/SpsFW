@@ -7,6 +7,7 @@ use Psr\SimpleCache\CacheInterface;
 class WorkerHeartbeat
 {
     private const INSTANCE_INDEX_TTL_FACTOR = 20;
+    private const UTC = 'UTC';
 
     private CacheInterface $cache;
     private string $workerId;

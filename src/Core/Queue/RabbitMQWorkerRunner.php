@@ -26,12 +26,13 @@ class RabbitMQWorkerRunner
 
     private bool $isRunning = false;
     private string $workerId;
-    private string $workerInstanceId;
     private string $hostname;
     private int $pid;
     private bool $pcntlWarningLogged = false;
     private bool $isReportingToGlobalHandler = false;
     private mixed $globalExceptionHandler;
+
+    private const UTC = 'UTC';
 
     private array $stats = [
         'processed' => 0,
@@ -44,6 +45,7 @@ class RabbitMQWorkerRunner
     ];
 
     private ?array $currentJobContext = null;
+    private string $lastStatus = '';
 
     public function __construct(
         RabbitMQClient $client,
@@ -52,8 +54,7 @@ class RabbitMQWorkerRunner
         ?WorkerStrategyInterface $strategy = null,
         ?WorkerExecutionPolicy $executionPolicy = null,
         ?LoggerInterface $logger = null,
-        ?string $workerId = null,
-        ?string $workerInstanceId = null
+        ?string $workerId = null
     ) {
         $this->client = $client;
         $this->jobRegistry = $jobRegistry ?? JobRegistry::loadFromCache();
@@ -67,12 +68,6 @@ class RabbitMQWorkerRunner
             ?: ($this->heartbeat?->getWorkerId() ?: ($this->client->getQueue() ?: 'queue-worker'));
         $this->logger = $logger ?? $this->resolveDefaultLogger($this->workerId);
         $this->globalExceptionHandler = $this->resolveGlobalExceptionHandler();
-        $this->workerInstanceId = $workerInstanceId
-            ?: $this->buildWorkerInstanceId();
-
-        if ($this->heartbeat) {
-            $this->heartbeat->attachInstance($this->workerInstanceId);
-        }
     }
 
     public function getLargeMessageHandler(): LargeMessageHandlerInterface
@@ -111,7 +106,6 @@ class RabbitMQWorkerRunner
         }, consumerTag: $consumerTag);
 
         $this->updateHeartbeatStatus('running');
-        $this->logger->info('worker_started', $this->baseContext());
     }
 
     public function runIteration(): void
@@ -132,8 +126,6 @@ class RabbitMQWorkerRunner
 
         $this->updateHeartbeatStatus('stopped');
         $this->client->stopConsuming();
-
-        $this->logger->info('worker_stopped', $this->baseContext());
     }
 
     private function processMessage(AMQPMessage $message): void
@@ -200,11 +192,6 @@ class RabbitMQWorkerRunner
 
             if (!$isComplete) {
                 $message->ack();
-                $this->logger->debug('chunk_buffered', $this->baseContext([
-                    'message_id' => $messageId,
-                    'chunk_index' => $chunk['meta']['chunkIndex'] ?? null,
-                    'total_chunks' => $chunk['meta']['totalChunks'] ?? null,
-                ]));
                 return;
             }
 
@@ -278,8 +265,6 @@ class RabbitMQWorkerRunner
             $this->setCurrentJobContext($jobName, $messageId, $attempt);
             $this->updateHeartbeatStatus('processing');
 
-            $this->logger->info('job_started', $this->jobContext($jobName, $messageId, $attempt));
-
             $result = $this->runHandlerWithTimeout($handler, $job, $jobName, $messageId);
             $durationMs = (int)round((microtime(true) - $startedAt) * 1000);
 
@@ -287,10 +272,6 @@ class RabbitMQWorkerRunner
                 case JobResult::Success:
                     $message->ack();
                     $this->stats['success']++;
-                    $this->logger->info('job_completed', $this->jobContext($jobName, $messageId, $attempt, [
-                        'result' => JobResult::Success->value,
-                        'duration_ms' => $durationMs,
-                    ]));
                     break;
 
                 case JobResult::Retry:
@@ -312,7 +293,10 @@ class RabbitMQWorkerRunner
                 $this->heartbeat->setError($e->getMessage());
             }
 
-            $this->logger->error('job_exception', $this->jobContext($jobName, $messageId, $attempt, [
+            $this->logger->error('job_exception', $this->baseContext([
+                'job_name' => $jobName,
+                'message_id' => $messageId,
+                'attempt' => $attempt,
                 'error' => $e->getMessage(),
                 'exception' => get_class($e),
             ]));
@@ -345,7 +329,7 @@ class RabbitMQWorkerRunner
         }
 
         try {
-            $utc = new \DateTimeZone('UTC');
+            $utc = new \DateTimeZone(self::UTC);
             $executeAt = new \DateTimeImmutable($executeAtRaw, $utc);
             $now = new \DateTimeImmutable('now', $utc);
             $diffSeconds = $executeAt->getTimestamp() - $now->getTimestamp();
@@ -356,7 +340,10 @@ class RabbitMQWorkerRunner
 
             $delayAttempts = max(0, (int)($meta['delayAttempts'] ?? 0));
             if ($delayAttempts >= 3) {
-                $this->logger->warning('execute_at_delay_limit_reached', $this->jobContext($jobName, $messageId, $attempt, [
+                $this->logger->warning('execute_at_delay_limit_reached', $this->baseContext([
+                    'job_name' => $jobName,
+                    'message_id' => $messageId,
+                    'attempt' => $attempt,
                     'delay_attempts' => $delayAttempts,
                 ]));
                 return false;
@@ -379,14 +366,12 @@ class RabbitMQWorkerRunner
             $message->ack();
 
             $this->stats['retried']++;
-            $this->logger->info('job_delayed_republished', $this->jobContext($jobName, $messageId, $attempt, [
-                'delay_ms' => $delayMs,
-                'delay_attempts' => $envelope['meta']['delayAttempts'],
-            ]));
-
             return true;
         } catch (\Throwable $e) {
-            $this->logger->error('job_delay_republish_failed', $this->jobContext($jobName, $messageId, $attempt, [
+            $this->logger->error('job_delay_republish_failed', $this->baseContext([
+                'job_name' => $jobName,
+                'message_id' => $messageId,
+                'attempt' => $attempt,
                 'error' => $e->getMessage(),
             ]));
             $this->reportToGlobalExceptionHandler($e, 'job_delay_republish_failed', [
@@ -474,13 +459,19 @@ class RabbitMQWorkerRunner
                 $message->ack();
 
                 $this->stats['retried']++;
-                $this->logger->warning('job_retry_scheduled', $this->jobContext($jobName, $messageId, $attempt, [
+                $this->logger->warning('job_retry_scheduled', $this->baseContext([
+                    'job_name' => $jobName,
+                    'message_id' => $messageId,
+                    'attempt' => $attempt,
                     'next_attempt' => $nextAttempt,
                     'reason' => $reason,
                 ]));
                 return;
             } catch (\Throwable $publishError) {
-                $this->logger->error('job_retry_publish_failed', $this->jobContext($jobName, $messageId, $attempt, [
+                $this->logger->error('job_retry_publish_failed', $this->baseContext([
+                    'job_name' => $jobName,
+                    'message_id' => $messageId,
+                    'attempt' => $attempt,
                     'reason' => $reason,
                     'error' => $publishError->getMessage(),
                 ]));
@@ -496,12 +487,18 @@ class RabbitMQWorkerRunner
                 $message->ack();
 
                 $this->stats['dlq']++;
-                $this->logger->error('job_sent_to_dlq', $this->jobContext($jobName, $messageId, $attempt, [
+                $this->logger->error('job_sent_to_dlq', $this->baseContext([
+                    'job_name' => $jobName,
+                    'message_id' => $messageId,
+                    'attempt' => $attempt,
                     'reason' => $reason,
                 ]));
                 return;
             } catch (\Throwable $dlqError) {
-                $this->logger->critical('job_dlq_publish_failed', $this->jobContext($jobName, $messageId, $attempt, [
+                $this->logger->critical('job_dlq_publish_failed', $this->baseContext([
+                    'job_name' => $jobName,
+                    'message_id' => $messageId,
+                    'attempt' => $attempt,
                     'reason' => $reason,
                     'error' => $dlqError->getMessage(),
                 ]));
@@ -529,7 +526,7 @@ class RabbitMQWorkerRunner
         $dlqRoutingKey = $this->buildDlqRoutingKey($routingKey);
 
         $dlqEnvelope = $this->withFailureMeta($envelope, $attempt, $reason, $error);
-        $dlqEnvelope['meta']['dlqAt'] = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+        $dlqEnvelope['meta']['dlqAt'] = (new \DateTimeImmutable('now', new \DateTimeZone(self::UTC)))
             ->format(\DateTime::ATOM);
 
         $this->client->publish(
@@ -552,7 +549,7 @@ class RabbitMQWorkerRunner
         $meta = is_array($envelope['meta'] ?? null) ? $envelope['meta'] : [];
         $meta['attempt'] = $attempt;
         $meta['lastFailureReason'] = $reason;
-        $meta['lastFailureAt'] = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))
+        $meta['lastFailureAt'] = (new \DateTimeImmutable('now', new \DateTimeZone(self::UTC)))
             ->format(\DateTime::ATOM);
 
         if ($error !== null) {
@@ -677,15 +674,14 @@ class RabbitMQWorkerRunner
             return;
         }
 
+        // Only update status if it changed
+        if ($status === $this->lastStatus) {
+            return;
+        }
+        $this->lastStatus = $status;
+
         $data = array_merge($this->stats, [
-            'worker_id' => $this->workerId,
-            'worker_instance_id' => $this->workerInstanceId,
-            'queue' => $this->client->getQueue(),
-            'exchange' => $this->client->getExchange(),
-            'routing_key' => $this->client->getRoutingKey(),
             'consumer_tag' => $this->client->getConsumerTag(),
-            'hostname' => $this->hostname,
-            'pid' => $this->pid,
         ]);
 
         if ($this->currentJobContext !== null) {
@@ -703,28 +699,8 @@ class RabbitMQWorkerRunner
     private function baseContext(array $extra = []): array
     {
         return array_merge([
-            'worker_id' => $this->workerId,
-            'worker_instance_id' => $this->workerInstanceId,
-            'queue' => $this->client->getQueue(),
-            'exchange' => $this->client->getExchange(),
-            'routing_key' => $this->client->getRoutingKey(),
             'consumer_tag' => $this->client->getConsumerTag(),
-            'hostname' => $this->hostname,
-            'pid' => $this->pid,
         ], $extra);
-    }
-
-    /**
-     * @param array<string, mixed> $extra
-     * @return array<string, mixed>
-     */
-    private function jobContext(string $jobName, string $messageId, int $attempt, array $extra = []): array
-    {
-        return $this->baseContext(array_merge([
-            'job_name' => $jobName,
-            'message_id' => $messageId,
-            'attempt' => $attempt,
-        ], $extra));
     }
 
     public function isRunning(): bool
@@ -803,43 +779,17 @@ class RabbitMQWorkerRunner
         }
     }
 
-    private function buildWorkerInstanceId(): string
-    {
-        $safeWorkerId = preg_replace('/[^a-zA-Z0-9_.-]/', '_', $this->workerId) ?: 'worker';
-        $safeHost = preg_replace('/[^a-zA-Z0-9_.-]/', '_', $this->hostname) ?: 'host';
-
-        $suffix = '';
-        try {
-            $suffix = substr(bin2hex(random_bytes(4)), 0, 8);
-        } catch (\Throwable) {
-            $suffix = (string)mt_rand(10000000, 99999999);
-        }
-
-        return sprintf('%s.%s.%d.%d.%s', $safeWorkerId, $safeHost, $this->pid, time(), $suffix);
-    }
-
     private function buildConsumerTag(): string
     {
-        $project = basename($this->resolveProjectRoot()) ?: 'project';
-        $queue = $this->client->getQueue() !== '' ? $this->client->getQueue() : 'queue';
-        $scriptRaw = $_SERVER['SCRIPT_FILENAME'] ?? ($_SERVER['SCRIPT_NAME'] ?? 'worker.php');
-        $script = basename((string)$scriptRaw);
-
-        $parts = [
-            'ct',
-            $this->sanitizeConsumerTagPart($project, 24),
+        $tag = sprintf(
+            '%s.%s.%d',
             $this->sanitizeConsumerTagPart($this->workerId, 48),
-            $this->sanitizeConsumerTagPart($queue, 48),
             $this->sanitizeConsumerTagPart($this->hostname, 48),
-            (string)$this->pid,
-            $this->sanitizeConsumerTagPart($script, 24),
-            $this->generateRandomSuffix(3),
-        ];
-
-        $tag = implode('.', array_values(array_filter($parts, static fn (string $part): bool => $part !== '')));
+            $this->pid
+        );
 
         if (strlen($tag) > 255) {
-            $tag = substr($tag, 0, 255);
+            return substr($tag, 0, 255);
         }
 
         return $tag;
@@ -857,15 +807,6 @@ class RabbitMQWorkerRunner
         }
 
         return $sanitized;
-    }
-
-    private function generateRandomSuffix(int $bytes): string
-    {
-        try {
-            return bin2hex(random_bytes($bytes));
-        } catch (\Throwable) {
-            return (string)mt_rand(100000, 999999);
-        }
     }
 
     private function resolveProjectRoot(): string
