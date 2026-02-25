@@ -39,4 +39,35 @@ class WorkerConfig
         else
             return null;
     }
+
+    /**
+     * @return array<string, array{type: string, config: array}>
+     */
+    public function getAll(): array
+    {
+        return $this->config;
+    }
+
+    /**
+     * @return array<string, array>
+     */
+    public function getQueueWorkers(): array
+    {
+        $workers = [];
+        foreach ($this->config as $workerName => $workerDef) {
+            if (($workerDef['type'] ?? null) === 'queueConsumer') {
+                $workers[$workerName] = $workerDef['config'] ?? [];
+            }
+        }
+
+        return $workers;
+    }
+
+    /**
+     * @return string[]
+     */
+    public function getQueueWorkerNames(): array
+    {
+        return array_keys($this->getQueueWorkers());
+    }
 }

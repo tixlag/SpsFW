@@ -3,10 +3,9 @@
 namespace SpsFW\Core\Queue;
 
 use PhpAmqpLib\Wire\AMQPTable;
-use PhpAmqpLib\Message\AMQPMessage;
-
 use SpsFW\Core\Queue\Interfaces\QueuePublisherInterface;
 use SpsFW\Core\Queue\Interfaces\JobInterface;
+use SpsFW\Core\Queue\Interfaces\PayloadJobInterface;
 
 class RabbitMQQueuePublisher implements QueuePublisherInterface
 {
@@ -23,12 +22,18 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
 
     public function publish(JobInterface $job, array $options = []): void
     {
+        $isPayloadJob = $job instanceof PayloadJobInterface;
+        $messageId = $options['messageId'] ?? bin2hex(random_bytes(16));
+        $attempt = isset($options['attempt']) ? max(0, (int)$options['attempt']) : 0;
+
         $payload = [
             'jobName' => $job->getName(),
-            'payload' => $job->serialize(),
-            // добавим мета-информацию в payload для логов/страховки:
+            'payload' => $isPayloadJob ? $job->toPayload() : $job->serialize(),
             'meta' => [
                 'publishedAt' => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(\DateTime::ATOM),
+                'schemaVersion' => $isPayloadJob ? 2 : 1,
+                'messageId' => $messageId,
+                'attempt' => $attempt,
             ]
         ];
 
@@ -37,8 +42,15 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
             $payload['meta']['executeAt'] = $options['executeAt']->format(\DateTime::ATOM);
         }
 
-        // properties можно переопределить извне
         $properties = $options['properties'] ?? [];
+        if (!isset($properties['message_id'])) {
+            $properties['message_id'] = $messageId;
+        }
+
+        $properties = $this->mergeApplicationHeaders($properties, [
+            'x-attempt' => $attempt,
+            'x-schema-version' => $payload['meta']['schemaVersion'],
+        ]);
 
         $routingKey = $options['routingKey'] ?? $this->defaultRoutingKey;
         $exchange = $options['exchange'] ?? $this->defaultExchange;
@@ -53,18 +65,11 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
         }
 
         if ($delayMs !== null && $delayMs > 0) {
-            // Добавляем заголовок x-delay
-            $headers = $properties['application_headers'] ?? [];
-            if ($headers instanceof AMQPTable) {
-                $headers->set('x-delay', $delayMs);
-                $properties['application_headers'] = $headers;
-            } else {
-                // если это массив — создадим AMQPTable
-                $properties['application_headers'] = new AMQPTable(array_merge(is_array($headers) ? $headers : [], ['x-delay' => $delayMs]));
-            }
+            $properties = $this->mergeApplicationHeaders($properties, [
+                'x-delay' => $delayMs,
+            ]);
         }
 
-        // Вызов клиента — ваш существующий client->publish ожидает $data, $properties, $routingKey
         $this->client->publish($payload, $properties, $routingKey, $exchange);
     }
 
@@ -78,5 +83,21 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
     {
         $options['executeAt'] = $when;
         $this->publish($job, $options);
+    }
+
+    private function mergeApplicationHeaders(array $properties, array $headersToMerge): array
+    {
+        $currentHeaders = $properties['application_headers'] ?? [];
+        if ($currentHeaders instanceof AMQPTable) {
+            $currentHeaders = $currentHeaders->getNativeData();
+        }
+
+        if (!is_array($currentHeaders)) {
+            $currentHeaders = [];
+        }
+
+        $properties['application_headers'] = new AMQPTable(array_merge($currentHeaders, $headersToMerge));
+
+        return $properties;
     }
 }

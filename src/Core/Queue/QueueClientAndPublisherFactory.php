@@ -59,6 +59,9 @@ class QueueClientAndPublisherFactory
             config: $cfg,
             largeMessageHandler: $handler,
         );
+
+        $this->ensureDlqTopology($queueName, $exchange, $routingKey);
+
         return new RabbitMQQueuePublisher($client, $routingKey, $exchange);
     }
 
@@ -71,7 +74,7 @@ class QueueClientAndPublisherFactory
         string $workerName,
     ): RabbitMQQueuePublisher {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
-        $exchangeType = $workerConfig["delayed"]
+        $exchangeType = !empty($workerConfig["delayed"])
             ? "x-delayed-message"
             : AMQPExchangeType::DIRECT;
 
@@ -87,13 +90,13 @@ class QueueClientAndPublisherFactory
     public function createClientByWorkerName(string $workerName): RabbitMQClient
     {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
-        $exchangeType = $workerConfig["delayed"]
+        $exchangeType = !empty($workerConfig["delayed"])
             ? "x-delayed-message"
             : AMQPExchangeType::DIRECT;
 
         $handler = $this->largeMessageHandler;
 
-        return new RabbitMQClient(
+        $client = new RabbitMQClient(
             exchange: $workerConfig["exchange"],
             exchangeType: $exchangeType,
             queue: $workerConfig["queue"],
@@ -104,6 +107,14 @@ class QueueClientAndPublisherFactory
             ]),
             largeMessageHandler: $handler,
         );
+
+        $this->ensureDlqTopology(
+            $workerConfig["queue"],
+            $workerConfig["exchange"],
+            $workerConfig["routing_key"]
+        );
+
+        return $client;
     }
 
     public function createClient(
@@ -114,7 +125,7 @@ class QueueClientAndPublisherFactory
     ): RabbitMQClient {
         $handler = $largeMessageHandler ?? $this->largeMessageHandler;
 
-        return new RabbitMQClient(
+        $client = new RabbitMQClient(
             exchange: $exchange,
             exchangeType: AMQPExchangeType::DIRECT,
             queue: $queueName,
@@ -122,6 +133,10 @@ class QueueClientAndPublisherFactory
             config: $this->buildConfig(),
             largeMessageHandler: $handler,
         );
+
+        $this->ensureDlqTopology($queueName, $exchange, $routingKey);
+
+        return $client;
     }
 
     /**
@@ -190,6 +205,8 @@ class QueueClientAndPublisherFactory
             ]),
         );
 
+        $this->ensureDlqTopology($queueName, $exchange, $routingKey);
+
         return new RabbitMQQueuePublisher($mainClient, $routingKey, $exchange);
     }
 
@@ -210,6 +227,9 @@ class QueueClientAndPublisherFactory
 
     private function buildConfig(): array
     {
+        $heartbeat = $this->config->heartbeat > 0 ? $this->config->heartbeat : 30;
+        $readWriteTimeout = max($this->config->readWriteTimeout, (float)($heartbeat * 2));
+
         return [
             "host" => $this->config->host,
             "port" => $this->config->port,
@@ -217,10 +237,30 @@ class QueueClientAndPublisherFactory
             "password" => $this->config->password,
             "vhost" => $this->config->vhost,
             "connection_timeout" => $this->config->connectionTimeout,
-            "read_write_timeout" => $this->config->readWriteTimeout,
-            "heartbeat" => $this->config->heartbeat,
+            "read_write_timeout" => $readWriteTimeout,
+            "heartbeat" => $heartbeat,
+            "prefetch" => 1,
             "exchange_durable" => true,
             "queue_durable" => true,
         ];
+    }
+
+    private function ensureDlqTopology(string $queueName, string $exchange, string $routingKey): void
+    {
+        if ($queueName === '' || $exchange === '' || $routingKey === '') {
+            return;
+        }
+
+        $dlxExchange = $exchange . ".dlx";
+        $dlqQueue = $queueName . ".dlq";
+        $dlqRouting = $routingKey . ".dlq";
+
+        new RabbitMQClient(
+            exchange: $dlxExchange,
+            exchangeType: AMQPExchangeType::DIRECT,
+            queue: $dlqQueue,
+            routingKey: $dlqRouting,
+            config: $this->buildConfig(),
+        );
     }
 }

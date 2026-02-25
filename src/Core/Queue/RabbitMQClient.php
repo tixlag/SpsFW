@@ -5,9 +5,9 @@ namespace SpsFW\Core\Queue;
 use Exception;
 use InvalidArgumentException;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
-use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Exchange\AMQPExchangeType;
 use PhpAmqpLib\Exception\AMQPIOException;
+use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
 use SpsFW\Core\Queue\LargeMessage\ChunkedMessageHandler;
 use SpsFW\Core\Queue\LargeMessage\LargeMessageHandlerInterface;
@@ -44,10 +44,20 @@ class RabbitMQClient
     )
     {
         $this->largeMessageHandler = $largeMessageHandler ?? new ChunkedMessageHandler();
-        //$this->validateConfig($config);
+        $config = $config ?? [];
+        $this->validateConfig($config);
+
         $this->exchange = $exchange;
         $this->queue = $queue;
         $this->routingKey = $routingKey;
+
+        $heartbeat = (int)($config['heartbeat'] ?? 30);
+        $readWriteTimeout = (float)($config['read_write_timeout'] ?? 60.0);
+        if ($heartbeat > 0 && $readWriteTimeout < ($heartbeat * 2)) {
+            $readWriteTimeout = (float)($heartbeat * 2);
+        }
+
+        $prefetch = max(1, (int)($config['prefetch'] ?? 1));
 
         try {
             // Установка соединения
@@ -62,14 +72,14 @@ class RabbitMQClient
                 $config['login_response'] ?? null,
                 $config['locale'] ?? 'en_US',
                 $config['connection_timeout'] ?? 3.0,
-                $config['read_write_timeout'] ?? 3.0,
+                $readWriteTimeout,
                 $config['context'] ?? null,
                 $config['keepalive'] ?? false,
-                $config['heartbeat'] ?? 60 // Увеличиваем heartbeat до 60 секунд
+                $heartbeat
             );
 
             $this->channel = $this->connection->channel();
-            $this->channel->basic_qos((int)null, 1, null); // Prefetch = 1 для равномерной нагрузки
+            $this->channel->basic_qos(null, $prefetch, null);
 
             // Объявление обменника
             if ($exchange) {
@@ -77,7 +87,7 @@ class RabbitMQClient
                 // Специальный случай: delayed exchange
                 if ($exchangeType === 'x-delayed-message') {
 
-                    if (is_array($config['exchange_arguments'])) {
+                    if (isset($config['exchange_arguments']) && is_array($config['exchange_arguments'])) {
                         $config['exchange_arguments'] = array_merge($config['exchange_arguments'], ['x-delayed-type' => 'direct']);
                     } else {
                         $config['exchange_arguments'] = ['x-delayed-type' => 'direct'];
@@ -85,7 +95,7 @@ class RabbitMQClient
 
                 }
 
-                $exchangeArgs = new AMQPTable($config['exchange_arguments'] ?? null);
+                $exchangeArgs = $this->toAmqpTable($config['exchange_arguments'] ?? []);
 
                 // exchange_declare(
                 //   string $exchange, string $type, bool $passive = false,
@@ -106,10 +116,7 @@ class RabbitMQClient
 
             // Объявление очереди
             if ($queue) {
-                $queueArgs = $config['queue_arguments'] ?? null;
-                if (is_array($queueArgs)) {
-                    $queueArgs = new AMQPTable($queueArgs);
-                }
+                $queueArgs = $this->toAmqpTable($config['queue_arguments'] ?? []);
                 $this->channel->queue_declare(
                     $queue,
                     false,
@@ -149,7 +156,7 @@ class RabbitMQClient
         }
 
         $message = new AMQPMessage(
-            json_encode($data, JSON_UNESCAPED_UNICODE),
+            json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
             array_merge([
                 'content_type' => 'application/json',
                 'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT
@@ -173,16 +180,16 @@ class RabbitMQClient
 
         foreach ($chunks as $chunk) {
             $message = new AMQPMessage(
-                json_encode($chunk, JSON_UNESCAPED_UNICODE),
+                json_encode($chunk, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
                 array_merge([
                     'content_type' => 'application/json',
                     'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
                     'message_id' => $chunk['meta']['messageId'],
-                    'headers' => [
+                    'application_headers' => new AMQPTable([
                         'x-chunk-index' => $chunk['meta']['chunkIndex'],
                         'x-total-chunks' => $chunk['meta']['totalChunks'],
                         'x-is-chunked' => true,
-                    ]
+                    ]),
                 ], $properties)
             );
 
@@ -193,7 +200,7 @@ class RabbitMQClient
     public function startConsuming(callable $callback, ?string $queue = null, bool $noAck = false): void
     {
         $queue = $queue ?? $this->queue;
-        $this->consumerTag = 'consumer_' . getmypid() . '_' . uniqid();
+        $this->consumerTag = 'consumer_' . getmypid() . '_' . bin2hex(random_bytes(4));
 
         $this->channel->basic_consume(
             $queue,
@@ -299,6 +306,12 @@ class RabbitMQClient
                 throw new InvalidArgumentException("Не указан обязательный параметр: $key");
             }
         }
+
+        $heartbeat = (int)($config['heartbeat'] ?? 30);
+        $readWriteTimeout = (float)($config['read_write_timeout'] ?? 60.0);
+        if ($heartbeat > 0 && $readWriteTimeout < ($heartbeat * 2)) {
+            throw new InvalidArgumentException('read_write_timeout must be at least heartbeat*2');
+        }
     }
 
     /**
@@ -328,5 +341,38 @@ class RabbitMQClient
     public function isChunkedMessage(array $body): bool
     {
         return isset($body['meta']['isChunked']) && $body['meta']['isChunked'] === true;
+    }
+
+    public function getQueue(): string
+    {
+        return $this->queue;
+    }
+
+    public function getExchange(): string
+    {
+        return $this->exchange;
+    }
+
+    public function getRoutingKey(): string
+    {
+        return $this->routingKey;
+    }
+
+    public function getConsumerTag(): string
+    {
+        return $this->consumerTag;
+    }
+
+    private function toAmqpTable(mixed $value): ?AMQPTable
+    {
+        if ($value instanceof AMQPTable) {
+            return $value;
+        }
+
+        if (is_array($value)) {
+            return new AMQPTable($value);
+        }
+
+        return null;
     }
 }

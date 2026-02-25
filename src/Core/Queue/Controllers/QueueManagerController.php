@@ -9,6 +9,7 @@ use SpsFW\Core\Queue\QueueClientAndPublisherFactory;
 use SpsFW\Core\Queue\JobRegistry;
 use SpsFW\Core\Queue\WorkerHeartbeat;
 use SpsFW\Core\Route\RestController;
+use SpsFW\Core\Workers\WorkerConfig;
 use Psr\SimpleCache\CacheInterface;
 
 // Импорты OpenAPI атрибутов
@@ -39,6 +40,7 @@ class QueueManagerController extends RestController
     public function __construct(
         #[Inject] private QueueClientAndPublisherFactory $queueFactory,
         #[Inject] private CacheInterface                 $cache,
+        #[Inject] private ?WorkerConfig                 $workerConfig = null,
         private ?JobRegistry                             $jobRegistry = null,
     ) {
         $this->jobRegistry = $jobRegistry ?? JobRegistry::loadFromCache();
@@ -97,9 +99,11 @@ class QueueManagerController extends RestController
     public function dashboard(): Response
     {
         $workers = [];
+        $workerDefinitions = $this->getWorkerDefinitions();
 
-        foreach ($this->workerDefinitions as $workerId => $config) {
+        foreach ($workerDefinitions as $workerId => $config) {
             $heartbeat = new WorkerHeartbeat($this->cache, $workerId, 60);
+            $instances = array_values($heartbeat->getInstancesStatuses());
 
             $status = $heartbeat->getStatus();
             $lastError = $heartbeat->getLastError();
@@ -110,6 +114,8 @@ class QueueManagerController extends RestController
                 'alive' => $heartbeat->isAlive(),
                 'status' => $status,
                 'last_error' => $lastError,
+                'instances' => $instances,
+                'active_instances' => count($instances),
                 'uptime' => $status && isset($status['data']['started_at'])
                     ? time() - $status['data']['started_at']
                     : null,
@@ -311,7 +317,7 @@ class QueueManagerController extends RestController
     )]
     public function controlWorker(string $workerId, string $action): Response
     {
-        if (!isset($this->workerDefinitions[$workerId])) {
+        if (!isset($this->getWorkerDefinitions()[$workerId])) {
             return Response::json(['error' => 'Unknown worker'], 404);
         }
 
@@ -414,7 +420,7 @@ class QueueManagerController extends RestController
     )]
     public function clearWorker(string $workerId): Response
     {
-        if (!isset($this->workerDefinitions[$workerId])) {
+        if (!isset($this->getWorkerDefinitions()[$workerId])) {
             return Response::json(['error' => 'Unknown worker'], 404);
         }
 
@@ -479,5 +485,31 @@ class QueueManagerController extends RestController
             'jobs' => $jobs,
             'total' => count($jobs)
         ]);
+    }
+
+    /**
+     * @return array<string, array>
+     */
+    private function getWorkerDefinitions(): array
+    {
+        if ($this->workerConfig === null) {
+            return $this->workerDefinitions;
+        }
+
+        $dynamic = $this->workerConfig->getQueueWorkers();
+        if ($dynamic === []) {
+            return $this->workerDefinitions;
+        }
+
+        $definitions = [];
+        foreach ($dynamic as $workerId => $config) {
+            $definitions[$workerId] = array_merge([
+                'queue' => $config['queue'] ?? null,
+                'exchange' => $config['exchange'] ?? null,
+                'routing_key' => $config['routing_key'] ?? null,
+            ], $config);
+        }
+
+        return $definitions;
     }
 }

@@ -6,6 +6,7 @@ use RuntimeException;
 use SpsFW\Core\DI\DIContainer;
 use SpsFW\Core\Queue\Interfaces\JobHandlerInterface;
 use SpsFW\Core\Queue\Interfaces\JobInterface;
+use SpsFW\Core\Queue\Interfaces\PayloadJobInterface;
 
 class JobRegistry
 {
@@ -20,7 +21,11 @@ class JobRegistry
 
     public function getRegisteredJobs(): array
     {
-        return $this->registeredJobs;
+        $normalized = [];
+        foreach ($this->registeredJobs as $jobName => $entry) {
+            $normalized[$jobName] = $this->normalizeEntry($entry);
+        }
+        return $normalized;
     }
 
 
@@ -93,12 +98,20 @@ class JobRegistry
 
     public function getJobClass(string $jobName): ?string
     {
-        return $this->registeredJobs[$jobName]['jobClass'] ?? null;
+        $entry = $this->registeredJobs[$jobName] ?? null;
+        if (is_string($entry)) {
+            return $entry;
+        }
+        return $entry['jobClass'] ?? null;
     }
 
     public function getHandlerClass(string $jobName): ?string
     {
-        return $this->registeredJobs[$jobName]['handlerClass'] ?? null;
+        $entry = $this->registeredJobs[$jobName] ?? null;
+        if (!is_array($entry)) {
+            return null;
+        }
+        return $entry['handlerClass'] ?? null;
     }
 
     public function createJob(string $jobName, string|array $payload): JobInterface
@@ -109,10 +122,21 @@ class JobRegistry
             throw new RuntimeException("Unknown job: $jobName");
         }
 
-        // Always use deserialize to properly restore nested objects (DTOs)
-        // This ensures EmployeesExchange1CDto and other nested types are correctly restored
+        if (is_subclass_of($jobClass, PayloadJobInterface::class)) {
+            if (is_string($payload)) {
+                $decoded = json_decode($payload, true);
+                if (!is_array($decoded)) {
+                    throw new RuntimeException("Payload for $jobName must be a JSON object");
+                }
+                $payload = $decoded;
+            }
+
+            return $jobClass::fromPayload($payload);
+        }
+
+        // Legacy path: keep backward compatibility with serialize()/deserialize().
         if (is_array($payload)) {
-            $payload = json_encode($payload, JSON_UNESCAPED_UNICODE);
+            $payload = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
         }
         return $jobClass::deserialize($payload);
     }
@@ -123,6 +147,14 @@ class JobRegistry
         $jobClass = $this->getJobClass($jobName);
         if (!$jobClass) {
             throw new \DomainException("Unknown job type: $jobName. Did you forget #[QueueJob] attribute?");
+        }
+
+        if (is_subclass_of($jobClass, PayloadJobInterface::class)) {
+            $decoded = json_decode($payload, true);
+            if (!is_array($decoded)) {
+                throw new \DomainException("Payload for $jobName must be a JSON object");
+            }
+            return $jobClass::fromPayload($decoded);
         }
 
         return $jobClass::deserialize($payload);
@@ -137,6 +169,28 @@ class JobRegistry
 
         // Use DI container to create handler with dependencies
         return DIContainer::getInstance()->get($handlerClass);
+    }
+
+    private function normalizeEntry(mixed $entry): array
+    {
+        if (is_string($entry)) {
+            return [
+                'jobClass' => $entry,
+                'handlerClass' => null,
+            ];
+        }
+
+        if (is_array($entry)) {
+            return [
+                'jobClass' => $entry['jobClass'] ?? null,
+                'handlerClass' => $entry['handlerClass'] ?? null,
+            ];
+        }
+
+        return [
+            'jobClass' => null,
+            'handlerClass' => null,
+        ];
     }
 
     /**

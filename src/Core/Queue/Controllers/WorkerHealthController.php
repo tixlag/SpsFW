@@ -9,6 +9,7 @@ use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Queue\WorkerHeartbeat;
 use SpsFW\Core\Route\RestController;
+use SpsFW\Core\Workers\WorkerConfig;
 
 // Импортируем атрибуты OpenAPI
 use OpenApi\Attributes as OA;
@@ -18,7 +19,8 @@ use OpenApi\Attributes as OA;
 class WorkerHealthController extends RestController
 {
     public function __construct(
-        #[Inject] private CacheInterface $cache
+        #[Inject] private CacheInterface $cache,
+        #[Inject] private ?WorkerConfig $workerConfig = null,
     ) {
         parent::__construct();
     }
@@ -61,21 +63,23 @@ class WorkerHealthController extends RestController
     )]
     public function check(): Response
     {
-        $workers = [
+        $workers = $this->workerConfig?->getQueueWorkerNames() ?? [
             'order_notification_worker',
             'import_employees_worker',
             'visited_worker',
-            // добавь остальные
         ];
 
         $statuses = [];
+        $instances = [];
         foreach ($workers as $workerId) {
             $heartbeat = new WorkerHeartbeat($this->cache, $workerId, 60);
             $statuses[$workerId] = $heartbeat->isAlive();
+            $instances[$workerId] = array_values($heartbeat->getInstancesStatuses());
         }
 
         return Response::json([
             'workers' => $statuses,
+            'instances' => $instances,
             'timestamp' => time(),
         ]);
     }

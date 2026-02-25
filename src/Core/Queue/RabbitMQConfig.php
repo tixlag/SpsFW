@@ -11,7 +11,7 @@ class RabbitMQConfig
         public string $password,
         public string $vhost = '/',
         public float $connectionTimeout = 3.0,
-        public float $readWriteTimeout = 3.0,
-        public int $heartbeat = 0
+        public float $readWriteTimeout = 60.0,
+        public int $heartbeat = 30
     ) {}
 }

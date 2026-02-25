@@ -8,6 +8,12 @@ class SimpleLoopStrategy implements WorkerStrategyInterface
 {
     public function run(RabbitMQWorkerRunner $runner): void
     {
-        $runner->run(); // текущая логика с while
+        $runner->start();
+
+        while ($runner->isRunning()) {
+            $runner->runIteration();
+        }
+
+        $runner->stop();
     }
 }
