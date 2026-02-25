@@ -248,8 +248,8 @@ class MyJobHandler implements JobHandlerInterface
 
 1. Обновите зависимости (`composer install`) чтобы подтянуть `monolog/monolog`.
 2. Проверьте параметры RabbitMQ:
-   - `heartbeat >= 30`
-   - `read_write_timeout >= heartbeat * 2`
+   - если heartbeat включен: `heartbeat >= 30` и `read_write_timeout >= heartbeat * 2`
+   - если heartbeat должен быть выключен: задайте `heartbeat = 0` (framework больше не форсит `30`)
 3. Убедитесь, что для воркеров заданы корректные `queue`/`exchange`/`routing_key` в `WorkerConfig`.
 4. Для новых задач используйте `PayloadQueueJob` либо `PayloadJobInterface`.
 5. Для существующих задач миграция не обязательна.

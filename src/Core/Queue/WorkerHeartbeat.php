@@ -34,11 +34,11 @@ class WorkerHeartbeat
     public function beat(): void
     {
         $now = time();
-        $this->cache->set($this->workerHeartbeatKey(), $now, $this->ttl);
+        $this->cacheSet($this->workerHeartbeatKey(), $now, $this->ttl);
 
         if ($this->instanceId !== null) {
             $this->touchInstance($this->instanceId, $now);
-            $this->cache->set($this->workerHeartbeatKey($this->instanceId), $now, $this->ttl);
+            $this->cacheSet($this->workerHeartbeatKey($this->instanceId), $now, $this->ttl);
         }
     }
 
@@ -53,11 +53,11 @@ class WorkerHeartbeat
             'data' => $data
         ];
 
-        $this->cache->set($this->workerStatusKey(), $statusPayload, $this->ttl);
+        $this->cacheSet($this->workerStatusKey(), $statusPayload, $this->ttl);
 
         if ($this->instanceId !== null) {
             $this->touchInstance($this->instanceId, $statusPayload['updated_at']);
-            $this->cache->set($this->workerStatusKey($this->instanceId), $statusPayload, $this->ttl);
+            $this->cacheSet($this->workerStatusKey($this->instanceId), $statusPayload, $this->ttl);
         }
     }
 
@@ -71,18 +71,18 @@ class WorkerHeartbeat
             'timestamp' => time()
         ];
 
-        $this->cache->set($this->workerErrorKey(), $errorPayload, $this->ttl * 10);
+        $this->cacheSet($this->workerErrorKey(), $errorPayload, $this->ttl * 10);
 
         if ($this->instanceId !== null) {
             $this->touchInstance($this->instanceId, $errorPayload['timestamp']);
-            $this->cache->set($this->workerErrorKey($this->instanceId), $errorPayload, $this->ttl * 10);
+            $this->cacheSet($this->workerErrorKey($this->instanceId), $errorPayload, $this->ttl * 10);
         }
     }
 
     public function isAlive(): bool
     {
         if ($this->instanceId !== null) {
-            $lastBeat = (int)($this->cache->get($this->workerHeartbeatKey($this->instanceId)) ?? 0);
+            $lastBeat = (int)($this->cacheGet($this->workerHeartbeatKey($this->instanceId), 0) ?? 0);
             return $lastBeat > 0 && (time() - $lastBeat) < $this->ttl * 2;
         }
 
@@ -90,17 +90,18 @@ class WorkerHeartbeat
             return true;
         }
 
-        $lastBeat = (int)($this->cache->get($this->workerHeartbeatKey()) ?? 0);
+        $lastBeat = (int)($this->cacheGet($this->workerHeartbeatKey(), 0) ?? 0);
         return $lastBeat > 0 && (time() - $lastBeat) < $this->ttl * 2;
     }
 
     public function getStatus(): ?array
     {
         if ($this->instanceId !== null) {
-            return $this->cache->get($this->workerStatusKey($this->instanceId));
+            $status = $this->cacheGet($this->workerStatusKey($this->instanceId));
+            return is_array($status) ? $status : null;
         }
 
-        $status = $this->cache->get($this->workerStatusKey());
+        $status = $this->cacheGet($this->workerStatusKey());
         if (is_array($status)) {
             return $status;
         }
@@ -117,10 +118,11 @@ class WorkerHeartbeat
     public function getLastError(): ?array
     {
         if ($this->instanceId !== null) {
-            return $this->cache->get($this->workerErrorKey($this->instanceId));
+            $error = $this->cacheGet($this->workerErrorKey($this->instanceId));
+            return is_array($error) ? $error : null;
         }
 
-        $error = $this->cache->get($this->workerErrorKey());
+        $error = $this->cacheGet($this->workerErrorKey());
         if (is_array($error)) {
             return $error;
         }
@@ -156,15 +158,15 @@ class WorkerHeartbeat
                 continue;
             }
 
-            $lastBeat = (int)($this->cache->get($this->workerHeartbeatKey($instanceId)) ?? 0);
+            $lastBeat = (int)($this->cacheGet($this->workerHeartbeatKey($instanceId), 0) ?? 0);
             if ($lastBeat <= 0 || ($now - $lastBeat) >= ($this->ttl * 2)) {
                 unset($instances[$instanceId]);
                 $dirty = true;
                 continue;
             }
 
-            $status = $this->cache->get($this->workerStatusKey($instanceId));
-            $lastError = $this->cache->get($this->workerErrorKey($instanceId));
+            $status = $this->cacheGet($this->workerStatusKey($instanceId));
+            $lastError = $this->cacheGet($this->workerErrorKey($instanceId));
 
             $result[$instanceId] = [
                 'instance_id' => $instanceId,
@@ -189,9 +191,9 @@ class WorkerHeartbeat
     public function clear(): void
     {
         if ($this->instanceId !== null) {
-            $this->cache->delete($this->workerHeartbeatKey($this->instanceId));
-            $this->cache->delete($this->workerStatusKey($this->instanceId));
-            $this->cache->delete($this->workerErrorKey($this->instanceId));
+            $this->cacheDelete($this->workerHeartbeatKey($this->instanceId));
+            $this->cacheDelete($this->workerStatusKey($this->instanceId));
+            $this->cacheDelete($this->workerErrorKey($this->instanceId));
 
             $instances = $this->getInstancesIndex();
             unset($instances[$this->instanceId]);
@@ -199,9 +201,9 @@ class WorkerHeartbeat
             return;
         }
 
-        $this->cache->delete($this->workerHeartbeatKey());
-        $this->cache->delete($this->workerStatusKey());
-        $this->cache->delete($this->workerErrorKey());
+        $this->cacheDelete($this->workerHeartbeatKey());
+        $this->cacheDelete($this->workerStatusKey());
+        $this->cacheDelete($this->workerErrorKey());
 
         $instances = $this->getInstancesIndex();
         foreach (array_keys($instances) as $instanceId) {
@@ -209,44 +211,50 @@ class WorkerHeartbeat
                 continue;
             }
 
-            $this->cache->delete($this->workerHeartbeatKey($instanceId));
-            $this->cache->delete($this->workerStatusKey($instanceId));
-            $this->cache->delete($this->workerErrorKey($instanceId));
+            $this->cacheDelete($this->workerHeartbeatKey($instanceId));
+            $this->cacheDelete($this->workerStatusKey($instanceId));
+            $this->cacheDelete($this->workerErrorKey($instanceId));
         }
 
-        $this->cache->delete($this->instancesIndexKey());
+        $this->cacheDelete($this->instancesIndexKey());
     }
 
     private function workerHeartbeatKey(?string $instanceId = null): string
     {
+        $workerToken = $this->workerCacheToken();
+
         if ($instanceId === null) {
-            return "worker:heartbeat:{$this->workerId}";
+            return "worker.heartbeat.{$workerToken}";
         }
 
-        return "worker:heartbeat:{$this->workerId}:{$instanceId}";
+        return "worker.heartbeat.{$workerToken}.{$this->instanceCacheToken($instanceId)}";
     }
 
     private function workerStatusKey(?string $instanceId = null): string
     {
+        $workerToken = $this->workerCacheToken();
+
         if ($instanceId === null) {
-            return "worker:status:{$this->workerId}";
+            return "worker.status.{$workerToken}";
         }
 
-        return "worker:status:{$this->workerId}:{$instanceId}";
+        return "worker.status.{$workerToken}.{$this->instanceCacheToken($instanceId)}";
     }
 
     private function workerErrorKey(?string $instanceId = null): string
     {
+        $workerToken = $this->workerCacheToken();
+
         if ($instanceId === null) {
-            return "worker:error:{$this->workerId}";
+            return "worker.error.{$workerToken}";
         }
 
-        return "worker:error:{$this->workerId}:{$instanceId}";
+        return "worker.error.{$workerToken}.{$this->instanceCacheToken($instanceId)}";
     }
 
     private function instancesIndexKey(): string
     {
-        return "worker:instances:{$this->workerId}";
+        return "worker.instances." . $this->workerCacheToken();
     }
 
     private function touchInstance(string $instanceId, int $timestamp): void
@@ -261,7 +269,7 @@ class WorkerHeartbeat
      */
     private function getInstancesIndex(): array
     {
-        $raw = $this->cache->get($this->instancesIndexKey(), []);
+        $raw = $this->cacheGet($this->instancesIndexKey(), []);
         if (!is_array($raw)) {
             return [];
         }
@@ -282,6 +290,61 @@ class WorkerHeartbeat
     private function setInstancesIndex(array $instances): void
     {
         $ttl = max($this->ttl * self::INSTANCE_INDEX_TTL_FACTOR, $this->ttl * 2);
-        $this->cache->set($this->instancesIndexKey(), $instances, $ttl);
+        $this->cacheSet($this->instancesIndexKey(), $instances, $ttl);
+    }
+
+    private function instanceCacheToken(string $instanceId): string
+    {
+        $normalized = preg_replace('/[^a-zA-Z0-9_.-]/', '_', $instanceId);
+        if (!is_string($normalized) || $normalized === '') {
+            $normalized = 'instance';
+        }
+
+        if (strlen($normalized) > 80) {
+            $normalized = substr($normalized, 0, 80);
+        }
+
+        return sprintf('%s_%s', $normalized, substr(sha1($instanceId), 0, 10));
+    }
+
+    private function workerCacheToken(): string
+    {
+        $normalized = preg_replace('/[^a-zA-Z0-9_.-]/', '_', $this->workerId);
+        if (!is_string($normalized) || $normalized === '') {
+            $normalized = 'worker';
+        }
+
+        if (strlen($normalized) > 80) {
+            $normalized = substr($normalized, 0, 80);
+        }
+
+        return sprintf('%s_%s', $normalized, substr(sha1($this->workerId), 0, 10));
+    }
+
+    private function cacheSet(string $key, mixed $value, int $ttl): void
+    {
+        try {
+            $this->cache->set($key, $value, $ttl);
+        } catch (\Throwable) {
+            // Ignore cache write failures to avoid crashing worker loop.
+        }
+    }
+
+    private function cacheGet(string $key, mixed $default = null): mixed
+    {
+        try {
+            return $this->cache->get($key, $default);
+        } catch (\Throwable) {
+            return $default;
+        }
+    }
+
+    private function cacheDelete(string $key): void
+    {
+        try {
+            $this->cache->delete($key);
+        } catch (\Throwable) {
+            // Ignore cache delete failures in cleanup paths.
+        }
     }
 }

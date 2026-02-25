@@ -227,8 +227,16 @@ class QueueClientAndPublisherFactory
 
     private function buildConfig(): array
     {
-        $heartbeat = $this->config->heartbeat > 0 ? $this->config->heartbeat : 30;
-        $readWriteTimeout = max($this->config->readWriteTimeout, (float)($heartbeat * 2));
+        $heartbeat = max(0, (int)$this->config->heartbeat);
+        $readWriteTimeout = (float)$this->config->readWriteTimeout;
+
+        if ($heartbeat > 0) {
+            $readWriteTimeout = max($readWriteTimeout, (float)($heartbeat * 2));
+        }
+
+        if ($readWriteTimeout <= 0.0) {
+            $readWriteTimeout = $heartbeat > 0 ? (float)($heartbeat * 2) : 60.0;
+        }
 
         return [
             "host" => $this->config->host,

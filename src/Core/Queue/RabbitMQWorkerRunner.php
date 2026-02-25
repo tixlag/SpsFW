@@ -65,7 +65,7 @@ class RabbitMQWorkerRunner
             ?: ($this->heartbeat?->getWorkerId() ?: ($this->client->getQueue() ?: 'queue-worker'));
         $this->logger = $logger ?? $this->resolveDefaultLogger($this->workerId);
         $this->workerInstanceId = $workerInstanceId
-            ?: sprintf('%s@%s:%d:%d', $this->workerId, $this->hostname, $this->pid, time());
+            ?: $this->buildWorkerInstanceId();
 
         if ($this->heartbeat) {
             $this->heartbeat->attachInstance($this->workerInstanceId);
@@ -712,8 +712,8 @@ class RabbitMQWorkerRunner
     private function resolveDefaultLogger(string $workerId): LoggerInterface
     {
         try {
-            $projectRoot = dirname(__DIR__, 3);
-            $logFile = $projectRoot . '/.logs/workers/' . $workerId . '.log';
+            $projectRoot = $this->resolveProjectRoot();
+            $logFile = $projectRoot . '/log/workers/' . $workerId . '.log';
             return new MonologLogger($logFile, 'queue.' . $workerId);
         } catch (\Throwable) {
             // Fallback to DI logger if monolog logger could not be initialized.
@@ -729,5 +729,72 @@ class RabbitMQWorkerRunner
         }
 
         return new NullLogger();
+    }
+
+    private function buildWorkerInstanceId(): string
+    {
+        $safeWorkerId = preg_replace('/[^a-zA-Z0-9_.-]/', '_', $this->workerId) ?: 'worker';
+        $safeHost = preg_replace('/[^a-zA-Z0-9_.-]/', '_', $this->hostname) ?: 'host';
+
+        $suffix = '';
+        try {
+            $suffix = substr(bin2hex(random_bytes(4)), 0, 8);
+        } catch (\Throwable) {
+            $suffix = (string)mt_rand(10000000, 99999999);
+        }
+
+        return sprintf('%s.%s.%d.%d.%s', $safeWorkerId, $safeHost, $this->pid, time(), $suffix);
+    }
+
+    private function resolveProjectRoot(): string
+    {
+        $envRoot = getenv('SPS_PROJECT_ROOT');
+        if (is_string($envRoot) && $envRoot !== '' && is_dir($envRoot)) {
+            return rtrim($envRoot, '/');
+        }
+
+        $scriptFile = $_SERVER['SCRIPT_FILENAME'] ?? null;
+        if (is_string($scriptFile) && $scriptFile !== '') {
+            $scriptDir = is_dir($scriptFile) ? $scriptFile : dirname($scriptFile);
+            $rootFromScript = $this->findProjectRoot($scriptDir);
+            if ($rootFromScript !== null) {
+                return $rootFromScript;
+            }
+        }
+
+        $cwd = getcwd();
+        if (is_string($cwd) && $cwd !== '') {
+            $rootFromCwd = $this->findProjectRoot($cwd);
+            if ($rootFromCwd !== null) {
+                return $rootFromCwd;
+            }
+
+            return rtrim($cwd, '/');
+        }
+
+        return dirname(__DIR__, 3);
+    }
+
+    private function findProjectRoot(string $startDir): ?string
+    {
+        $dir = realpath($startDir);
+        if ($dir === false) {
+            return null;
+        }
+
+        for ($i = 0; $i < 10; $i++) {
+            if (is_file($dir . '/composer.json')) {
+                return $dir;
+            }
+
+            $parent = dirname($dir);
+            if ($parent === $dir) {
+                break;
+            }
+
+            $dir = $parent;
+        }
+
+        return null;
     }
 }
