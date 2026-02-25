@@ -279,7 +279,7 @@ class RabbitMQWorkerRunner
 
             $this->logger->info('job_started', $this->jobContext($jobName, $messageId, $attempt));
 
-            $result = $this->runHandlerWithTimeout($handler, $job, $jobName);
+            $result = $this->runHandlerWithTimeout($handler, $job, $jobName, $messageId);
             $durationMs = (int)round((microtime(true) - $startedAt) * 1000);
 
             switch ($result) {
@@ -399,7 +399,7 @@ class RabbitMQWorkerRunner
         }
     }
 
-    private function runHandlerWithTimeout(JobHandlerInterface $handler, JobInterface $job, string $jobName): JobResult
+    private function runHandlerWithTimeout(JobHandlerInterface $handler, JobInterface $job, string $jobName, string $messageId): JobResult
     {
         $timeoutSec = $this->executionPolicy->jobTimeoutSec;
         if ($timeoutSec <= 0) {
@@ -421,8 +421,13 @@ class RabbitMQWorkerRunner
             : SIG_DFL;
 
         pcntl_async_signals(true);
-        pcntl_signal(SIGALRM, static function () use ($jobName, $timeoutSec): void {
-            throw new JobTimeoutException(sprintf('Job %s timed out after %d seconds', $jobName, $timeoutSec));
+        pcntl_signal(SIGALRM, static function () use ($jobName, $job, $timeoutSec, $messageId): void {
+            $e = new JobTimeoutException(sprintf('Job %s timed out after %d seconds'.PHP_EOL.'MessageId: %s', $jobName, $timeoutSec, $messageId));
+            $this->reportToGlobalExceptionHandler($e, 'chunk_processing_failed', [
+                'message_id' => $messageId,
+                'job_name' => $jobName ?? 'unknown',
+            ]);
+            throw $e;
         });
         pcntl_alarm($timeoutSec);
 
