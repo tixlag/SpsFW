@@ -30,6 +30,8 @@ class RabbitMQWorkerRunner
     private string $hostname;
     private int $pid;
     private bool $pcntlWarningLogged = false;
+    private bool $isReportingToGlobalHandler = false;
+    private mixed $globalExceptionHandler;
 
     private array $stats = [
         'processed' => 0,
@@ -64,6 +66,7 @@ class RabbitMQWorkerRunner
         $this->workerId = $workerId
             ?: ($this->heartbeat?->getWorkerId() ?: ($this->client->getQueue() ?: 'queue-worker'));
         $this->logger = $logger ?? $this->resolveDefaultLogger($this->workerId);
+        $this->globalExceptionHandler = $this->resolveGlobalExceptionHandler();
         $this->workerInstanceId = $workerInstanceId
             ?: $this->buildWorkerInstanceId();
 
@@ -220,6 +223,10 @@ class RabbitMQWorkerRunner
                 'message_id' => $messageId,
                 'error' => $e->getMessage(),
             ]));
+            $this->reportToGlobalExceptionHandler($e, 'chunk_processing_failed', [
+                'message_id' => $messageId,
+                'job_name' => $chunk['jobName'] ?? 'unknown',
+            ]);
 
             $this->handleRetryOrDlq(
                 $message,
@@ -308,6 +315,11 @@ class RabbitMQWorkerRunner
                 'error' => $e->getMessage(),
                 'exception' => get_class($e),
             ]));
+            $this->reportToGlobalExceptionHandler($e, 'job_exception', [
+                'job_name' => $jobName,
+                'message_id' => $messageId,
+                'attempt' => $attempt,
+            ]);
 
             $reason = $e instanceof JobTimeoutException ? 'job_timeout' : 'job_exception';
             $this->handleRetryOrDlq($message, $envelope, $attempt, $reason, $e);
@@ -376,6 +388,11 @@ class RabbitMQWorkerRunner
             $this->logger->error('job_delay_republish_failed', $this->jobContext($jobName, $messageId, $attempt, [
                 'error' => $e->getMessage(),
             ]));
+            $this->reportToGlobalExceptionHandler($e, 'job_delay_republish_failed', [
+                'job_name' => $jobName,
+                'message_id' => $messageId,
+                'attempt' => $attempt,
+            ]);
 
             $message->nack(false, true);
             return true;
@@ -729,6 +746,55 @@ class RabbitMQWorkerRunner
         }
 
         return new NullLogger();
+    }
+
+    private function resolveGlobalExceptionHandler(): mixed
+    {
+        if (!function_exists('set_exception_handler') || !function_exists('restore_exception_handler')) {
+            return null;
+        }
+
+        try {
+            $previous = set_exception_handler(static function (\Throwable $exception): void {
+            });
+            restore_exception_handler();
+
+            return $previous;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Forward internally-caught runtime exceptions to app-level global handler.
+     *
+     * These exceptions are not re-thrown, so set_exception_handler would not see them otherwise.
+     *
+     * @param array<string, mixed> $context
+     */
+    private function reportToGlobalExceptionHandler(\Throwable $exception, string $reason, array $context = []): void
+    {
+        if ($this->workerId === 'errors-worker') {
+            return;
+        }
+
+        if ($this->isReportingToGlobalHandler || !is_callable($this->globalExceptionHandler)) {
+            return;
+        }
+
+        $this->isReportingToGlobalHandler = true;
+        try {
+            call_user_func($this->globalExceptionHandler, $exception);
+        } catch (\Throwable $reportError) {
+            $this->logger->error('global_exception_handler_failed', $this->baseContext(array_merge([
+                'reason' => $reason,
+                'source_exception' => get_class($exception),
+                'source_message' => $exception->getMessage(),
+                'report_error' => $reportError->getMessage(),
+            ], $context)));
+        } finally {
+            $this->isReportingToGlobalHandler = false;
+        }
     }
 
     private function buildWorkerInstanceId(): string
