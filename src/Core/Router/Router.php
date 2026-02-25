@@ -28,6 +28,7 @@ use SpsFW\Core\DI\DIContainer;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\RouteNotFoundException;
+use SpsFW\Core\Exceptions\TokenExpiredException;
 use SpsFW\Core\Http\HttpMethod;
 use SpsFW\Core\Http\Request;
 use SpsFW\Core\Http\Response;
@@ -68,6 +69,8 @@ class Router
      * @var array
      */
     protected array $dependencies = [];
+    private mixed $globalExceptionHandler = null;
+    private bool $isReportingToGlobalHandler = false;
 
     protected array $controllersDirs = [
         __DIR__ . '/../',
@@ -121,6 +124,7 @@ class Router
 //            $this->redis = null;
 //        }
         $this->container = DIContainer::getInstance($this->cacheDir);
+        $this->globalExceptionHandler = $this->resolveGlobalExceptionHandler();
 
         $this->loadRoutes();
     }
@@ -444,6 +448,10 @@ class Router
             $this->currentRoute = $this->findRoute();
             return $this->processRoute($this->currentRoute);
         } catch (\Throwable $e) {
+            if (!$this->shouldSkipGlobalErrorReporting($e)) {
+                $this->reportToGlobalExceptionHandler($e);
+            }
+
 //            if (!($e instanceof BaseException)) {
             if (!($e instanceof AuthorizationException)) {
                 error_log(
@@ -885,6 +893,56 @@ class Router
         $srcDir = $currentDir . '/src';
 
         return [$libraryDir, $srcDir];
+    }
+
+    private function shouldSkipGlobalErrorReporting(\Throwable $exception): bool
+    {
+        if ($exception instanceof AuthorizationException || $exception instanceof TokenExpiredException || $exception instanceof RouteNotFoundException) {
+            return true;
+        }
+
+        $code = (int)$exception->getCode();
+        return $code === 401 || $code === 403;
+    }
+
+    private function resolveGlobalExceptionHandler(): mixed
+    {
+        if (!function_exists('set_exception_handler') || !function_exists('restore_exception_handler')) {
+            return null;
+        }
+
+        try {
+            $previous = set_exception_handler(static function (\Throwable $exception): void {
+            });
+            restore_exception_handler();
+
+            return $previous;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function reportToGlobalExceptionHandler(\Throwable $exception): void
+    {
+        if ($this->isReportingToGlobalHandler || !is_callable($this->globalExceptionHandler)) {
+            return;
+        }
+
+        $this->isReportingToGlobalHandler = true;
+        try {
+            call_user_func($this->globalExceptionHandler, $exception);
+        } catch (\Throwable $reportError) {
+            error_log(
+                sprintf(
+                    "GlobalExceptionHandlerError: %s while reporting %s: %s",
+                    $reportError->getMessage(),
+                    get_class($exception),
+                    $exception->getMessage()
+                )
+            );
+        } finally {
+            $this->isReportingToGlobalHandler = false;
+        }
     }
 
 
