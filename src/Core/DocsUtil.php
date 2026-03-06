@@ -8,6 +8,7 @@ use OpenApi\Generator;
 use OpenApi\Loggers\DefaultLogger;
 use OpenApi\Pipeline;
 use SpsFW\Core\Router\PathManager;
+use SpsFW\Core\Swagger\OperationIdRemoveProcessor;
 use SpsFW\Core\Swagger\SetOperationIdFromMethodNameProcessor;
 
 class DocsUtil
@@ -76,7 +77,7 @@ class DocsUtil
             new \OpenApi\Processors\MergeJsonContent(),
             new \OpenApi\Processors\MergeXmlContent(),
 //            new \OpenApi\Processors\OperationId(),
-            new SetOperationIdFromMethodNameProcessor(),
+            new OperationIdRemoveProcessor(),
             new \OpenApi\Processors\CleanUnmerged(),
             new \OpenApi\Processors\PathFilter(),
             new \OpenApi\Processors\CleanUnusedComponents(),
