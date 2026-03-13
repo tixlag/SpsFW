@@ -278,7 +278,7 @@ class Router
                 $phpIniAttribute = $phpIniAttributes[0]->newInstance();
                 $phpIniSettings = $phpIniAttribute->settings;
             }
-            
+
             foreach ($httpMethods as $httpMethod) {
                 $httpMethodString = is_string($httpMethod) ? $httpMethod : $httpMethod->value;
                 $key = ($httpMethodString) . ':' . $fullPath;
@@ -316,7 +316,7 @@ class Router
                 $propertyName = $attributesOpenApi['property'] ?? $property->getName();
 
                 $propertyType = $property->getType();
-                $propertyDefaultValue = $property->getDefaultValue();
+                $propertyDefaultValue = $property->getDefaultValue() ?? $attributesOpenApi['default'];
 
                 $propertyRules = [];
 
@@ -755,7 +755,7 @@ class Router
         ?array $phpIniSettings = null,
     ): Response {
         $previousIniValues = [];
-        
+
         // Apply PHP INI settings if specified in route
         if ($phpIniSettings !== null && is_array($phpIniSettings) && !empty($phpIniSettings)) {
             foreach ($phpIniSettings as $setting => $value) {
@@ -763,7 +763,7 @@ class Router
                 ini_set($setting, $value);
             }
         }
-        
+
         $args = [];
 
         // Convert exceptParams keys to camelCase for proper matching
@@ -785,7 +785,7 @@ class Router
         }
 
 //        try {
-            $result = $controller->{$methodName}(...$args);
+        $result = $controller->{$methodName}(...$args);
 //        }
 //        finally {
 //            // Restore previous INI settings if they were changed
