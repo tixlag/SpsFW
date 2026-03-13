@@ -306,20 +306,43 @@ class Router
     {
         $rules = [];
         $reflection = new ReflectionClass($dtoClass);
-        $properties = $reflection->getProperties();
 
+        // Собираем promoted-параметры конструктора, чтобы не дублировать
+        $promotedParamNames = [];
+        $constructorParamDefaults = [];
+        $constructor = $reflection->getConstructor();
+        if ($constructor) {
+            foreach ($constructor->getParameters() as $param) {
+                if ($param->isPromoted()) {
+                    $promotedParamNames[] = $param->getName();
+                }
+                if ($param->isDefaultValueAvailable()) {
+                    $constructorParamDefaults[$param->getName()] = $param->getDefaultValue();
+                }
+            }
+        }
+
+        // Обрабатываем свойства класса (включая promoted)
+        $properties = $reflection->getProperties();
         foreach ($properties as $property) {
             $propertyAttributes = $property->getAttributes(Property::class);
             $realPropertyName = $property->getName();
             foreach ($propertyAttributes as $propertyAttribute) {
                 $attributesOpenApi = $propertyAttribute->getArguments();
                 $propertyName = $attributesOpenApi['property'] ?? $property->getName();
-
                 $propertyType = $property->getType();
-                $propertyDefaultValue = $property->getDefaultValue() ?? $attributesOpenApi['default'];
+
+                // Дефолт: сначала из свойства, затем из параметра конструктора
+                $propertyDefaultValue = null;
+                if ($property->hasDefaultValue()) {
+                    $propertyDefaultValue = $property->getDefaultValue();
+                } elseif (array_key_exists($realPropertyName, $constructorParamDefaults)) {
+                    $propertyDefaultValue = $constructorParamDefaults[$realPropertyName];
+                } else {
+                    $propertyDefaultValue = $attributesOpenApi['default'] ?? null;
+                }
 
                 $propertyRules = [];
-
                 if (isset($propertyDefaultValue)) {
                     $propertyRules['default'] = $propertyDefaultValue;
                 }
@@ -329,11 +352,10 @@ class Router
                     if ($attributeKey === 'ref' || !$propertyType->isBuiltin() || $attributeKey === 'items') {
                         if (!$propertyType->isBuiltin()) {
                             $attributeValue = $propertyType->getName();
-                        } else if ($attributeKey === 'items' and isset($attributeValue->ref)) {
+                        } elseif ($attributeKey === 'items' && isset($attributeValue->ref)) {
                             $attributeValue = $attributeValue->ref;
                         }
                         if (!class_exists($attributeValue)) break;
-
                         if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
                             $propertyRules['ref'] = $attributeValue;
                             $propertyRules['type'] = 'array';
@@ -344,8 +366,6 @@ class Router
                         }
                         break;
                     }
-
-                    // Сохраняем только валидационные атрибуты
                     if (isset(Validator::$attributesOpenApi[$attributeKey])) {
                         $propertyRules[$attributeKey] = $attributeValue;
                     }
@@ -353,6 +373,67 @@ class Router
 
                 if (!empty($propertyRules)) {
                     $rules[$propertyName] = $propertyRules;
+                }
+            }
+        }
+
+        // Обрабатываем НЕ-promoted параметры конструктора с атрибутом Property
+        if ($constructor) {
+            foreach ($constructor->getParameters() as $param) {
+                if ($param->isPromoted()) {
+                    continue; // уже обработан выше через getProperties()
+                }
+
+                $paramAttributes = $param->getAttributes(Property::class);
+                if (empty($paramAttributes)) {
+                    continue;
+                }
+
+                $realParamName = $param->getName();
+                foreach ($paramAttributes as $paramAttribute) {
+                    $attributesOpenApi = $paramAttribute->getArguments();
+                    $propertyName = $attributesOpenApi['property'] ?? $realParamName;
+                    $paramType = $param->getType();
+
+                    $defaultValue = null;
+                    if ($param->isDefaultValueAvailable()) {
+                        $defaultValue = $param->getDefaultValue();
+                    } elseif (isset($attributesOpenApi['default'])) {
+                        $defaultValue = $attributesOpenApi['default'];
+                    }
+
+                    $propertyRules = [];
+                    if (isset($defaultValue)) {
+                        $propertyRules['default'] = $defaultValue;
+                    }
+                    $propertyRules['real_name'] = $realParamName;
+
+                    foreach ($attributesOpenApi as $attributeKey => $attributeValue) {
+                        if ($attributeKey === 'ref' || ($paramType && !$paramType->isBuiltin()) || $attributeKey === 'items') {
+                            if ($paramType && !$paramType->isBuiltin()) {
+                                $attributeValue = $paramType->getName();
+                            } elseif ($attributeKey === 'items' && isset($attributeValue->ref)) {
+                                $attributeValue = $attributeValue->ref;
+                            }
+                            if (!class_exists($attributeValue)) break;
+                            if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
+                                $propertyRules['ref'] = $attributeValue;
+                                $propertyRules['type'] = 'array';
+                                $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                            } else {
+                                $propertyRules['ref'] = $attributeValue;
+                                $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                            }
+                            break;
+                        }
+                        if (isset(Validator::$attributesOpenApi[$attributeKey])) {
+                            $propertyRules[$attributeKey] = $attributeValue;
+                        }
+                    }
+
+                    if (!empty($propertyRules)) {
+                        $rules[$propertyName] = $propertyRules;
+                    }
                 }
             }
         }
