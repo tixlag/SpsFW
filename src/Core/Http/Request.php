@@ -131,7 +131,7 @@ class Request
         if ($this->content === null) {
             return null;
         }
-    
+
         $contentType = $this->getHeader('Content-Type');
         if ($contentType && str_contains($contentType, 'application/json')) {
             return json_decode($this->content, true);
@@ -178,27 +178,28 @@ class Request
         if ($value === 'true') {
             return true;
         }
-        
+
         if ($value === 'false') {
             return false;
         }
-        
+
         // Check for null
         if ($value === 'null') {
             return null;
         }
-        
+
         // Check for numeric values
-        if (is_numeric($value)) {
-            // Check if it's an integer
-            if (ctype_digit($value) || (ltrim($value, '-+') !== '' && ctype_digit(ltrim($value, '+-')))) {
-                return (int) $value;
-            }
-            
-            // It's a float
-            return (float) $value;
-        }
-        
+        // Убрали, потому что мешало массивам
+//        if (is_numeric($value)) {
+//            // Check if it's an integer
+//            if (ctype_digit($value) || (ltrim($value, '-+') !== '' && ctype_digit(ltrim($value, '+-')))) {
+//                return (int) $value;
+//            }
+//
+//            // It's a float
+//            return (float) $value;
+//        }
+
         // Return as string if no conversion applies
         return $value;
     }
