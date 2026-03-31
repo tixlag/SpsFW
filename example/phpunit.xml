@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit
+         bootstrap="bootstrap.php"
+         colors="true"
+         cacheResultFile=".cache/phpunit/test-results"
+         failOnRisky="true">
+
+    <testsuites>
+        <testsuite name="All Tests">
+            <directory suffix="Test.php">src</directory>
+        </testsuite>
+    </testsuites>
+
+    <!-- Если нужно покрытие кода, раскомментируйте и установите XDEBUG_MODE=coverage -->
+    <!--
+    <coverage cacheDirectory=".phpunit.cache/code-coverage">
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+        <exclude>
+            <directory suffix="Dto.php">src</directory>
+            <directory suffix="Test.php">src</directory>
+        </exclude>
+        <report>
+            <html outputDirectory=".coverage/html"/>
+            <text outputFile=".coverage/coverage.txt"/>
+        </report>
+    </coverage>
+    -->
+
+    <php>
+        <env name="APP_ENV" value="test"/>
+        <ini name="error_reporting" value="-1"/>
+        <ini name="display_errors" value="On"/>
+    </php>
+</phpunit>

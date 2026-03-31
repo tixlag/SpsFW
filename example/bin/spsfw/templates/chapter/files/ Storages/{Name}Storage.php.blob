@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {Namespace}\Storages;
+
+use PDO;
+use SpsFW\Core\Storage\PdoStorage;
+
+class {Name}Storage extends PdoStorage
+{
+    // TODO: Добавление методов с БД здесь
+    /**
+        $this->getPdo() - новая база
+        $this->getPdo('db_old') - старая база
+    */
+}

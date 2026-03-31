@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {Namespace}\Services;
+
+use SpsFW\Core\Attributes\Inject;
+use {Namespace}\Storages\{Name}Storage;
+
+class {Name}Service
+{
+    public function __construct(
+        #[Inject] private {Name}Storage ${name}Storage
+    ) {}
+
+    // TODO: добавление методов тут...
+}

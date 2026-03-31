@@ -1,0 +1,32 @@
+<?php
+
+namespace {Namespace}\Controllers;
+
+use SpsFW\Core\Attributes\Controller;
+use OpenApi\Attributes as OA;
+use SpsFW\Core\Attributes\Inject;
+use SpsFW\Core\Attributes\Route;
+use SpsFW\Core\Attributes\Validation\QueryParams;
+use SpsFW\Core\Http\Response;
+use SpsFW\Core\Route\RestController;
+use {Namespace}\Services\{Name}Service;
+
+#[Controller]
+#[OA\Tag(name: "{name}", description: "API для работы с {name}")]
+class {Name}Controller extends RestController
+{
+    public function __construct(
+        #[Inject] private {Name}Service ${name}Service
+    )
+    {
+        parent::__construct();
+    }
+
+    // TODO: Добавление 'api-routes' здесь по примеру
+    // Пример:
+    // #[Route('/api/{name}', httpMethods: [('GET' || 'POST' || 'PUT' || 'DELETE')])]
+    // public function getAll(): Response
+    // {
+    //     return Response::json($this->{name}Service->getAll());
+    // }
+}

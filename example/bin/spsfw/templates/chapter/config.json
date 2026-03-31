@@ -1,0 +1,27 @@
+{
+  "name": "Chapter Template",
+  "description": "Creates standard chapter structure",
+  "directories": [
+    "Controllers",
+    "Services",
+    "Storages",
+    "Entities",
+    "DTOs",
+    "Enums",
+    "Tickets"
+  ],
+  "files": [
+    {
+      "template": "Controller.php.blob",
+      "output": "Controllers/{Name}Controller.php"
+    },
+    {
+      "template": "Service.php.blob",
+      "output": "Services/{Name}Service.php"
+    },
+    {
+      "template": "Storage.php.blob",
+      "output": "Storages/{Name}Storage.php"
+    }
+  ]
+}
