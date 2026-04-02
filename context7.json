@@ -1,6 +1,8 @@
 {
   "projectTitle": "SpsFW",
   "description": "PHP 8.2+ framework for REST APIs. Attribute-based routing, DI container, DTO validation, JWT auth, Redis, RabbitMQ queues, Outbox pattern.",
+  "url": "https://context7.com/tixlag/spsfw",
+  "public_key": "pk_O1kR4IBdPnr1SEDuKqrfD",
   "branch": "master",
   "folders": [
     "docs",
