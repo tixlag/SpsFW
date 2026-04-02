@@ -1,0 +1,32 @@
+# SpsFW
+
+> PHP 8.2+ framework for REST APIs with attribute-based routing, built-in DI container, DTO validation, JWT authentication, Redis, and RabbitMQ queue support.
+
+SpsFW follows an attribute-oriented architecture: routes, validation, access control, and dependency injection are declared directly on controller methods and constructor parameters using PHP 8 attributes. There are no config files for routing — everything is co-located with the code.
+
+## Getting Started
+
+- [Installation & Project Structure](docs/1_getting_started.md)
+- [Configuration (.env, Config::init)](docs/7_configuration.md)
+- [Database Migrations (Phinx)](docs/8_database_migrations.md)
+
+## Core Concepts
+
+- [Routing (#[Route], #[Controller])](docs/2_routing.md)
+- [Controllers (RestController, response helpers)](docs/3_controllers.md)
+- [Validation (DTO, #[JsonBody], #[QueryParams])](docs/4_validation.md)
+- [Dependency Injection (#[Inject], DIContainer)](docs/6_dependency_injection.md)
+- [Middleware (#[Middleware], MiddlewareInterface)](docs/5_middleware.md)
+- [Access Control (#[AccessRulesAll], #[AccessRulesAny])](docs/9_access_control.md)
+- [Exceptions (BaseException, HTTP codes)](docs/10_exceptions.md)
+
+## Advanced Features
+
+- [Queue Workers (RabbitMQ)](docs/11_queue_workes.md)
+- [Large Messages (>16MB, chunked)](docs/12_large_messages.md)
+- [Queue Reliability & Monitoring](docs/13_queue_reliability_update.md)
+- [Outbox Pattern (guaranteed delivery)](docs/16_outbox_pattern.md)
+- [Rate Limiting (#[RateLimit], Redis)](docs/17_rate_limiting.md)
+- [Preload & OPcache](docs/15_preload_opcache.md)
+- [CLI Code Generator (spsfw)](docs/14_spsfw_cli.md)
+- [PhpIni Attribute (#[PhpIni])](docs/memory_limit_attribute.md)
