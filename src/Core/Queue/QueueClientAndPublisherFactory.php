@@ -2,41 +2,127 @@
 namespace SpsFW\Core\Queue;
 
 use PhpAmqpLib\Exchange\AMQPExchangeType;
+use SpsFW\Core\Queue\Interfaces\QueuePublisherInterface;
 use SpsFW\Core\Queue\LargeMessage\ChunkedMessageHandler;
 use SpsFW\Core\Queue\LargeMessage\LargeMessageHandlerInterface;
+use SpsFW\Core\Queue\Outbox\OutboxPublisher;
+use SpsFW\Core\Queue\Outbox\OutboxStorage;
 use SpsFW\Core\Workers\WorkerConfig;
 
 /**
  * Factory builds transport clients and publishers.
  * Keep retry/DLX configuration centralized here.
+ *
+ * Outbox Pattern:
+ *   Если передать OutboxStorage в конструктор, все методы create() / createByWorkerName() /
+ *   createWithRetry() автоматически вернут OutboxPublisher — при сбое RabbitMQ сообщения
+ *   будут сохраняться в БД и публиковаться при восстановлении.
+ *
+ *   Для явного отказа от outbox используйте методы createWithoutOutbox() / createByWorkerNameWithoutOutbox().
  */
 class QueueClientAndPublisherFactory
 {
     private RabbitMQConfig $config;
     private ?WorkerConfig $workerConfig;
     private ?LargeMessageHandlerInterface $largeMessageHandler;
+    private ?OutboxStorage $outboxStorage;
 
     public function __construct(
         RabbitMQConfig $config,
         ?WorkerConfig $workerConfig = null,
-        ?LargeMessageHandlerInterface $largeMessageHandler = null
+        ?LargeMessageHandlerInterface $largeMessageHandler = null,
+        ?OutboxStorage $outboxStorage = null,
     ) {
         $this->config = $config;
         $this->workerConfig = $workerConfig;
         $this->largeMessageHandler = $largeMessageHandler;
+        $this->outboxStorage = $outboxStorage;
+    }
+
+    // -------------------------------------------------------------------------
+    // create() — умный алиас: outbox, если хранилище задано в конструкторе
+    // -------------------------------------------------------------------------
+
+    /**
+     * Создаёт publisher.
+     *
+     * Если в конструктор фабрики передан OutboxStorage — возвращает OutboxPublisher
+     * (сообщения сохраняются в БД при недоступности RabbitMQ).
+     * Иначе — RabbitMQQueuePublisher (прежнее поведение, полная обратная совместимость).
+     *
+     * @return OutboxPublisher|RabbitMQQueuePublisher
+     */
+    public function create(
+        string $queueName,
+        string $exchange = "",
+        string $routingKey = "",
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+        ?LargeMessageHandlerInterface $largeMessageHandler = null
+    ): QueuePublisherInterface {
+        $publisher = $this->createWithoutOutbox($queueName, $exchange, $routingKey, $exchangeType, $exchangeArguments, $largeMessageHandler);
+
+        if ($this->outboxStorage !== null) {
+            return new OutboxPublisher($publisher, $this->outboxStorage);
+        }
+
+        return $publisher;
     }
 
     /**
-     * Создаёт базовый publisher с поддержкой больших сообщений.
+     * Создаёт publisher по имени воркера из конфига.
+     * Автоматически активирует outbox, если хранилище задано в конструкторе.
      *
-     * @param string $queueName
-     * @param string $exchange
-     * @param string $routingKey
-     * @param string $exchangeType - e.g. AMQPExchangeType::DIRECT or 'x-delayed-message'
-     * @param array $exchangeArguments - аргументы для exchange
-     * @param LargeMessageHandlerInterface|null обработчик для больших сообщений
+     * @return OutboxPublisher|RabbitMQQueuePublisher
      */
-    public function create(
+    public function createByWorkerName(string $workerName): QueuePublisherInterface
+    {
+        $publisher = $this->createByWorkerNameWithoutOutbox($workerName);
+
+        if ($this->outboxStorage !== null) {
+            return new OutboxPublisher($publisher, $this->outboxStorage);
+        }
+
+        return $publisher;
+    }
+
+    /**
+     * Создаёт publisher с retry через DLX.
+     * Автоматически активирует outbox, если хранилище задано в конструкторе.
+     *
+     * @return OutboxPublisher|RabbitMQQueuePublisher
+     */
+    public function createWithRetry(
+        string $queueName,
+        string $exchange = "",
+        string $routingKey = "",
+        int $retryDelayMs = 10000,
+        int $maxRetries = 5,
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+        ?LargeMessageHandlerInterface $largeMessageHandler = null
+    ): QueuePublisherInterface {
+        $publisher = $this->createWithRetryWithoutOutbox($queueName, $exchange, $routingKey, $retryDelayMs, $maxRetries, $exchangeType, $exchangeArguments, $largeMessageHandler);
+
+        if ($this->outboxStorage !== null) {
+            return new OutboxPublisher($publisher, $this->outboxStorage);
+        }
+
+        return $publisher;
+    }
+
+    // -------------------------------------------------------------------------
+    // WithoutOutbox — явный обход outbox
+    // -------------------------------------------------------------------------
+
+    /**
+     * Создаёт базовый RabbitMQQueuePublisher без обёртки outbox.
+     * Используйте, когда потеря сообщения при сбое RabbitMQ допустима.
+     *
+     * @param string $exchangeType - e.g. AMQPExchangeType::DIRECT или 'x-delayed-message'
+     * @param array  $exchangeArguments - аргументы для exchange
+     */
+    public function createWithoutOutbox(
         string $queueName,
         string $exchange = "",
         string $routingKey = "",
@@ -46,17 +132,17 @@ class QueueClientAndPublisherFactory
     ): RabbitMQQueuePublisher {
         $cfg = array_merge($this->buildConfig(), [
             "exchange_arguments" => $exchangeArguments,
-            "queue_arguments" => [],
+            "queue_arguments"    => [],
         ]);
 
         $handler = $largeMessageHandler ?? $this->largeMessageHandler;
 
         $client = new RabbitMQClient(
-            exchange: $exchange,
-            exchangeType: $exchangeType,
-            queue: $queueName,
-            routingKey: $routingKey,
-            config: $cfg,
+            exchange:            $exchange,
+            exchangeType:        $exchangeType,
+            queue:               $queueName,
+            routingKey:          $routingKey,
+            config:              $cfg,
             largeMessageHandler: $handler,
         );
 
@@ -66,26 +152,135 @@ class QueueClientAndPublisherFactory
     }
 
     /**
-     * Создает публикатор задач в очередь по ее имени
-     * @param string $workerName - название воркера
-     * @return RabbitMQQueuePublisher
+     * Создаёт RabbitMQQueuePublisher по имени воркера без обёртки outbox.
      */
-    public function createByWorkerName(
-        string $workerName,
-    ): RabbitMQQueuePublisher {
+    public function createByWorkerNameWithoutOutbox(string $workerName): RabbitMQQueuePublisher
+    {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
         $exchangeType = !empty($workerConfig["delayed"])
             ? "x-delayed-message"
             : AMQPExchangeType::DIRECT;
 
-        return $this->create(
-            queueName: $workerConfig["queue"],
-            exchange: $workerConfig["exchange"],
-            routingKey: $workerConfig["routing_key"],
-            exchangeType: $exchangeType,
+        return $this->createWithoutOutbox(
+            queueName:       $workerConfig["queue"],
+            exchange:        $workerConfig["exchange"],
+            routingKey:      $workerConfig["routing_key"],
+            exchangeType:    $exchangeType,
             exchangeArguments: $workerConfig["exchange_arguments"] ?? [],
         );
     }
+
+    /**
+     * Создаёт RabbitMQQueuePublisher с retry через DLX без обёртки outbox.
+     */
+    public function createWithRetryWithoutOutbox(
+        string $queueName,
+        string $exchange = "",
+        string $routingKey = "",
+        int $retryDelayMs = 10000,
+        int $maxRetries = 5,
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+        ?LargeMessageHandlerInterface $largeMessageHandler = null
+    ): RabbitMQQueuePublisher {
+        $dlxExchange  = $exchange . ".dlx";
+        $retryQueue   = $queueName . ".retry";
+        $retryRouting = $routingKey . ".retry";
+
+        $mainArgs = [
+            "x-dead-letter-exchange"     => $dlxExchange,
+            "x-dead-letter-routing-key"  => $retryRouting,
+        ];
+
+        $retryArgs = [
+            "x-dead-letter-exchange"    => $exchange,
+            "x-dead-letter-routing-key" => $routingKey,
+            "x-message-ttl"             => $retryDelayMs,
+        ];
+
+        $handler = $largeMessageHandler ?? $this->largeMessageHandler;
+
+        $mainClient = new RabbitMQClient(
+            exchange:     $exchange,
+            exchangeType: $exchangeType,
+            queue:        $queueName,
+            routingKey:   $routingKey,
+            config:       array_merge($this->buildConfig(), [
+                "exchange_arguments" => $exchangeArguments,
+                "queue_arguments"    => $mainArgs,
+            ]),
+            largeMessageHandler: $handler,
+        );
+
+        // ensure dlx exchange exists (direct)
+        new RabbitMQClient(
+            $dlxExchange,
+            AMQPExchangeType::DIRECT,
+            "",
+            "",
+            $this->buildConfig(),
+        );
+
+        // create retry queue bound to dlxExchange
+        new RabbitMQClient(
+            $dlxExchange,
+            AMQPExchangeType::DIRECT,
+            $retryQueue,
+            $retryRouting,
+            array_merge($this->buildConfig(), [
+                "queue_arguments" => $retryArgs,
+            ]),
+        );
+
+        $this->ensureDlqTopology($queueName, $exchange, $routingKey);
+
+        return new RabbitMQQueuePublisher($mainClient, $routingKey, $exchange);
+    }
+
+    // -------------------------------------------------------------------------
+    // WithOutbox — явное создание outbox-publisher с указанием хранилища
+    // -------------------------------------------------------------------------
+
+    /**
+     * Создаёт OutboxPublisher с явно указанным хранилищем.
+     * Используйте, если хранилище не было передано в конструктор фабрики,
+     * или если нужен отдельный storage с другими параметрами.
+     */
+    public function createWithOutbox(
+        string $queueName,
+        string $exchange = "",
+        string $routingKey = "",
+        OutboxStorage $storage = null,
+        int $autoFlushBatch = 10,
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+        ?LargeMessageHandlerInterface $largeMessageHandler = null,
+    ): OutboxPublisher {
+        $storage ??= $this->outboxStorage ?? throw new \LogicException(
+            'OutboxStorage must be provided either via createWithOutbox() argument or QueueClientAndPublisherFactory constructor.'
+        );
+        $publisher = $this->createWithoutOutbox($queueName, $exchange, $routingKey, $exchangeType, $exchangeArguments, $largeMessageHandler);
+        return new OutboxPublisher($publisher, $storage, $autoFlushBatch);
+    }
+
+    /**
+     * Создаёт OutboxPublisher по имени воркера с явно указанным хранилищем.
+     */
+    public function createByWorkerNameWithOutbox(
+        string $workerName,
+        OutboxStorage $storage = null,
+        int $autoFlushBatch = 10,
+    ): OutboxPublisher {
+        $storage ??= $this->outboxStorage ?? throw new \LogicException(
+            'OutboxStorage must be provided either via createByWorkerNameWithOutbox() argument or QueueClientAndPublisherFactory constructor.'
+        );
+        $publisher = $this->createByWorkerNameWithoutOutbox($workerName);
+        return new OutboxPublisher($publisher, $storage, $autoFlushBatch);
+    }
+
+    // -------------------------------------------------------------------------
+    // Client factories
+    // -------------------------------------------------------------------------
 
     public function createClientByWorkerName(string $workerName): RabbitMQClient
     {
@@ -94,18 +289,15 @@ class QueueClientAndPublisherFactory
             ? "x-delayed-message"
             : AMQPExchangeType::DIRECT;
 
-        $handler = $this->largeMessageHandler;
-
         $client = new RabbitMQClient(
-            exchange: $workerConfig["exchange"],
+            exchange:     $workerConfig["exchange"],
             exchangeType: $exchangeType,
-            queue: $workerConfig["queue"],
-            routingKey: $workerConfig["routing_key"],
-            config: array_merge($this->buildConfig(), [
-                "exchange_arguments" =>
-                    $workerConfig["exchange_arguments"] ?? [],
+            queue:        $workerConfig["queue"],
+            routingKey:   $workerConfig["routing_key"],
+            config:       array_merge($this->buildConfig(), [
+                "exchange_arguments" => $workerConfig["exchange_arguments"] ?? [],
             ]),
-            largeMessageHandler: $handler,
+            largeMessageHandler: $this->largeMessageHandler,
         );
 
         $this->ensureDlqTopology(
@@ -126,11 +318,11 @@ class QueueClientAndPublisherFactory
         $handler = $largeMessageHandler ?? $this->largeMessageHandler;
 
         $client = new RabbitMQClient(
-            exchange: $exchange,
-            exchangeType: AMQPExchangeType::DIRECT,
-            queue: $queueName,
-            routingKey: $routingKey,
-            config: $this->buildConfig(),
+            exchange:            $exchange,
+            exchangeType:        AMQPExchangeType::DIRECT,
+            queue:               $queueName,
+            routingKey:          $routingKey,
+            config:              $this->buildConfig(),
             largeMessageHandler: $handler,
         );
 
@@ -139,83 +331,16 @@ class QueueClientAndPublisherFactory
         return $client;
     }
 
-    /**
-     * Создаёт publisher, опционально с retry через DLX.
-     * Поддерживает использование x-delayed-message в качестве main exchange.
-     */
-    public function createWithRetry(
-        string $queueName,
-        string $exchange = "",
-        string $routingKey = "",
-        int $retryDelayMs = 10000,
-        int $maxRetries = 5,
-        string $exchangeType = AMQPExchangeType::DIRECT,
-        array $exchangeArguments = [],
-        ?LargeMessageHandlerInterface $largeMessageHandler = null
-    ): RabbitMQQueuePublisher {
-        $dlxExchange = $exchange . ".dlx";
-        $retryQueue = $queueName . ".retry";
-        $retryRouting = $routingKey . ".retry";
-
-        // main queue DLX -> dlxExchange
-        $mainArgs = [
-            "x-dead-letter-exchange" => $dlxExchange,
-            "x-dead-letter-routing-key" => $retryRouting,
-        ];
-
-        // retry queue sends messages back to main exchange after TTL
-        $retryArgs = [
-            "x-dead-letter-exchange" => $exchange,
-            "x-dead-letter-routing-key" => $routingKey,
-            "x-message-ttl" => $retryDelayMs,
-        ];
-
-        $handler = $largeMessageHandler ?? $this->largeMessageHandler;
-
-        // create main client (could be x-delayed-message)
-        $mainClient = new RabbitMQClient(
-            exchange: $exchange,
-            exchangeType: $exchangeType,
-            queue: $queueName,
-            routingKey: $routingKey,
-            config: array_merge($this->buildConfig(), [
-                "exchange_arguments" => $exchangeArguments,
-                "queue_arguments" => $mainArgs,
-            ]),
-            largeMessageHandler: $handler,
-        );
-
-        // ensure dlx exchange exists (direct)
-        $dlxClient = new RabbitMQClient(
-            $dlxExchange,
-            AMQPExchangeType::DIRECT,
-            "",
-            "",
-            $this->buildConfig(),
-        );
-
-        // create retry queue bound to dlxExchange
-        $retryClient = new RabbitMQClient(
-            $dlxExchange,
-            AMQPExchangeType::DIRECT,
-            $retryQueue,
-            $retryRouting,
-            array_merge($this->buildConfig(), [
-                "queue_arguments" => $retryArgs,
-            ]),
-        );
-
-        $this->ensureDlqTopology($queueName, $exchange, $routingKey);
-
-        return new RabbitMQQueuePublisher($mainClient, $routingKey, $exchange);
-    }
+    // -------------------------------------------------------------------------
+    // Static helpers
+    // -------------------------------------------------------------------------
 
     /**
      * Создаёт обработчик для больших сообщений с указанными параметрами.
      *
-     * @param int $chunkSize Размер чанка в байтах (по умолчанию 8MB)
-     * @param bool $enableCompression Включить сжатие GZIP
-     * @param string $checksumAlgo Алгоритм_checksum (md5, sha256)
+     * @param int    $chunkSize         Размер чанка в байтах (по умолчанию 8MB)
+     * @param bool   $enableCompression Включить сжатие GZIP
+     * @param string $checksumAlgo      Алгоритм checksum (md5, sha256)
      */
     public static function createLargeMessageHandler(
         int $chunkSize = 8 * 1024 * 1024,
@@ -224,6 +349,8 @@ class QueueClientAndPublisherFactory
     ): LargeMessageHandlerInterface {
         return new ChunkedMessageHandler($chunkSize, $enableCompression, $checksumAlgo);
     }
+
+    // -------------------------------------------------------------------------
 
     private function buildConfig(): array
     {
@@ -239,17 +366,17 @@ class QueueClientAndPublisherFactory
         }
 
         return [
-            "host" => $this->config->host,
-            "port" => $this->config->port,
-            "user" => $this->config->user,
-            "password" => $this->config->password,
-            "vhost" => $this->config->vhost,
+            "host"               => $this->config->host,
+            "port"               => $this->config->port,
+            "user"               => $this->config->user,
+            "password"           => $this->config->password,
+            "vhost"              => $this->config->vhost,
             "connection_timeout" => $this->config->connectionTimeout,
             "read_write_timeout" => $readWriteTimeout,
-            "heartbeat" => $heartbeat,
-            "prefetch" => 1,
-            "exchange_durable" => true,
-            "queue_durable" => true,
+            "heartbeat"          => $heartbeat,
+            "prefetch"           => 1,
+            "exchange_durable"   => true,
+            "queue_durable"      => true,
         ];
     }
 
@@ -259,16 +386,12 @@ class QueueClientAndPublisherFactory
             return;
         }
 
-        $dlxExchange = $exchange . ".dlx";
-        $dlqQueue = $queueName . ".dlq";
-        $dlqRouting = $routingKey . ".dlq";
-
         new RabbitMQClient(
-            exchange: $dlxExchange,
+            exchange:     $exchange . ".dlx",
             exchangeType: AMQPExchangeType::DIRECT,
-            queue: $dlqQueue,
-            routingKey: $dlqRouting,
-            config: $this->buildConfig(),
+            queue:        $queueName . ".dlq",
+            routingKey:   $routingKey . ".dlq",
+            config:       $this->buildConfig(),
         );
     }
 }

@@ -24,6 +24,27 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
 
     public function publish(JobInterface $job, array $options = []): void
     {
+        [$payload, $properties, $routingKey, $exchange] = $this->buildPublishArgs($job, $options);
+        $this->client->publish($payload, $properties, $routingKey, $exchange);
+    }
+
+    /**
+     * Собирает payload (массив) для публикации без отправки в брокер.
+     * Используется OutboxPublisher для сохранения в БД при недоступности RabbitMQ.
+     */
+    public function buildPayload(JobInterface $job, array $options = []): array
+    {
+        [$payload] = $this->buildPublishArgs($job, $options);
+        return $payload;
+    }
+
+    public function getClient(): RabbitMQClient
+    {
+        return $this->client;
+    }
+
+    private function buildPublishArgs(JobInterface $job, array $options): array
+    {
         $isPayloadJob = $job instanceof PayloadJobInterface;
         $messageId = $options['messageId'] ?? bin2hex(random_bytes(16));
         $attempt = isset($options['attempt']) ? max(0, (int)$options['attempt']) : 0;
@@ -72,7 +93,7 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
             ]);
         }
 
-        $this->client->publish($payload, $properties, $routingKey, $exchange);
+        return [$payload, $properties, $routingKey, $exchange];
     }
 
     /**

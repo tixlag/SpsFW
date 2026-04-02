@@ -67,6 +67,13 @@ class Config
                     ],
                 ],
             ],
+            'redis' => [
+                'host'     => $_ENV['REDIS_HOST']     ?? '127.0.0.1',
+                'port'     => (int) ($_ENV['REDIS_PORT'] ?? 6379),
+                'password' => $_ENV['REDIS_PASSWORD'] ?? null,
+                'database' => (int) ($_ENV['REDIS_DB'] ?? 0),
+                'timeout'  => (float) ($_ENV['REDIS_TIMEOUT'] ?? 2.0),
+            ],
         ];
 
         self::$config = array_merge($baseConfig, $customConfig);

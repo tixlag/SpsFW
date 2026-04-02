@@ -14,12 +14,15 @@ class Validator
 {
 
     public static array $attributesOpenApi = [
-        'required' => true,
-        'type' => true,
-        'minimum' => true,
-        'maximum' => true,
+        'required'  => true,
+        'type'      => true,
+        'minimum'   => true,
+        'maximum'   => true,
         'minLength' => true,
         'maxLength' => true,
+        'enum'      => true,
+        'format'    => true,
+        'nullable'  => true,
     ];
 
     /**
@@ -345,10 +348,36 @@ class Validator
                 }
                 return $rawValue;
             case 'format':
-                if ($ruleValue === 'date') {
-                    $date = DateTimeHelper::toUTC($rawValue);
-                    return $date->format('Y-m-d');
+                if ($rawValue === null) {
+                    return $rawValue;
                 }
+                switch ($ruleValue) {
+                    case 'date':
+                        $date = DateTimeHelper::toUTC($rawValue);
+                        return $date->format('Y-m-d');
+                    case 'uuid':
+                        if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $rawValue)) {
+                            throw new ValidationException("Поле '$propertyName' должно быть валидным UUID");
+                        }
+                        return $rawValue;
+                    case 'email':
+                        if (!filter_var($rawValue, FILTER_VALIDATE_EMAIL)) {
+                            throw new ValidationException("Поле '$propertyName' должно быть валидным email");
+                        }
+                        return $rawValue;
+                    case 'date-time':
+                        $dt = DateTimeHelper::toUTC($rawValue);
+                        return $dt->format(\DateTimeInterface::ATOM);
+                }
+                return $rawValue;
+            case 'enum':
+                if ($rawValue !== null && !in_array($rawValue, $ruleValue, true)) {
+                    throw new ValidationException("Поле '$propertyName' должно быть одним из: " . implode(', ', $ruleValue));
+                }
+                return $rawValue;
+            case 'nullable':
+                // nullable — флаг, валидация не нужна
+                return $rawValue;
         }
         throw new ValidationException("Ошибку вызвал $propertyName проверьте параметр");
     }

@@ -85,4 +85,45 @@ abstract class PdoStorage
         }
     }
 
+    /**
+     * Подготовить и выполнить SELECT, вернуть все строки.
+     */
+    protected function fetchAll(string $sql, array $params = [], string $id = 'db'): array
+    {
+        $stmt = $this->getPdo($id)->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Подготовить и выполнить SELECT, вернуть одну строку или null.
+     */
+    protected function fetchOne(string $sql, array $params = [], string $id = 'db'): ?array
+    {
+        $stmt = $this->getPdo($id)->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Выполнить INSERT/UPDATE/DELETE, вернуть количество затронутых строк.
+     */
+    protected function execute(string $sql, array $params = [], string $id = 'db'): int
+    {
+        $stmt = $this->getPdo($id)->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->rowCount();
+    }
+
+    /**
+     * EXISTS-проверка. Ожидает SQL вида: SELECT EXISTS(SELECT 1 FROM ...).
+     */
+    protected function exists(string $sql, array $params = [], string $id = 'db'): bool
+    {
+        $stmt = $this->getPdo($id)->prepare($sql);
+        $stmt->execute($params);
+        return (bool) $stmt->fetchColumn();
+    }
+
 }

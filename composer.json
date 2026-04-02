@@ -8,6 +8,7 @@
     "ext-mbstring": "*",
     "ext-pdo": "*",
     "ext-pcntl": "*",
+    "ext-redis": "*",
     "robmorgan/phinx": "^0.16.9",
     "firebase/php-jwt": "^6.11",
     "zircote/swagger-php": "^5.1",

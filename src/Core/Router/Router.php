@@ -17,6 +17,8 @@ use SpsFW\Core\Attributes\AccessRulesAny;
 use SpsFW\Core\Attributes\PhpIni;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\RateLimit;
+use SpsFW\Core\Middleware\RateLimitMiddleware;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Attributes\Validation\FormDataBody;
 use SpsFW\Core\Attributes\Validation\JsonBody;
@@ -25,6 +27,7 @@ use SpsFW\Core\Attributes\Validation\QueryParams;
 use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Auth\Util\AccessChecker;
 use SpsFW\Core\DI\DIContainer;
+use Psr\Log\LoggerInterface;
 use SpsFW\Core\Exceptions\AuthorizationException;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Exceptions\RouteNotFoundException;
@@ -484,6 +487,20 @@ class Router
             $middlewares = array_merge($middlewares, $middlewareAttr->getMiddlewares());
         }
 
+        // #[RateLimit] — сахар над RateLimitMiddleware
+        foreach ($reflection->getAttributes(RateLimit::class) as $attribute) {
+            /** @var RateLimit $rl */
+            $rl = $attribute->newInstance();
+            $middlewares[] = [
+                'class'  => RateLimitMiddleware::class,
+                'params' => [
+                    'maxRequests'   => $rl->requests,
+                    'windowSeconds' => $rl->window,
+                    'keyPrefix'     => $rl->prefix,
+                ],
+            ];
+        }
+
         return $middlewares;
     }
 
@@ -528,38 +545,26 @@ class Router
         try {
             $this->currentRoute = $this->findRoute();
             return $this->processRoute($this->currentRoute);
+        } catch (BaseException $e) {
+            if (!$this->shouldSkipGlobalErrorReporting($e)) {
+                $this->reportToGlobalExceptionHandler($e);
+            }
+            if (!($e instanceof AuthorizationException) && !($e instanceof RouteNotFoundException)) {
+                error_log(sprintf(
+                    "AppError: %s on %u in %s\nTrace: %s\n--- End of trace",
+                    $e->getMessage(), $e->getLine(), $e->getFile(), $e->getTraceAsString()
+                ));
+            }
+            return Response::error($e, null, $e->getCode() ?: 500);
         } catch (\Throwable $e) {
             if (!$this->shouldSkipGlobalErrorReporting($e)) {
                 $this->reportToGlobalExceptionHandler($e);
             }
-
-//            if (!($e instanceof BaseException)) {
-            if (!($e instanceof AuthorizationException)) {
-                error_log(
-                    sprintf(
-                        "ApplicationError exception: %s on %u in %s\nTrace: %s\n--- End of trace",
-                        $e->getMessage(),
-                        $e->getLine(),
-                        $e->getFile(),
-                        $e->getTraceAsString()
-                    )
-                );
-            }
-
-//            if (isset(Metrics::$registry)) {
-//                Metrics::incrementErrors(
-//                    $e,
-//                    $_SERVER['REQUEST_METHOD'],
-//                    $this->currentRoute['rawPath'] ?? Request::getUri(),
-//                    http_response_code()
-//                );
-//            }
-            return Response::error($e);
-        } finally {
-            // todo вернуть поддержку Prometheus
-//            if (isset(Metrics::$registry)) {
-//                Metrics::createAll($this->currentRoute['rawPath'] ?? Request::getUri());
-//            }
+            error_log(sprintf(
+                "InternalError: %s on %u in %s\nTrace: %s\n--- End of trace",
+                $e->getMessage(), $e->getLine(), $e->getFile(), $e->getTraceAsString()
+            ));
+            return Response::error(null, 'Internal server error', 500);
         }
     }
 
@@ -649,8 +654,21 @@ class Router
         $this->request->setParams($route['match_params']);
 
         // Применяем middleware перед выполнением контроллера
-        foreach ($middlewares as $middleware) {
-            $this->request = $middleware->handle($this->request);
+        $executedMiddlewares = [];
+        try {
+            foreach ($middlewares as $middleware) {
+                $executedMiddlewares[] = $middleware;
+                $this->request = $middleware->handle($this->request);
+            }
+        } catch (\Throwable $e) {
+            // Вызываем after() уже запущенных middleware в обратном порядке
+            $errResponse = Response::error($e instanceof BaseException ? $e : null, $e instanceof BaseException ? null : 'Internal server error', $e instanceof BaseException ? ($e->getCode() ?: 500) : 500);
+            foreach (array_reverse($executedMiddlewares) as $ranMiddleware) {
+                try {
+                    $errResponse = $ranMiddleware->after($errResponse);
+                } catch (\Throwable) {}
+            }
+            throw $e;
         }
 
         // Выполняем метод контроллера

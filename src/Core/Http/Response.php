@@ -91,17 +91,19 @@ class Response
             }
         }
 
+        $isDebug = ($_ENV['DEBUG_MODE'] ?? 'false') === 'true';
+
         return [
             'error' => [
                 'status' => $statusCode ?? ($exception ? $exception->getCode() : 500),
                 'uri' => $_SERVER['REQUEST_URI'] ?? '',
                 'user' => $user ? ('id: ' . $user->uuid) : 'anonymous',
-                'exception' => $exception ? basename(str_replace('\\', '/', get_class($exception))) : null,
+                'exception' => $isDebug && $exception ? basename(str_replace('\\', '/', get_class($exception))) : null,
                 'message' => $message ?? ($exception ? $exception->getMessage() : 'Unknown error'),
-                'file' => $exception ? basename($exception->getFile()) : '',
-                'line' => $exception ? $exception->getLine() : 0,
-                'previous' => $previous,
-                'trace' => $trace,
+                'file' => $isDebug && $exception ? basename($exception->getFile()) : '',
+                'line' => $isDebug && $exception ? $exception->getLine() : 0,
+                'previous' => $isDebug ? $previous : null,
+                'trace' => $isDebug ? $trace : [],
             ]
         ];
     }
@@ -364,5 +366,38 @@ class Response
         return new self(200)
             ->setContentType($contentType ?? 'text/html')
             ->setBody($date);
+    }
+
+    /**
+     * 204 No Content — для DELETE и logout.
+     */
+    public static function noContent(): self
+    {
+        return new self(204, body: '');
+    }
+
+    /**
+     * Отдать бинарный файл для скачивания.
+     */
+    public static function file(string $content, string $filename, string $mimeType = 'application/octet-stream'): self
+    {
+        $response = new self(200, contentType: $mimeType);
+        $response->headers['Content-Disposition'] = "attachment; filename=\"{$filename}\"";
+        $response->headers['Content-Length'] = (string) strlen($content);
+        return $response->setBody($content);
+    }
+
+    /**
+     * Ответ с ошибкой по строковому сообщению (без Throwable).
+     *
+     * Пример: Response::errorMessage('Payment not found', 404)
+     */
+    public static function errorMessage(string $message, int $status = 400, ?array $details = null): self
+    {
+        $body = ['error' => $message];
+        if ($details !== null) {
+            $body['details'] = $details;
+        }
+        return self::json($body, $status);
     }
 }

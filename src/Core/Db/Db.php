@@ -35,32 +35,43 @@ class Db
             }
             $config = $dbConfigs;
 
-            $username = $config['user'];
-            $password = $config['password'];
+            $adapter   = $config['adapter'];
+            $username  = $config['user'];
+            $password  = $config['password'];
             $debugMode = $config['debugMode'];
 
             static $dsns = [];
             if (!isset($dsns[$configId])) {
-                $dsns[$configId] = sprintf("%s:host=%s;port=%u;dbname=%s;charset=UTF8",
-                    $config['adapter'],
-                    $config['host'],
-                    $config['port'],
-                    $config['dbname']);
+                $dsns[$configId] = match ($adapter) {
+                    'pgsql' => sprintf(
+                        'pgsql:host=%s;port=%u;dbname=%s',
+                        $config['host'], $config['port'], $config['dbname']
+                    ),
+                    'mysql', 'mariadb' => sprintf(
+                        'mysql:host=%s;port=%u;dbname=%s;charset=utf8mb4',
+                        $config['host'], $config['port'], $config['dbname']
+                    ),
+                    default => throw new \InvalidArgumentException("Unsupported DB adapter: {$adapter}"),
+                };
             }
 
-            self::$pdo[$configId] = new PDO(
-                $dsns[$configId],
-                $username,
-                $password,
-                array(
-                    PDO::MYSQL_ATTR_INIT_COMMAND => "set names utf8",
-                    PDO::ATTR_EMULATE_PREPARES => $debugMode && ini_get("xdebug.mode") !== "off"
-                )
-            );
+            $options = [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES   => false,
+            ];
 
-            self::$pdo[$configId]->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            if (in_array($adapter, ['mysql', 'mariadb'], true)) {
+                $options[PDO::MYSQL_ATTR_INIT_COMMAND] = "SET NAMES utf8mb4";
+                // Профилирование только для MySQL/MariaDB
+                if ($debugMode) {
+                    $options[PDO::ATTR_EMULATE_PREPARES] = ini_get('xdebug.mode') !== 'off';
+                }
+            }
 
-            if ($debugMode) {
+            self::$pdo[$configId] = new PDO($dsns[$configId], $username, $password, $options);
+
+            if ($debugMode && in_array($adapter, ['mysql', 'mariadb'], true)) {
                 self::$pdo[$configId]->query("SET profiling = 1;");
                 self::$pdo[$configId]->query("SET @@profiling_history_size = 100;");
             }
