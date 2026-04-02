@@ -1,33 +1,4 @@
 {
-  "projectTitle": "SpsFW",
-  "description": "PHP 8.2+ framework for REST APIs. Attribute-based routing, DI container, DTO validation, JWT auth, Redis, RabbitMQ queues, Outbox pattern.",
   "url": "https://context7.com/tixlag/spsfw",
-  "public_key": "pk_O1kR4IBdPnr1SEDuKqrfD",
-  "branch": "master",
-  "folders": [
-    "docs",
-    "src/Core"
-  ],
-  "excludeFolders": [
-    "vendor",
-    "example",
-    ".cache"
-  ],
-  "excludeFiles": [
-    "docs/roadmap.md",
-    "TODO.md",
-    "AGENTS.md"
-  ],
-  "rules": [
-    "Routes are defined with #[Route('/path', [HttpMethod::GET])] on controller methods, never in config files.",
-    "Controllers must extend RestController and be annotated with #[Controller].",
-    "Dependencies are injected via #[Inject] in the constructor — do not instantiate services manually.",
-    "Request parameters are validated via DTO arguments annotated with #[JsonBody], #[QueryParams], #[PostBody], or #[FormDataBody].",
-    "Validation rules come from OpenApi\\Attributes\\Property on DTO properties.",
-    "Exceptions extend BaseException where the code equals the HTTP status (e.g. 404, 403, 422).",
-    "Repositories extend PdoStorage and get a PDO instance via $this->getPdo().",
-    "DI bindings (interface -> implementation) are registered in Config::$bindings or Config::setDIBindings().",
-    "Auth is handled by extending AuthServiceAbstract — do not implement JWT logic manually.",
-    "Queue jobs implement QueueJob and are published via RabbitMQQueuePublisher or OutboxPublisher."
-  ]
+  "public_key": "pk_O1kR4IBdPnr1SEDuKqrfD"
 }
