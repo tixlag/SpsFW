@@ -55,9 +55,8 @@ class ErrorHandler implements JobHandlerInterface
         $header .= "⏰ `{$job->timestamp}`\n";
         
         // User info with clickable link
-        if ($job->user !== null && $job->user->code_1c) {
-            $link = 'https://lk.sps38.pro/api/auth/login/by-code-1c/' . $job->user->code_1c;
-            $header .= "👤 Пользователь {$job->user->code_1c} [(войти под ним)]({$link})\n";
+        if ($job->user !== null && $job->user->uuid) {
+            $header .= "👤 Пользователь `{$job->user->uuid}`\n";
         }
         
         if ($job->requestUri !== null) {

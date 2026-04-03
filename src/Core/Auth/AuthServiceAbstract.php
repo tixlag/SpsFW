@@ -101,7 +101,7 @@ abstract class AuthServiceAbstract implements AuthServiceI
 
             if (!$user) {
                 $user = $this->usersService->getById($userId);
-                $accessRules = $this->accessRulesService->extractAccessRules($user->code_1c);
+                $accessRules = $this->accessRulesService->extractAccessRules($user->uuid);
                 $user->setAccessRules($accessRules);
             }
 
@@ -130,7 +130,7 @@ abstract class AuthServiceAbstract implements AuthServiceI
             throw new BadPasswordException("Неверный пароль");
         }
 
-        $accessRules = $this->accessRulesService->extractAccessRules($user->code_1c);
+        $accessRules = $this->accessRulesService->extractAccessRules($user->uuid);
 
         $user->setAccessRules($accessRules);
 

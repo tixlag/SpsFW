@@ -38,7 +38,6 @@ class ErrorJob implements JobInterface
         return json_encode([
             'user' => isset($this->user) ? [
                 'uuid' => $this->user->uuid,
-                'code_1c' => $this->user->code_1c,
             ] : null,
             'message' => $this->message,
             'file' => $this->file,
@@ -71,8 +70,7 @@ class ErrorJob implements JobInterface
         $user = null;
         if ($userData !== null) {
             $user = new UserShortDto(
-                $userData['uuid'] ?? null,
-                $userData['code_1c'] ?? null
+                $userData['uuid'] ?? null
             );
         }
 

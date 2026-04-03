@@ -35,7 +35,6 @@ class AuthTokenUtil
         $jwtConfig = Config::get('auth')['jwt'];
         $payload = $jwtConfig['payload'];
         $payload['uuid'] = $user->uuid;
-        $payload['code_1c'] = $user->code_1c;
         $payload['accessRules'] = $user->accessRules;
 
         return JWT::encode(

@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core\Auth\AccessRule;
 
+use PDO;
 use PDOException;
 use SpsFW\Core\Auth\Util\AccessRuleRegistry;
 use SpsFW\Core\Storage\PdoStorage;
@@ -9,25 +10,30 @@ use SpsFW\Core\Storage\PdoStorage;
 class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
 {
 
+    private function isMySQL(): bool
+    {
+        return $this->getPdo()->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'pgsql';
+    }
 
     /**
-     * @param string $userCode1C
+     * @param string $userUuid
      * @return array<int, mixed>
      */
-    public function extractAccessRules(string $userCode1C): array
+    public function extractAccessRules(string $userUuid): array
     {
-        $stmt = $this->getPdo()->prepare(
-        /** @lang MariaDB */
-            "SELECT
-                    uar.access_rule_id,
-                    uar.value
-                    FROM
-                        users__access_rules uar
-                    WHERE user_code_1c = :code_1c
-                    "
-        );
-        $stmt->execute(['code_1c' => $userCode1C]);
-        $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        if ($this->isMySQL()) {
+            $sql = "SELECT uar.access_rule_id, uar.value
+                    FROM users__access_rules uar
+                    WHERE user_uuid = UUID_TO_BIN(:uuid)";
+        } else {
+            $sql = "SELECT uar.access_rule_id, uar.value
+                    FROM users__access_rules uar
+                    WHERE user_uuid = :uuid";
+        }
+
+        $stmt = $this->getPdo()->prepare($sql);
+        $stmt->execute(['uuid' => $userUuid]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         if (!$rows) return [];
         $accessRules = [];
         foreach ($rows as $row) {
@@ -36,9 +42,8 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
         return $accessRules;
     }
 
-    public function addAccessRules(string $userCode1C, array $accessRules): bool
+    public function addAccessRules(string $userUuid, array $accessRules): bool
     {
-
         $transactionStarted = false;
 
         try {
@@ -61,16 +66,22 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
                     'role' => AccessRuleRegistry::getRole($accessRuleId)
                 ]);
 
-
-                $stmt = $this->getPdo()->prepare(
-                /** @lang MariaDB */
-                    "INSERT INTO users__access_rules (user_code_1c, access_rule_id, value)
-                    VALUES (:user_code_1c, :access_rule_id, :value)
-                ON DUPLICATE KEY UPDATE value = VALUES(value)
-                    "
-                );
+                if ($this->isMySQL()) {
+                    $stmt = $this->getPdo()->prepare(
+                    /** @lang MariaDB */
+                        "INSERT INTO users__access_rules (user_uuid, access_rule_id, value)
+                        VALUES (UUID_TO_BIN(:user_uuid), :access_rule_id, :value)
+                        ON DUPLICATE KEY UPDATE value = VALUES(value)"
+                    );
+                } else {
+                    $stmt = $this->getPdo()->prepare(
+                        "INSERT INTO users__access_rules (user_uuid, access_rule_id, value)
+                        VALUES (:user_uuid, :access_rule_id, :value)
+                        ON CONFLICT (user_uuid, access_rule_id) DO UPDATE SET value = EXCLUDED.value"
+                    );
+                }
                 $stmt->execute([
-                    'user_code_1c' => $userCode1C,
+                    'user_uuid' => $userUuid,
                     'access_rule_id' => $accessRuleId,
                     'value' => json_encode($accessRuleValue)
                 ]);
@@ -88,19 +99,22 @@ class AccessRuleStorage extends PdoStorage implements AccessRuleStorageI
         }
     }
 
-    public function setAccessRules(string $userCode1C, array $accessRules): bool
+    public function setAccessRules(string $userUuid, array $accessRules): bool
     {
         try {
             $this->getPdo()->beginTransaction();
 
-            $stmt = $this->getPdo()->prepare(/** @lang MariaDB */ "DELETE FROM users__access_rules WHERE user_code_1c = :user_code_1c");
-            $stmt->execute(['user_code_1c' => $userCode1C]);
+            if ($this->isMySQL()) {
+                $stmt = $this->getPdo()->prepare("DELETE FROM users__access_rules WHERE user_uuid = UUID_TO_BIN(:user_uuid)");
+            } else {
+                $stmt = $this->getPdo()->prepare("DELETE FROM users__access_rules WHERE user_uuid = :user_uuid");
+            }
+            $stmt->execute(['user_uuid' => $userUuid]);
 
-            $this->addAccessRules($userCode1C, $accessRules);
+            $this->addAccessRules($userUuid, $accessRules);
 
             return $this->getPdo()->commit();
         } catch (PDOException $e) {
-            // Откатываем транзакцию, если она начата
             if ($this->getPdo()->inTransaction()) {
                 $this->getPdo()->rollBack();
             }

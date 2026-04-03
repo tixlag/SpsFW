@@ -13,9 +13,9 @@ class Auth extends UserAbstract
 
     private static ?self $userAuth = null;
 
-    private function __construct(string $uuid, ?string $code_1c = null, array $accessRules = [])
+    private function __construct(string $uuid, array $accessRules = [])
     {
-        parent::__construct($uuid, $code_1c, $accessRules);
+        parent::__construct($uuid, $accessRules);
     }
 
     /**
@@ -33,7 +33,7 @@ class Auth extends UserAbstract
                     } catch (Exception $e) {
                         throw new AuthorizationException($e->getMessage(), 401, $e);
                     }
-                    self::$userAuth = new self($jwtDecoded->uuid, $jwtDecoded->code_1c, is_array($jwtDecoded->accessRules) ? $jwtDecoded->accessRules : get_object_vars($jwtDecoded->accessRules));
+                    self::$userAuth = new self($jwtDecoded->uuid, is_array($jwtDecoded->accessRules) ? $jwtDecoded->accessRules : get_object_vars($jwtDecoded->accessRules));
                 } else {
                     throw new AuthorizationException('Требуется аутентификация', 401);
                 }
@@ -74,7 +74,7 @@ class Auth extends UserAbstract
             // Вернем только если токен просрочен
             if ($jwtException instanceof ExpiredException) {
                 $payload = $jwtException->getPayload();
-                return new self($payload['id'], $payload['code_1c'], $payload['accessRules']);
+                return new self($payload['uuid'], $payload['accessRules']);
             } else {
                 return null;
             }
@@ -84,9 +84,9 @@ class Auth extends UserAbstract
         return self::$userAuth;
     }
 
-    public static function setForTest($uuid, $code_1c, $accessRules): void
+    public static function setForTest($uuid, $accessRules): void
     {
-        $user =  new self($uuid, $code_1c, $accessRules);
+        $user = new self($uuid, $accessRules);
         $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . AuthTokenUtil::generateJwt($user);
     }
 

@@ -7,7 +7,7 @@ use SpsFW\Core\Auth\Instances\UserAbstract;
 
 interface AccessRuleServiceI
 {
-    public function extractAccessRules(string $userCode1C): array;
+    public function extractAccessRules(string $userUuid): array;
 
     public function addAccessRules(object $accessRulesDto): ?UserAbstract;
 
