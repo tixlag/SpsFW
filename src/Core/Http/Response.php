@@ -172,6 +172,8 @@ class Response
                     'type' => 'resource',
                     'resource_type' => get_resource_type($arg)
                 ];
+            } elseif (is_string($arg)) {
+                $sanitized[] = mb_check_encoding($arg) ? $arg : 'binary_value';
             } elseif (is_callable($arg)) {
                 $sanitized[] = [
                     'type' => 'callable'

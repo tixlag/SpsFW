@@ -74,7 +74,7 @@ class Validator
 
         foreach ($cachedRules as $propertyName => $rules) {
             $rawValue = $reqParams[$propertyName] ?? null;
-            if ($rawValue === null and (($rules['required'] ?? null) !== [true]) or ($rules['nullable'] ?? null) === true) {
+            if ($rawValue === null && (($rules['required'] ?? null) !== [true] || ($rules['nullable'] ?? null) === true)) {
                 try {
                     self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $rules['default'] ?? null); // если не пришло значение, устанавливаем дефолтное или null
                     if (empty($reqParams)) throw new \Exception(); // бросаем, если вообще пустое тело, а мы что-то ждем
@@ -348,12 +348,16 @@ class Validator
                 }
                 return $rawValue;
             case 'format':
-                if ($rawValue === null) {
+                if ($rawValue === null || !is_string($rawValue)) {
                     return $rawValue;
                 }
                 switch ($ruleValue) {
                     case 'date':
-                        $date = DateTimeHelper::toUTC($rawValue);
+                        try {
+                            $date = new \DateTime($rawValue);
+                        } catch (\Exception $e) {
+                            throw new ValidationException("Неверная дата в поле '$propertyName'");
+                        }
                         return $date->format('Y-m-d');
                     case 'uuid':
                         if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $rawValue)) {
