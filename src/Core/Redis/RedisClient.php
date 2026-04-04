@@ -3,11 +3,14 @@
 namespace SpsFW\Core\Redis;
 
 use SpsFW\Core\Config;
+use SpsFW\Core\Psr\Cache\FileCache;
 
 class RedisClient
 {
     private static ?self $instance = null;
     private ?\Redis $redis = null;
+    private bool $usingFallback = false;
+    private ?FileCache $fallback = null;
 
     private function __construct() {}
 
@@ -19,9 +22,12 @@ class RedisClient
         return self::$instance;
     }
 
-    public function connection(): \Redis
+    private function tryConnect(): void
     {
-        if ($this->redis === null) {
+        if ($this->redis !== null || $this->usingFallback) {
+            return;
+        }
+        try {
             $cfg = Config::get('redis');
             $this->redis = new \Redis();
             $this->redis->connect(
@@ -36,12 +42,37 @@ class RedisClient
                 $this->redis->select((int) $cfg['database']);
             }
             $this->redis->setOption(\Redis::OPT_SERIALIZER, \Redis::SERIALIZER_NONE);
+        } catch (\Throwable) {
+            $this->redis = null;
+            $this->usingFallback = true;
+            $this->fallback = new FileCache(sys_get_temp_dir() . '/spsFW_redis_fallback');
+        }
+    }
+
+    public function connection(): \Redis
+    {
+        $this->tryConnect();
+        if ($this->redis === null) {
+            throw new \RuntimeException('Redis unavailable');
         }
         return $this->redis;
     }
 
+    /**
+     * Вернуть true, если Redis недоступен и активен FileCache-fallback.
+     */
+    public function isFallback(): bool
+    {
+        $this->tryConnect();
+        return $this->usingFallback;
+    }
+
     public function get(string $key): string|false
     {
+        if ($this->isFallback()) {
+            $value = $this->fallback->get($key, false);
+            return $value === false ? false : (string) $value;
+        }
         return $this->connection()->get($key);
     }
 
@@ -52,6 +83,13 @@ class RedisClient
      */
     public function getdel(string $key): string|false
     {
+        if ($this->isFallback()) {
+            $value = $this->fallback->get($key, false);
+            if ($value !== false) {
+                $this->fallback->delete($key);
+            }
+            return $value === false ? false : (string) $value;
+        }
         try {
             $result = $this->connection()->rawCommand('GETDEL', $key);
             return $result === null ? false : $result;
@@ -64,6 +102,9 @@ class RedisClient
 
     public function set(string $key, string $value): bool
     {
+        if ($this->isFallback()) {
+            return $this->fallback->set($key, $value);
+        }
         return $this->connection()->set($key, $value);
     }
 
@@ -72,6 +113,9 @@ class RedisClient
      */
     public function setex(string $key, int $ttl, string $value): bool
     {
+        if ($this->isFallback()) {
+            return $this->fallback->set($key, $value, $ttl);
+        }
         return $this->connection()->setex($key, $ttl, $value);
     }
 
@@ -81,11 +125,27 @@ class RedisClient
      */
     public function setnx(string $key, string $value, int $ttl): bool
     {
+        if ($this->isFallback()) {
+            if ($this->fallback->has($key)) {
+                return false;
+            }
+            return $this->fallback->set($key, $value, $ttl);
+        }
         return (bool) $this->connection()->set($key, $value, ['nx', 'ex' => $ttl]);
     }
 
     public function del(string ...$keys): int
     {
+        if ($this->isFallback()) {
+            $count = 0;
+            foreach ($keys as $key) {
+                if ($this->fallback->has($key)) {
+                    $this->fallback->delete($key);
+                    $count++;
+                }
+            }
+            return $count;
+        }
         return $this->connection()->del(...$keys);
     }
 
@@ -96,6 +156,18 @@ class RedisClient
      */
     public function incrWithTtl(string $key, int $ttl): int
     {
+        if ($this->isFallback()) {
+            $windowKey = $key . ':_w';
+            if (!$this->fallback->has($windowKey)) {
+                $this->fallback->set($windowKey, '1', $ttl);
+                $this->fallback->set($key, '1', $ttl + 5);
+                return 1;
+            }
+            $current = (int) ($this->fallback->get($key, '0'));
+            $new = $current + 1;
+            $this->fallback->set($key, (string) $new, $ttl + 5);
+            return $new;
+        }
         $count = $this->connection()->incr($key);
         if ($count === 1) {
             $this->connection()->expire($key, $ttl);
@@ -105,21 +177,41 @@ class RedisClient
 
     public function incr(string $key): int
     {
+        if ($this->isFallback()) {
+            $current = (int) ($this->fallback->get($key, '0'));
+            $new = $current + 1;
+            $this->fallback->set($key, (string) $new);
+            return $new;
+        }
         return $this->connection()->incr($key);
     }
 
     public function expire(string $key, int $ttl): bool
     {
+        if ($this->isFallback()) {
+            $value = $this->fallback->get($key);
+            if ($value === null) {
+                return false;
+            }
+            return $this->fallback->set($key, $value, $ttl);
+        }
         return $this->connection()->expire($key, $ttl);
     }
 
     public function exists(string $key): bool
     {
+        if ($this->isFallback()) {
+            return $this->fallback->has($key);
+        }
         return (bool) $this->connection()->exists($key);
     }
 
     public function ttl(string $key): int
     {
+        if ($this->isFallback()) {
+            // PSR SimpleCache не предоставляет TTL через API — возвращаем -1 (без TTL)
+            return $this->fallback->has($key) ? -1 : -2;
+        }
         return $this->connection()->ttl($key);
     }
 
@@ -128,6 +220,9 @@ class RedisClient
      */
     public function eval(string $script, array $keys = [], array $args = []): mixed
     {
+        if ($this->isFallback()) {
+            return null;
+        }
         return $this->connection()->eval($script, array_merge($keys, $args), count($keys));
     }
 
@@ -136,6 +231,9 @@ class RedisClient
      */
     public function publish(string $channel, string $message): int
     {
+        if ($this->isFallback()) {
+            return 0;
+        }
         return $this->connection()->publish($channel, $message);
     }
 
@@ -150,3 +248,5 @@ class RedisClient
         }
     }
 }
+
+

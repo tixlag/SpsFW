@@ -10,7 +10,7 @@ use SpsFW\Core\Auth\AccessRule\AccessRuleStorage;
 use SpsFW\Core\Auth\AccessRule\AccessRuleStorageI;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorageI;
-use SpsFW\Core\Psr\Cache\FileCache;
+use SpsFW\Core\Psr\Cache\RedisCache;
 use SpsFW\Core\Psr\MonologLogger;
 use SpsFW\Core\Redis\RedisClient;
 
@@ -22,7 +22,7 @@ class Config
         AuthTokenStorageI::class => AuthTokenStorage::class,
         AccessRuleServiceI::class => AccessRuleService::class,
         AccessRuleStorageI::class => AccessRuleStorage::class,
-        CacheInterface::class => FileCache::class,
+        CacheInterface::class => RedisCache::class,
         LoggerInterface::class => MonologLogger::class,
     ];
 

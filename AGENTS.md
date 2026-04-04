@@ -28,9 +28,9 @@ Exceptions/         — иерархия исключений от BaseException
 Http/               — Request (singleton), Response, HttpMethod enum
 Middleware/         — MiddlewareInterface, RateLimitMiddleware, PerformanceMiddleware
 Models/             — базовые модели
-Psr/                — FileCache (PSR-16), MonologLogger (PSR-3), GuzzleHttpClientAdapter
+Psr/                — FileCache + RedisCache (PSR-16), MonologLogger (PSR-3), GuzzleHttpClientAdapter
 Queue/              — RabbitMQ publisher/consumer, Outbox pattern, WorkerRunner, Heartbeat
-Redis/              — RedisClient singleton
+Redis/              — RedisClient singleton (с автоматическим FileCache-fallback)
 Route/              — RestController (базовый класс контроллеров)
 Router/             — Router (главный класс), ClassScanner, DICacheBuilder, PathManager
 Storage/            — PdoStorage (базовый класс репозиториев)
@@ -70,7 +70,7 @@ class UserController extends RestController
 // Config.php — биндинги по умолчанию
 public static array $bindings = [
     AuthTokenStorageI::class => AuthTokenStorage::class,
-    CacheInterface::class    => FileCache::class,
+    CacheInterface::class    => RedisCache::class,  // Redis с FileCache-fallback
     LoggerInterface::class   => MonologLogger::class,
     // ...
 ];
@@ -93,6 +93,24 @@ public static array $bindings = [
 - `RabbitMQQueuePublisher` — прямая публикация в RabbitMQ
 - `OutboxPublisher` — сохраняет в БД, `flush()` публикует батчем с `SELECT FOR UPDATE SKIP LOCKED`
 - Воркеры наследуют от базового класса в `Workers/`, запускаются как отдельные процессы
+
+### Кэш
+
+По умолчанию используется **`RedisCache`** — Redis-backed кэш с автоматическим fallback на FileCache.
+
+- **`RedisCache`** (по умолчанию) — использует `RedisClient`. Когда Redis недоступен, автоматически переключается на FileCache (`sys_get_temp_dir()/spsFW_redis_fallback/`).
+- **`FileCache`** — файловый кэш. Хранит данные в `.cache/tmp/`. Можно использовать как замену через `Config::setDIBindings()`.
+
+Переключение на FileCache в клиентском коде:
+
+```php
+// di_config.php — заменить RedisCache на FileCache
+Config::setDIBindings([
+    CacheInterface::class => FileCache::class,
+]);
+```
+
+**Ключи:** клиентский код использует любые ключи, допустимые в Redis (`:`, `{}`, и т.д.). Санитизация применяется только при fallback в FileCache — `RedisCache::sanitizeKey()` заменяет все символы кроме `[a-zA-Z0-9_\-.]` на `_`, что совпадает с поведением `FileCache::getFile()`.
 
 ---
 
