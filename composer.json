@@ -35,59 +35,19 @@
     "migrate:prod": "APP_ENV=prod vendor/bin/phinx migrate",
     "rollback:dev": "APP_ENV=dev vendor/bin/phinx rollback",
     "rollback:prod": "APP_ENV=prod vendor/bin/phinx rollback",
-    "create:prod": "APP_ENV=prod vendor/bin/phinx create",
     "create:dev": "APP_ENV=dev vendor/bin/phinx create",
-    "migration:generate:dev": [
-      "echo 'Generating migrations from schemas...'",
-      "APP_ENV=dev php scripts/generate_migrations.php"
-    ],
-    "migration:generate:prod": [
-      "echo 'Generating migrations from schemas...'",
-      "APP_ENV=prod php scripts/generate_migrations.php"
-    ],
-    "migration:status:dev": [
-      "echo 'Checking migration status...'",
-      "APP_ENV=dev vendor/bin/phinx status -c phinx.php"
-    ],
-    "migration:status:prod": [
-      "echo 'Checking migration status...'",
-      "APP_ENV=prod vendor/bin/phinx status -c phinx.php"
-    ],
-    "migration:run:dev": [
-      "echo 'Running Phinx migrations...'",
-      "APP_ENV=dev vendor/bin/phinx migrate -c phinx.php"
-    ],
-    "migration:run:prod": [
-      "echo 'Running Phinx migrations...'",
-      "APP_ENV=prod vendor/bin/phinx migrate -c phinx.php"
-    ],
-    "migration:auto:dev": [
-      "echo '🚀 Starting automatic migration process...'",
-      "@migration:generate:dev",
-      "@migration:status:dev",
-      "@migration:run:dev",
-      "echo '✅ Migration process completed successfully!'"
-    ],
-    "migration:auto:prod": [
-      "echo '🚀 Starting automatic migration process...'",
-      "@migration:generate:prod",
-      "@migration:status:prod",
-      "@migration:run:prod",
-      "echo '✅ Migration process completed successfully!'"
-    ],
-    "migration:generate:models": [
-      "echo 'Generating models from schemas...'",
-      "APP_ENV=prod php scripts/generate_migrations.php"
-    ]
+    "create:prod": "APP_ENV=prod vendor/bin/phinx create",
+    "status:dev": "APP_ENV=dev vendor/bin/phinx status",
+    "status:prod": "APP_ENV=prod vendor/bin/phinx status"
   },
   "scripts-descriptions": {
-    "migration:generate:dev": "Generate migrations from schema files",
-    "migration:run:dev": "Execute all pending migrations",
-    "migration:status:dev": "Show migration status",
-    "migration:auto:dev": "Generate and run all migrations automatically",
-    "migration:generate:prod": "Generate migrations from schema files",
-    "migration:run:prod": "Execute all pending migrations",
-    "migration:status:prod": "Show migration status",
-    "migration:auto:prod": "Generate and run all migrations automatically"
+    "migrate:dev": "Run pending migrations (dev)",
+    "migrate:prod": "Run pending migrations (prod)",
+    "rollback:dev": "Rollback last migration (dev)",
+    "rollback:prod": "Rollback last migration (prod)",
+    "create:dev": "Create a new migration file (dev)",
+    "create:prod": "Create a new migration file (prod)",
+    "status:dev": "Show migration status (dev)",
+    "status:prod": "Show migration status (prod)"
   }
 }

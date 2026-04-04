@@ -1,48 +1,189 @@
-# Миграции базы данных (Database Migrations)
+# Миграции базы данных
 
-Фреймворк предоставляет инструменты для управления схемой базы данных через миграции.
+SpsFW использует [Phinx](https://phinx.org/) для управления миграциями. Генерация схем через код отсутствует — миграции пишутся вручную на чистом SQL, что даёт полный контроль над схемой.
 
-## Определение схемы
+---
 
-Схема таблицы определяется в классе, наследующем `SpsFW\Core\Db\Migration\MigrationsSchema`.
+## Быстрый старт
 
-### Базовый класс `MigrationsSchema`
+### 1. phinx.php — три строки
 
-### Пример определения схемы
+В корне проекта создайте `phinx.php`:
 
 ```php
 <?php
-namespace App\Database\Schemas;
-
-use SpsFW\Core\Db\Migration\MigrationsSchema;
-
-class UserSchema extends MigrationsSchema
-{
-    public const string TABLE_NAME = 'users';
-    public const array VERSIONS = [
-        '1.0' => [
-            'description' => 'Create users table',
-            'up' => /** @lang MariaDB */ '
-                CREATE TABLE IF NOT EXISTS users (
-                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    email VARCHAR(255) NOT NULL UNIQUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )',
-            'down' => /** @lang MariaDB */ 'DROP TABLE users;'
-        ],
-        // Можно добавить новые версии для изменения схемы
-    ];
-}
-?>
+require_once __DIR__ . '/vendor/autoload.php';
+return \SpsFW\Core\Phinx\PhinxConfigFactory::create(__DIR__);
 ```
 
-## Команды Composer
+`PhinxConfigFactory` автоматически:
+- загружает `.env` и `.env.{APP_ENV}`
+- находит все папки `migrations/` — в проекте и во фреймворке — через маркер `MigrationRequiredClass.php`
+- возвращает готовый конфиг Phinx
 
-Для работы с миграциями используются скрипты Composer:
+Переменные окружения в `.env`:
+```dotenv
+DB_ADAPTER=mysql       # mysql | pgsql
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=myapp
+DB_USER=root
+DB_PASS=secret
+DB_CHARSET=utf8mb4
+APP_ENV=dev
+```
 
-*   `composer migration:generate:dev` / `composer migration:generate:prod`: Генерирует SQL-скрипты миграций из схем.
-*   `composer migration:run:dev` / `composer migration:run:prod`: Выполняет ожидающие миграции.
-*   `composer migration:status:dev` / `composer migration:status:prod`: Показывает статус миграций.
-*   `composer migration:auto:dev` / `composer migration:auto:prod`: Автоматически генерирует и выполняет миграции.
+### 2. Структура директорий
+
+```
+src/
+  Orders/
+    MigrationRequiredClass.php   ← маркер: здесь живёт доменная область
+    migrations/
+      20240101120000_create_orders_table.php
+  Users/
+    MigrationRequiredClass.php
+    migrations/
+      20240201080000_create_users_table.php
+db/
+  migrations/                    ← общие миграции проекта (всегда сканируется)
+  seeds/
+phinx.php
+```
+
+`MigrationRequiredClass.php` — пустой PHP-класс, его единственная роль — указать Phinx на соседнюю папку `migrations/`. Фабрика находит его рекурсивно по всему `src/`.
+
+```php
+<?php
+// src/Orders/MigrationRequiredClass.php
+namespace App\Orders;
+
+class MigrationRequiredClass {}
+```
+
+### 3. Создать миграцию
+
+```bash
+composer create:dev CreateOrdersTable
+```
+
+Phinx предложит выбрать папку — выберите нужную доменную область. Если нужна общая миграция — выберите `db/migrations`.
+
+### 4. Написать миграцию
+
+```php
+<?php
+declare(strict_types=1);
+
+use Phinx\Migration\AbstractMigration;
+
+final class CreateOrdersTable extends AbstractMigration
+{
+    public function change(): void
+    {
+        $this->execute('
+            CREATE TABLE IF NOT EXISTS orders (
+                id          CHAR(36) PRIMARY KEY,
+                user_id     CHAR(36) NOT NULL,
+                total       DECIMAL(10,2) NOT NULL DEFAULT 0,
+                status      ENUM("pending","paid","cancelled") NOT NULL DEFAULT "pending",
+                created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_user_id (user_id),
+                INDEX idx_status (status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ');
+    }
+}
+```
+
+Для необратимых изменений используйте `up()` / `down()` вместо `change()`:
+
+```php
+public function up(): void
+{
+    $this->execute('ALTER TABLE orders ADD COLUMN notes TEXT NULL');
+}
+
+public function down(): void
+{
+    $this->execute('ALTER TABLE orders DROP COLUMN notes');
+}
+```
+
+### 5. Запустить миграции
+
+```bash
+composer migrate:dev       # dev-окружение
+composer migrate:prod      # prod-окружение
+composer status:dev        # посмотреть статус
+composer rollback:dev      # откатить последнюю
+```
+
+---
+
+## Команды
+
+| Команда | Описание |
+|---|---|
+| `composer migrate:dev` | Применить все ожидающие миграции (dev) |
+| `composer migrate:prod` | Применить все ожидающие миграции (prod) |
+| `composer rollback:dev` | Откатить последнюю миграцию (dev) |
+| `composer rollback:prod` | Откатить последнюю миграцию (prod) |
+| `composer create:dev <Name>` | Создать файл новой миграции (dev) |
+| `composer create:prod <Name>` | Создать файл новой миграции (prod) |
+| `composer status:dev` | Показать статус миграций (dev) |
+| `composer status:prod` | Показать статус миграций (prod) |
+
+---
+
+## Миграции фреймворка
+
+Фреймворк включает собственные миграции для таблиц:
+
+| Таблица | Модуль |
+|---|---|
+| `users__refresh_tokens` | Auth / JWT refresh tokens |
+| `users__access_rules` | Auth / Access control |
+| `access_rules` | Auth / Access control |
+| `outbox_messages` | Queue / Outbox pattern |
+
+Они применяются автоматически вместе с миграциями проекта — `PhinxConfigFactory` находит их по маркерам внутри фреймворка.
+
+---
+
+## Смена окружения
+
+Окружение определяется переменной `APP_ENV`. Phinx использует секцию `default` в конфиге, значения берутся из `$_ENV`. Чтобы запустить миграции на prod-базе с dev-машины:
+
+```bash
+APP_ENV=prod composer migrate:prod
+```
+
+---
+
+## Типичные паттерны
+
+### UUID как PRIMARY KEY
+
+```sql
+id CHAR(36) PRIMARY KEY   -- в MySQL/MariaDB
+-- в PostgreSQL используйте тип UUID:
+id UUID PRIMARY KEY DEFAULT gen_random_uuid()
+```
+
+### Soft delete
+
+```sql
+deleted_at DATETIME NULL,
+INDEX idx_deleted_at (deleted_at)
+```
+
+Все запросы должны добавлять `WHERE deleted_at IS NULL`.
+
+### Версионирование таблицы (updated_at)
+
+```sql
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+```

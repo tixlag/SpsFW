@@ -12,6 +12,7 @@ use SpsFW\Core\Auth\AuthToken\AuthTokenStorage;
 use SpsFW\Core\Auth\AuthToken\AuthTokenStorageI;
 use SpsFW\Core\Psr\Cache\FileCache;
 use SpsFW\Core\Psr\MonologLogger;
+use SpsFW\Core\Redis\RedisClient;
 
 class Config
 {
@@ -77,15 +78,20 @@ class Config
         ];
 
         self::$config = array_merge($baseConfig, $customConfig);
+
+        // Lazy binding: RedisClient available via #[Inject] without manual di_config.php entry.
+        // Connection is established only on first actual use, not at container build time.
+        self::$bindings[RedisClient::class] = fn() => RedisClient::getInstance();
     }
 
     /**
      * Устанавливает привязки зависимостей.
      *
-     * @param array<string, string|object|array> $bindings
+     * @param array<string, string|object|array|\Closure> $bindings
      *   - 'Interface::class' => 'Concrete::class'          → стандартная привязка
      *   - 'Interface::class' => new Concrete()             → инстанс
      *   - 'Interface::class' => ['class' => ..., 'args' => [...]] → с аргументами
+     *   - 'Interface::class' => fn() => Concrete::getInstance() → lazy callable (singleton)
      */
     public static function setDIBindings(array $bindings): void
     {
