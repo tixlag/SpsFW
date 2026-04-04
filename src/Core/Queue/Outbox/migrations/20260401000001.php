@@ -40,7 +40,7 @@ class V20260401000001 extends AbstractMigration
             // MySQL / MariaDB
             $this->query("
                 CREATE TABLE IF NOT EXISTS queue_outbox (
-                    id          CHAR(36)     NOT NULL,
+                    id          BINARY(16)   NOT NULL,
                     payload     LONGTEXT     NOT NULL,
                     properties  TEXT         NOT NULL DEFAULT '{}',
                     routing_key VARCHAR(255) NOT NULL DEFAULT '',

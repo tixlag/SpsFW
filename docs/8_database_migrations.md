@@ -83,8 +83,8 @@ final class CreateOrdersTable extends AbstractMigration
     {
         $this->execute('
             CREATE TABLE IF NOT EXISTS orders (
-                id          CHAR(36) PRIMARY KEY,
-                user_id     CHAR(36) NOT NULL,
+                id          BINARY(16) NOT NULL PRIMARY KEY,
+                user_id     BINARY(16) NOT NULL,
                 total       DECIMAL(10,2) NOT NULL DEFAULT 0,
                 status      ENUM("pending","paid","cancelled") NOT NULL DEFAULT "pending",
                 created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -166,9 +166,30 @@ APP_ENV=prod composer migrate:prod
 
 ### UUID как PRIMARY KEY
 
+В MySQL/MariaDB UUID хранится в `BINARY(16)` для эффективного хранения и индексирования.
+Для конвертации используются встроенные функции `UUID_TO_BIN()` и `BIN_TO_UUID()`.
+
 ```sql
-id CHAR(36) PRIMARY KEY   -- в MySQL/MariaDB
--- в PostgreSQL используйте тип UUID:
+-- MySQL / MariaDB
+id BINARY(16) NOT NULL PRIMARY KEY
+
+-- Вставка:
+INSERT INTO orders (id, ...) VALUES (UUID_TO_BIN(:id), ...)
+-- Чтение (возвращает строку вида "550e8400-e29b-41d4-a716-446655440000"):
+SELECT BIN_TO_UUID(id) AS id, ... FROM orders WHERE id = UUID_TO_BIN(:id)
+```
+
+В PHP передаём обычную UUID-строку, конвертацию делает сам SQL:
+
+```php
+$stmt = $pdo->prepare('SELECT BIN_TO_UUID(id) AS id, name FROM orders WHERE id = UUID_TO_BIN(:id)');
+$stmt->execute(['id' => $uuid]); // $uuid = '550e8400-e29b-41d4-a716-446655440000'
+```
+
+В PostgreSQL UUID хранится нативно — никаких обёрток не нужно:
+
+```sql
+-- PostgreSQL
 id UUID PRIMARY KEY DEFAULT gen_random_uuid()
 ```
 

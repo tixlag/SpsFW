@@ -23,11 +23,12 @@ class V20250723000001 extends AbstractMigration
         } else {
             $this->query("
                 CREATE TABLE IF NOT EXISTS users__refresh_tokens (
-                    user_id       UUID          NOT NULL COMMENT 'UUID пользователя (users.id)',
+                    user_id       BINARY(16)    NOT NULL COMMENT 'UUID пользователя (users.id)',
                     selector      VARBINARY(8)  NOT NULL UNIQUE,
                     verifier_hash CHAR(60)      NOT NULL,
                     expires_at    DATETIME      NOT NULL,
                     created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_user_id (user_id),
                     INDEX idx_expires_at (expires_at)
                 ) COMMENT 'Таблица refresh-токенов пользователей'
             ");
