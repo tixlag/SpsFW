@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core\Queue\Outbox;
 
+use Ramsey\Uuid\Uuid;
 use SpsFW\Core\Storage\PdoStorage;
 
 class OutboxStorage extends PdoStorage
@@ -25,7 +26,7 @@ class OutboxStorage extends PdoStorage
                 self::TABLE
             ),
             [
-                $this->generateUuid(),
+                Uuid::uuid7()->toString(),
                 json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
                 json_encode($properties, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
                 $routingKey,
@@ -83,13 +84,5 @@ class OutboxStorage extends PdoStorage
     {
         $row = $this->fetchOne(sprintf("SELECT COUNT(*) AS cnt FROM %s", self::TABLE));
         return (int) ($row['cnt'] ?? 0);
-    }
-
-    private function generateUuid(): string
-    {
-        $data = random_bytes(16);
-        $data[6] = chr(ord($data[6]) & 0x0f | 0x40); // v4
-        $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // variant RFC 4122
-        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
 }

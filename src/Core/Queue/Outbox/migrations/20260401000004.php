@@ -41,8 +41,8 @@ class V20260401000004 extends AbstractMigration
             $this->query("
                 CREATE TABLE IF NOT EXISTS queue_outbox (
                     id          BINARY(16)   NOT NULL,
-                    payload     LONGTEXT     NOT NULL,
-                    properties  TEXT         NOT NULL DEFAULT '{}',
+                    payload     JSON     NOT NULL,
+                    properties  JSON         NOT NULL,
                     routing_key VARCHAR(255) NOT NULL DEFAULT '',
                     exchange    VARCHAR(255) NOT NULL DEFAULT '',
                     attempts    INT          NOT NULL DEFAULT 0,
