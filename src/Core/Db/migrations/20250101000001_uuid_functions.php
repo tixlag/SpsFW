@@ -14,7 +14,7 @@ use Phinx\Migration\AbstractMigration;
  *
  * Совместимость: MySQL 8.0+, MariaDB 10.2+
  */
-class V20250101000001 extends AbstractMigration
+class UuidFunctions extends AbstractMigration
 {
     public function up(): void
     {
