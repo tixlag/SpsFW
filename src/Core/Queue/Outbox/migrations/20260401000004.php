@@ -14,7 +14,7 @@ use Phinx\Migration\AbstractMigration;
  *
  * Совместимость: PostgreSQL 9.5+, MySQL 8.0+, MariaDB 10.6+
  */
-class V20260401000001 extends AbstractMigration
+class V20260401000004 extends AbstractMigration
 {
     public function up(): void
     {

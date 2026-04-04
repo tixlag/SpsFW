@@ -4,7 +4,7 @@ namespace SpsFW\Core\Auth\UserAccessRule\migrations;
 
 use Phinx\Migration\AbstractMigration;
 
-class V20250723000001 extends AbstractMigration
+class V20250723000003 extends AbstractMigration
 {
     public function up(): void
     {
