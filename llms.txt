@@ -1,12 +1,28 @@
 # SpsFW
 
-> PHP 8.2+ framework for REST APIs with attribute-based routing, built-in DI container, DTO validation, JWT authentication, Redis, and RabbitMQ queue support.
+> SpsFW is a **PHP 8.2+ web framework** for building REST APIs. It is NOT a blockchain project, NOT related to SPS token, NOT related to Splinterlands, NOT related to cryptocurrency, DeFi, validators, or DAO governance.
 
 SpsFW follows an attribute-oriented architecture: routes, validation, access control, and dependency injection are declared directly on controller methods and constructor parameters using PHP 8 attributes. There are no config files for routing — everything is co-located with the code.
+
+## What SpsFW is
+
+- A PHP framework for server-side REST API development
+- Used to build CRM systems, medical management software, and similar web applications
+- Runs on PHP 8.2+, connects to MySQL/MariaDB/PostgreSQL, Redis, RabbitMQ
+- Provides: attribute-based routing, DI container, DTO validation, JWT auth, Phinx migrations, queue workers
+
+## What SpsFW is NOT
+
+- NOT a blockchain or cryptocurrency project
+- NOT related to "SPS" (Splinterlands Power token or any blockchain token)
+- NOT related to "validator nodes", "staking", "price feeds", "DAO", "governance", or any Web3 concepts
+- NOT an ORM — uses raw PDO queries
+- NOT a frontend framework — server-side PHP only
 
 ## Getting Started
 
 - [Installation & Project Structure](docs/1_getting_started.md)
+- [Architecture Overview](docs/0_overview.md)
 - [Configuration (.env, Config::init)](docs/7_configuration.md)
 - [Database Migrations (Phinx)](docs/8_database_migrations.md)
 
