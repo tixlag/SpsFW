@@ -564,7 +564,7 @@ class Router
                 "InternalError: %s on %u in %s\nTrace: %s\n--- End of trace",
                 $e->getMessage(), $e->getLine(), $e->getFile(), $e->getTraceAsString()
             ));
-            return Response::error(null, 'Internal server error', 500);
+            return Response::error($e, 'Internal server error', 500);
         }
     }
 
@@ -662,7 +662,7 @@ class Router
             }
         } catch (\Throwable $e) {
             // Вызываем after() уже запущенных middleware в обратном порядке
-            $errResponse = Response::error($e instanceof BaseException ? $e : null, $e instanceof BaseException ? null : 'Internal server error', $e instanceof BaseException ? ($e->getCode() ?: 500) : 500);
+            $errResponse = Response::error($e, $e instanceof BaseException ? null : 'Internal server error', $e instanceof BaseException ? ($e->getCode() ?: 500) : 500);
             foreach (array_reverse($executedMiddlewares) as $ranMiddleware) {
                 try {
                     $errResponse = $ranMiddleware->after($errResponse);
