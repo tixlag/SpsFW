@@ -99,7 +99,7 @@ class Response
                 'uri' => $_SERVER['REQUEST_URI'] ?? '',
                 'user' => $user ? ('id: ' . $user->uuid) : 'anonymous',
                 'exception' => $isDebug && $exception ? basename(str_replace('\\', '/', get_class($exception))) : null,
-                'message' => $message ?? ($exception ? $exception->getMessage() : 'Unknown error'),
+                'message' => ($isDebug && $exception) ? $exception->getMessage() : ($message ?? ($exception?->getMessage() ?? 'Unknown error')),
                 'file' => $isDebug && $exception ? basename($exception->getFile()) : '',
                 'line' => $isDebug && $exception ? $exception->getLine() : 0,
                 'previous' => $isDebug ? $previous : null,

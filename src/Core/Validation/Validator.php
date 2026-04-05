@@ -77,8 +77,7 @@ class Validator
             if ($rawValue === null && (($rules['required'] ?? null) !== [true] || ($rules['nullable'] ?? null) === true)) {
                 try {
                     self::setPropertyValue($dto, $dtoReflection, $rules['real_name'], $rules['default'] ?? null); // если не пришло значение, устанавливаем дефолтное или null
-                    if (empty($reqParams)) throw new \Exception(); // бросаем, если вообще пустое тело, а мы что-то ждем
-                } catch (Exception $e) {
+                } catch (\Exception $e) {
                     throw new ValidationException("$propertyName не может быть пустым");
                 }
                 continue;

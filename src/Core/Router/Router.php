@@ -551,8 +551,11 @@ class Router
             }
             if (!($e instanceof AuthorizationException) && !($e instanceof RouteNotFoundException)) {
                 error_log(sprintf(
-                    "AppError: %s on %u in %s\nTrace: %s\n--- End of trace",
-                    $e->getMessage(), $e->getLine(), $e->getFile(), $e->getTraceAsString()
+                    "AppError: %s on %u in %s\nQuery: %s\nBody: %s\nTrace: %s\n--- End of trace",
+                    $e->getMessage(), $e->getLine(), $e->getFile(),
+                    json_encode($this->request->getGet(), JSON_UNESCAPED_UNICODE),
+                    $this->request->getContent() ?? '',
+                    $e->getTraceAsString()
                 ));
             }
             return Response::error($e, null, $e->getCode() ?: 500);
@@ -561,8 +564,11 @@ class Router
                 $this->reportToGlobalExceptionHandler($e);
             }
             error_log(sprintf(
-                "InternalError: %s on %u in %s\nTrace: %s\n--- End of trace",
-                $e->getMessage(), $e->getLine(), $e->getFile(), $e->getTraceAsString()
+                "InternalError: %s on %u in %s\nQuery: %s\nBody: %s\nTrace: %s\n--- End of trace",
+                $e->getMessage(), $e->getLine(), $e->getFile(),
+                json_encode($this->request->getGet(), JSON_UNESCAPED_UNICODE),
+                $this->request->getContent() ?? '',
+                $e->getTraceAsString()
             ));
             return Response::error($e, 'Internal server error', 500);
         }

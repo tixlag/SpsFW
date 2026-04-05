@@ -13,7 +13,7 @@ class Auth extends UserAbstract
 
     private static ?self $userAuth = null;
 
-    private function __construct(string $uuid, array $accessRules = [])
+    protected function __construct(string $uuid, array $accessRules = [])
     {
         parent::__construct($uuid, $accessRules);
     }
