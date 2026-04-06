@@ -497,6 +497,7 @@ class Router
                     'maxRequests'   => $rl->requests,
                     'windowSeconds' => $rl->window,
                     'keyPrefix'     => $rl->prefix,
+                    'strategy'      => $rl->strategy,
                 ],
             ];
         }

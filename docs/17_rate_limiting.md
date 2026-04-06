@@ -6,10 +6,40 @@
 
 ---
 
-## ТребованияRateLimit
+## Требования
 
 - Redis (расширение `ext-redis`)
 - Настроенный `RedisClient` (секция `redis` в `.env`)
+
+---
+
+## Стратегии идентификации
+
+По умолчанию (`RateLimitStrategy::User`) middleware использует умную идентификаацию:
+
+| Сценарий | Ключи | Зачем |
+|----------|-------|-------|
+| Авторизованный пользователь | `rl:user:{uuid}` | Персональный лимит, не зависит от IP |
+| Неавторизованный | `rl:ip:{ip}` **и** `rl:ip:{ip}:ua:{hash}` | Двойная защита |
+
+### Почему двойная проверка для неавторизованных?
+
+Для неавторизованных запросов проверяются **два ключа одновременно**:
+
+1. **`rl:ip:{ip}`** — общий лимит для всех запросов с этого IP. Защищает от бот-фермы с одного IP, где каждый запрос с разным User-Agent.
+2. **`rl:ip:{ip}:ua:{hash}`** — лимит для конкретного User-Agent. Защищает от одного бота.
+
+Если **хотя бы один** ключ превысил лимит — запрос блокируется.
+
+#### Пример: брутфорс `/login`
+
+Бот с IP `1.2.3.4` делает 100 запросов, каждый раз меняя User-Agent:
+- Ключи `rl:ip:1.2.3.4:ua:hash1`, `rl:ip:1.2.3.4:ua:hash2`... — каждый по 1 запросу
+- Но ключ `rl:ip:1.2.3.4` = 100 → **сработает общий лимит IP**
+
+Легитимные пользователи с одного Wi-Fi (NAT):
+- Авторизованные → `rl:user:{uuid}` — у каждого свой персональный лимит
+- Неавторизованные → общий `rl:ip:{ip}` + персональный `rl:ip:{ip}:ua:{hash}`
 
 ---
 
@@ -23,7 +53,7 @@ use SpsFW\Core\Http\Response;
 
 class AuthController
 {
-    // 5 попыток в 60 секунд на один IP — для эндпоинта логина
+    // 5 попыток в 60 секунд — авторизованные по UUID, остальные — IP + UA
     #[RateLimit(requests: 5, window: 60, prefix: 'rl:login:')]
     public function login(): Response
     {
@@ -42,15 +72,46 @@ class ProductController
 }
 ```
 
+### Только по IP (обратная совместимость)
+
+```php
+use SpsFW\Core\Attributes\RateLimitStrategy;
+
+// Считает только по IP — как было раньше
+#[RateLimit(requests: 60, window: 60, strategy: RateLimitStrategy::Ip)]
+public function publicEndpoint(): Response
+{
+    // ...
+}
+```
+
+### Всегда IP + User-Agent
+
+```php
+// Даже авторизованные считаются по IP + UA
+#[RateLimit(requests: 30, window: 60, strategy: RateLimitStrategy::IpAndUser)]
+public function sensitiveAction(): Response
+{
+    // ...
+}
+```
+
 ### Параметры `#[RateLimit]`
 
-| Параметр   | Тип    | По умолчанию | Описание                                 |
-|------------|--------|--------------|------------------------------------------|
-| `requests` | `int`  | `60`         | Максимальное число запросов за `window`  |
-| `window`   | `int`  | `60`         | Размер скользящего окна в секундах       |
-| `prefix`   | `string` | `'rl:ip:'` | Префикс Redis-ключа                      |
+| Параметр     | Тип                 | По умолчанию                    | Описание                                          |
+|--------------|---------------------|---------------------------------|---------------------------------------------------|
+| `requests`   | `int`               | `60`                            | Максимальное число запросов за `window`           |
+| `window`     | `int`               | `60`                            | Размер скользящего окна в секундах                |
+| `prefix`     | `string`            | `'rl:'`                         | Префикс Redis-ключа                               |
+| `strategy`   | `RateLimitStrategy` | `RateLimitStrategy::User`       | Стратегия идентификации                           |
 
-Redis-ключ формируется как `{prefix}{ip}`, например `rl:ip:192.168.1.1`.
+### `RateLimitStrategy`
+
+| Значение       | Поведение                                                    |
+|----------------|--------------------------------------------------------------|
+| `User`         | Авторизованные → UUID, неавторизованные → IP + IP:UserAgent  |
+| `Ip`           | Только IP (обратная совместимость)                           |
+| `IpAndUser`    | Всегда IP + IP:UserAgent                                     |
 
 ---
 
@@ -113,12 +174,14 @@ public function expensiveAction(): Response
 
 ```php
 use SpsFW\Core\Middleware\RateLimitMiddleware;
+use SpsFW\Core\Attributes\RateLimitStrategy;
 use SpsFW\Core\Redis\RedisClient;
 
 $middleware = new RateLimitMiddleware(
     maxRequests:   100,
     windowSeconds: 60,
-    keyPrefix:     'rl:ip:',
+    keyPrefix:     'rl:',
+    strategy:      RateLimitStrategy::User,  // по умолчанию
     redis:         RedisClient::getInstance(), // опционально, по умолчанию singleton
 );
 ```
