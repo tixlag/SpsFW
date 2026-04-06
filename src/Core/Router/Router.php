@@ -231,7 +231,7 @@ class Router
             $methodRoute = $methodRouteAttributes[0]->newInstance();
             $fullPath = $methodRoute->getPath();
             $compiled = $this->compileRoutePattern($fullPath);
-            $middlewares = array_merge(
+            $middlewares = $this->combineMiddlewares(
                 $classMiddlewares,
                 $this->collectMiddlewares($method)
             );
@@ -300,6 +300,40 @@ class Router
             }
         }
         return $routes ?? [];
+    }
+
+    /**
+     * @param array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}> $classMiddlewares
+     * @param array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}> $methodMiddlewares
+     * @return array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}>
+     */
+    protected function combineMiddlewares(array $classMiddlewares, array $methodMiddlewares): array
+    {
+        [$classRateLimit, $classOthers] = $this->extractRateLimitMiddleware($classMiddlewares);
+        [$methodRateLimit, $methodOthers] = $this->extractRateLimitMiddleware($methodMiddlewares);
+
+        $middlewares = array_merge($classOthers, $methodOthers);
+        $mergedRateLimit = null;
+
+        if ($classRateLimit !== null) {
+            $mergedRateLimit = $classRateLimit;
+        }
+
+        if ($methodRateLimit !== null) {
+            $mergedRateLimit = [
+                'class' => RateLimitMiddleware::class,
+                'params' => $this->mergeRateLimitParams(
+                    $mergedRateLimit['params'] ?? [],
+                    $methodRateLimit['params']
+                ),
+            ];
+        }
+
+        if ($mergedRateLimit !== null) {
+            $middlewares[] = $mergedRateLimit;
+        }
+
+        return $middlewares;
     }
 
     /**
@@ -494,10 +528,11 @@ class Router
             $middlewares[] = [
                 'class'  => RateLimitMiddleware::class,
                 'params' => [
-                    'maxRequests'   => $rl->requests,
+                    'requests' => $rl->requests,
+                    'whitelistRequests' => $rl->whitelistRequests,
                     'windowSeconds' => $rl->window,
-                    'keyPrefix'     => $rl->prefix,
-                    'strategy'      => $rl->strategy,
+                    'keyPrefix' => $rl->prefix,
+                    'whitelistIps' => $rl->whitelistIps,
                 ],
             ];
         }
@@ -704,7 +739,7 @@ class Router
 
         foreach ($middlewareConfigs as $config) {
             $className = $config['class'];
-            $params = $config['params'];
+            $params = $this->mergeMiddlewareParams($className, $config['params']);
 
             // Создаем экземпляры middleware с параметрами
             $middlewareInstance = $this->createMiddlewareInstance($className, $params);
@@ -776,6 +811,79 @@ class Router
         $dependencies = array_merge($this->dependencies, $params);
 
         return $this->createInstanceWithDependencies($reflection, $dependencies);
+    }
+
+    /**
+     * @param class-string<MiddlewareInterface> $className
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     */
+    protected function mergeMiddlewareParams(string $className, array $params): array
+    {
+        $globalParams = $this->globalMiddlewares[$className] ?? [];
+        if ($className !== RateLimitMiddleware::class) {
+            return $params;
+        }
+
+        return $this->mergeRateLimitParams($globalParams, $params);
+    }
+
+    /**
+     * @param array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}> $middlewares
+     * @return array{
+     *     0: array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}|null,
+     *     1: array<array{class: class-string<MiddlewareInterface>, params: array<string, mixed>}>
+     * }
+     */
+    protected function extractRateLimitMiddleware(array $middlewares): array
+    {
+        $rateLimit = null;
+        $otherMiddlewares = [];
+
+        foreach ($middlewares as $middleware) {
+            if ($middleware['class'] === RateLimitMiddleware::class) {
+                $rateLimit = $middleware;
+                continue;
+            }
+
+            $otherMiddlewares[] = $middleware;
+        }
+
+        return [$rateLimit, $otherMiddlewares];
+    }
+
+    /**
+     * @param array<string, mixed> $baseParams
+     * @param array<string, mixed> $overrideParams
+     * @return array<string, mixed>
+     */
+    protected function mergeRateLimitParams(array $baseParams, array $overrideParams): array
+    {
+        $merged = array_merge($baseParams, array_filter(
+            $overrideParams,
+            static fn (mixed $value): bool => $value !== null
+        ));
+
+        $merged['requests'] = array_merge(
+            is_array($baseParams['requests'] ?? null) ? $baseParams['requests'] : [],
+            is_array($overrideParams['requests'] ?? null) ? $overrideParams['requests'] : [],
+        );
+
+        $merged['whitelistRequests'] = array_merge(
+            is_array($baseParams['whitelistRequests'] ?? null) ? $baseParams['whitelistRequests'] : [],
+            is_array($overrideParams['whitelistRequests'] ?? null) ? $overrideParams['whitelistRequests'] : [],
+        );
+
+        $mergedWhitelistIps = array_merge(
+            is_array($baseParams['whitelistIps'] ?? null) ? $baseParams['whitelistIps'] : [],
+            is_array($overrideParams['whitelistIps'] ?? null) ? $overrideParams['whitelistIps'] : [],
+        );
+
+        if (!empty($mergedWhitelistIps)) {
+            $merged['whitelistIps'] = array_values(array_unique($mergedWhitelistIps));
+        }
+
+        return $merged;
     }
 
     /**

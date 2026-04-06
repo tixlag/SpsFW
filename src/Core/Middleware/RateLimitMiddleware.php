@@ -2,7 +2,6 @@
 
 namespace SpsFW\Core\Middleware;
 
-use SpsFW\Core\Attributes\RateLimitStrategy;
 use SpsFW\Core\Auth\Instances\Auth;
 use SpsFW\Core\Exceptions\TooManyRequestsException;
 use SpsFW\Core\Http\Request;
@@ -12,28 +11,18 @@ use SpsFW\Core\Redis\RedisClient;
 /**
  * Middleware для ограничения частоты запросов (rate limiting).
  *
- * Стратегии идентификации (RateLimitStrategy):
- *   - User (по умолчанию): авторизованные — по UUID, неавторизованные — IP + IP:UserAgent
- *   - Ip: только по IP (обратная совместимость)
- *   - IpAndUser: всегда IP + IP:UserAgent
+ * Семантика ключей:
+ *   - anonymous: network(IP) + fingerprint(IP + User-Agent)
+ *   - authorized: user(UUID) + fingerprint(IP + User-Agent)
  *
- * Для неавторизованных проверяются ДВА ключа одновременно:
- *   1. rl:ip:{ip} — общий лимит для всех запросов с этого IP
- *   2. rl:ip:{ip}:ua:{hash} — лимит для конкретного User-Agent
- *   Если хотя бы один превышен — блокировка.
+ * Если IP входит в whitelist, используются более мягкие whitelist-лимиты.
  *
  * Подключение через #[RateLimit] или addGlobalMiddleware:
  *
- *   // Через атрибут (рекомендуется):
- *   #[RateLimit(requests: 30, window: 60)]
- *   public function someAction(): Response { ... }
- *
- *   // Только по IP:
- *   #[RateLimit(requests: 100, window: 60, strategy: RateLimitStrategy::Ip)]
- *
  *   // Глобально:
  *   $router->addGlobalMiddleware(RateLimitMiddleware::class, [
- *       'maxRequests'   => 100,
+ *       'requests' => ['network' => 300, 'fingerprint' => 120, 'user' => 600],
+ *       'whitelistRequests' => ['network' => 1500, 'fingerprint' => 400, 'user' => 2000],
  *       'windowSeconds' => 60,
  *   ]);
  */
@@ -42,25 +31,30 @@ class RateLimitMiddleware implements MiddlewareInterface
     private RedisClient $redis;
 
     public function __construct(
-        private readonly int               $maxRequests   = 60,
-        private readonly int               $windowSeconds = 60,
-        private readonly string            $keyPrefix     = 'rl:',
-        private readonly RateLimitStrategy $strategy      = RateLimitStrategy::User,
-        ?RedisClient                       $redis         = null,
+        private readonly array $requests = [
+            'network' => 60,
+            'fingerprint' => 60,
+            'user' => 60,
+        ],
+        private readonly array $whitelistRequests = [],
+        private readonly int $windowSeconds = 60,
+        private readonly string $keyPrefix = 'rl:',
+        private readonly array $whitelistIps = [],
+        ?RedisClient $redis = null,
     ) {
         $this->redis = $redis ?? RedisClient::getInstance();
     }
 
     public function handle(Request $request): Request
     {
-        $keys = $this->resolveKeys($request);
+        $limits = $this->resolveLimits();
+        $keys = $this->resolveKeys($request, $limits);
 
-        // Инкрементим все ключи и проверяем лимит
-        foreach ($keys as $key) {
+        foreach ($keys as $bucket => $key) {
             $count = $this->redis->incrWithTtl($key, $this->windowSeconds);
-            if ($count > $this->maxRequests) {
+            if ($count > $limits[$bucket]) {
                 throw new TooManyRequestsException(
-                    sprintf('Rate limit exceeded: %d requests per %d seconds', $this->maxRequests, $this->windowSeconds)
+                    sprintf('Rate limit exceeded: %d requests per %d seconds', $limits[$bucket], $this->windowSeconds)
                 );
             }
         }
@@ -74,52 +68,55 @@ class RateLimitMiddleware implements MiddlewareInterface
     }
 
     /**
-     * Возвращает массив ключей для проверки.
-     *
-     * - User (авторизованный): ['rl:user:{uuid}']
-     * - User (неавторизованный): ['rl:ip:{ip}', 'rl:ip:{ip}:ua:{hash}']
-     * - Ip: ['rl:ip:{ip}']
-     * - IpAndUser: ['rl:ip:{ip}', 'rl:ip:{ip}:ua:{hash}']
+     * @param array{network: ?int, fingerprint: ?int, user: ?int} $limits
+     * @return array<string, string>
      */
-    private function resolveKeys(Request $request): array
+    private function resolveKeys(Request $request, array $limits): array
     {
-        // Стратегия User: авторизованные — персональный лимит по UUID
-        if ($this->strategy === RateLimitStrategy::User) {
-            $user = Auth::getOrNull();
-            if ($user !== null) {
-                return [$this->keyPrefix . 'user:' . $user->uuid];
+        $keys = [];
+        $ip = $this->resolveIp();
+        $fingerprint = $this->buildFingerprint($request, $ip);
+        $user = Auth::getOrNull();
+
+        if ($limits['fingerprint'] !== null) {
+            $keys['fingerprint'] = $this->keyPrefix . 'fingerprint:' . $fingerprint;
+        }
+
+        if ($user !== null) {
+            if ($limits['user'] !== null) {
+                $keys['user'] = $this->keyPrefix . 'user:' . $user->uuid;
             }
-            // Неавторизованный — двойная проверка
-            return $this->buildIpUaKeys($request);
+            return $keys;
         }
 
-        // Стратегия IpAndUser: всегда двойная проверка
-        if ($this->strategy === RateLimitStrategy::IpAndUser) {
-            return $this->buildIpUaKeys($request);
+        if ($limits['network'] !== null) {
+            $keys['network'] = $this->keyPrefix . 'network:' . $ip;
         }
 
-        // Стратегия Ip: только IP (обратная совместимость)
-        return [$this->keyPrefix . 'ip:' . $this->resolveIp($request)];
+        return $keys;
     }
 
     /**
-     * Строит ключи для IP + IP:UserAgent.
-     *
-     * @return array{string, string}
+     * @return array{network: ?int, fingerprint: ?int, user: ?int}
      */
-    private function buildIpUaKeys(Request $request): array
+    private function resolveLimits(): array
     {
-        $ip = $this->resolveIp($request);
-        $ua = $this->resolveUserAgent($request);
-        $uaHash = hash('crc32b', $ua);
+        $isWhitelistedIp = in_array($this->resolveIp(), $this->whitelistIps, true);
 
         return [
-            $this->keyPrefix . 'ip:' . $ip,
-            $this->keyPrefix . 'ip:' . $ip . ':ua:' . $uaHash,
+            'network' => $isWhitelistedIp
+                ? ($this->whitelistRequests['network'] ?? ($this->requests['network'] ?? null))
+                : ($this->requests['network'] ?? null),
+            'fingerprint' => $isWhitelistedIp
+                ? ($this->whitelistRequests['fingerprint'] ?? ($this->requests['fingerprint'] ?? null))
+                : ($this->requests['fingerprint'] ?? null),
+            'user' => $isWhitelistedIp
+                ? ($this->whitelistRequests['user'] ?? ($this->requests['user'] ?? null))
+                : ($this->requests['user'] ?? null),
         ];
     }
 
-    private function resolveIp(Request $request): string
+    private function resolveIp(): string
     {
         // X-Forwarded-For может содержать цепочку IP (клиент, прокси1, прокси2, ...)
         if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
@@ -138,6 +135,11 @@ class RateLimitMiddleware implements MiddlewareInterface
         }
 
         return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    }
+
+    private function buildFingerprint(Request $request, string $ip): string
+    {
+        return $ip . ':ua:' . hash('sha256', $this->resolveUserAgent($request));
     }
 
     private function resolveUserAgent(Request $request): string

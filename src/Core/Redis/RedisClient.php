@@ -150,8 +150,8 @@ class RedisClient
     }
 
     /**
-     * Атомарный инкремент + установка TTL при первом вызове.
-     * Используется для rate limiting.
+     * Атомарный fixed-window инкремент + установка TTL при первом вызове.
+     * Для Redis используется Lua-скрипт, для FileCache-fallback режим best-effort.
      * Возвращает текущее значение счётчика.
      */
     public function incrWithTtl(string $key, int $ttl): int
@@ -168,11 +168,16 @@ class RedisClient
             $this->fallback->set($key, (string) $new, $ttl + 5);
             return $new;
         }
-        $count = $this->connection()->incr($key);
-        if ($count === 1) {
-            $this->connection()->expire($key, $ttl);
-        }
-        return $count;
+
+        $lua = <<<'LUA'
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+LUA;
+
+        return (int) $this->connection()->eval($lua, [$key, (string) $ttl], 1);
     }
 
     public function incr(string $key): int
@@ -248,5 +253,4 @@ class RedisClient
         }
     }
 }
-
 

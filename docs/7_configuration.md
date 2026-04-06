@@ -206,7 +206,7 @@ $redis->setex('session:123', 3600, json_encode($data));
 $value = $redis->get('key');
 $redis->del('key');
 
-// Атомарный rate limiting
+// Атомарный rate limiting в Redis
 $count = $redis->incrWithTtl("rl:login:{$ip}", 60);
 if ($count > 5) {
     throw new TooManyRequestsException('Слишком много попыток входа');

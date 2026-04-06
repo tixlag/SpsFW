@@ -8,24 +8,33 @@ use Attribute;
  * Ограничивает количество запросов к методу или контроллеру.
  *
  * Примеры:
- *   #[RateLimit(requests: 60, window: 60)]                          // 60 req/min, авторизованные по UUID, остальные — IP + UA
- *   #[RateLimit(requests: 5, window: 1, prefix: 'rl:login:')]       // 5 req/sec на login
- *   #[RateLimit(requests: 100, window: 60, strategy: RateLimitStrategy::Ip)] // 100 req/min только по IP
- *   #[RateLimit(requests: 30, window: 60, strategy: RateLimitStrategy::IpAndUser)] // всегда IP + UA
+ *   #[RateLimit(requests: ['network' => 60, 'fingerprint' => 20])]   // anonymous: IP + IP:UA
+ *   #[RateLimit(requests: ['user' => 120, 'fingerprint' => 30])]     // authorized: UUID + IP:UA
+ *   #[RateLimit(
+ *       requests: ['network' => 10],
+ *       whitelistRequests: ['network' => 100],
+ *       whitelistIps: ['10.0.0.10']
+ *   )]
  */
 #[Attribute(Attribute::TARGET_METHOD | Attribute::TARGET_CLASS)]
 readonly class RateLimit
 {
     /**
-     * @param int              $requests Максимальное количество запросов за окно
-     * @param int              $window   Размер окна в секундах
-     * @param string           $prefix   Префикс Redis-ключа (по умолчанию 'rl:')
-     * @param RateLimitStrategy $strategy Стратегия идентификации (по умолчанию User)
+     * Пустой массив означает "взять значения из глобального RateLimitMiddleware".
+     *
+     * Поддерживаемые ключи:
+     * - network
+     * - fingerprint
+     * - user
+     *
+     * @param array{network?: int, fingerprint?: int, user?: int} $requests
+     * @param array{network?: int, fingerprint?: int, user?: int} $whitelistRequests
      */
     public function __construct(
-        public int              $requests = 60,
-        public int              $window   = 60,
-        public string           $prefix   = 'rl:',
-        public RateLimitStrategy $strategy = RateLimitStrategy::User,
+        public array $requests = [],
+        public array $whitelistRequests = [],
+        public ?int $window = null,
+        public ?string $prefix = null,
+        public array $whitelistIps = [],
     ) {}
 }
