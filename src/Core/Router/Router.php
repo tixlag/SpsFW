@@ -823,6 +823,19 @@ class Router
                     }
                 }
 
+                // Если параметр - enum, используем значение по умолчанию или первый кейс
+                if (!$paramType->isBuiltin() && enum_exists($typeName)) {
+                    if ($parameter->isOptional()) {
+                        $args[] = $parameter->getDefaultValue();
+                        continue;
+                    }
+                    // Fallback: использу первый кейс enum
+                    $reflectionEnum = new \ReflectionEnum($typeName);
+                    $cases = $reflectionEnum->getCases();
+                    $args[] = $cases[0]->getValue();
+                    continue;
+                }
+
                 // Если параметр - класс, проверяем Config на Closure-биндинг (factory)
                 if (!$paramType->isBuiltin() && class_exists($typeName)) {
                     $binding = \SpsFW\Core\Config::getDIBinding($typeName);
