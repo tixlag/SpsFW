@@ -822,8 +822,13 @@ class Router
                     }
                 }
 
-                // Если параметр - класс, пытаемся создать экземпляр
+                // Если параметр - класс, проверяем Config на Closure-биндинг (factory)
                 if (!$paramType->isBuiltin() && class_exists($typeName)) {
+                    $binding = \SpsFW\Core\Config::getDIBinding($typeName);
+                    if ($binding instanceof \Closure) {
+                        $args[] = $binding();
+                        continue;
+                    }
                     $args[] = $this->createInstanceWithDependencies(new ReflectionClass($typeName));
                     continue;
                 }
