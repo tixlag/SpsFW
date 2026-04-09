@@ -55,7 +55,6 @@ class RateLimitMiddleware implements MiddlewareInterface
     public function handle(Request $request): Request
     {
         $limits = $this->resolveLimits();
-        $blockDurations = $this->resolveBlockDurations();
         $keys = $this->resolveKeys($request, $limits);
 
         foreach ($keys as $bucket => $key) {
@@ -70,6 +69,7 @@ class RateLimitMiddleware implements MiddlewareInterface
             $count = $this->redis->incrWithTtl($key, $this->windowSeconds);
             if ($count > $limits[$bucket]) {
                 // Limit exceeded - set block if block duration is configured
+                $blockDurations = $this->resolveBlockDurations();
                 $blockDuration = $blockDurations[$bucket] ?? null;
                 if ($blockDuration !== null && $blockDuration > 0) {
                     $this->setBlock($key, $blockDuration);
@@ -96,18 +96,18 @@ class RateLimitMiddleware implements MiddlewareInterface
     {
         $keys = [];
         $ip = $this->resolveIp();
-        $fingerprint = $this->buildFingerprint($request, $ip);
         $user = Auth::getOrNull();
-
-        if ($limits['fingerprint'] !== null) {
-            $keys['fingerprint'] = $this->keyPrefix . 'fingerprint:' . $fingerprint;
-        }
 
         if ($user !== null) {
             if ($limits['user'] !== null) {
                 $keys['user'] = $this->keyPrefix . 'user:' . $user->uuid;
             }
             return $keys;
+        }
+
+        $fingerprint = $this->buildFingerprint($request, $ip);
+        if ($limits['fingerprint'] !== null) {
+            $keys['fingerprint'] = $this->keyPrefix . 'fingerprint:' . $fingerprint;
         }
 
         if ($limits['network'] !== null) {
