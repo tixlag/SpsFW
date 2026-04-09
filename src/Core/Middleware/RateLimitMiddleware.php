@@ -163,7 +163,7 @@ class RateLimitMiddleware implements MiddlewareInterface
     private function isBlocked(string $key): bool
     {
         $blockKey = $this->keyPrefix . 'block:' . $key;
-        return $this->redis->get($blockKey) !== null;
+        return (bool) $this->redis->get($blockKey);
     }
 
     /**
