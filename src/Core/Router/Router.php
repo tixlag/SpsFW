@@ -525,15 +525,19 @@ class Router
         foreach ($reflection->getAttributes(RateLimit::class) as $attribute) {
             /** @var RateLimit $rl */
             $rl = $attribute->newInstance();
+            $params = [
+                'requests' => $rl->requests,
+                'whitelistRequests' => $rl->whitelistRequests,
+                'windowSeconds' => $rl->window,
+                'keyPrefix' => $rl->prefix,
+                'whitelistIps' => $rl->whitelistIps,
+                'blockDuration' => $rl->blockDuration,
+            ];
+            // Filter out null values
+            $params = array_filter($params, fn($v) => $v !== null && $v !== []);
             $middlewares[] = [
                 'class'  => RateLimitMiddleware::class,
-                'params' => [
-                    'requests' => $rl->requests,
-                    'whitelistRequests' => $rl->whitelistRequests,
-                    'windowSeconds' => $rl->window,
-                    'keyPrefix' => $rl->prefix,
-                    'whitelistIps' => $rl->whitelistIps,
-                ],
+                'params' => $params,
             ];
         }
 
@@ -881,6 +885,17 @@ class Router
 
         if (!empty($mergedWhitelistIps)) {
             $merged['whitelistIps'] = array_values(array_unique($mergedWhitelistIps));
+        }
+
+        // Merge blockDuration similarly to requests/whitelistRequests
+        $merged['blockDuration'] = array_merge(
+            is_array($baseParams['blockDuration'] ?? null) ? $baseParams['blockDuration'] : [],
+            is_array($overrideParams['blockDuration'] ?? null) ? $overrideParams['blockDuration'] : [],
+        );
+
+        // Remove empty blockDuration
+        if (empty($merged['blockDuration'])) {
+            unset($merged['blockDuration']);
         }
 
         return $merged;

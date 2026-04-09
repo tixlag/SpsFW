@@ -93,6 +93,7 @@ class ProductController
 | `window` | `?int` | `null` | Размер окна. `null` значит взять глобальное значение |
 | `prefix` | `?string` | `null` | Префикс Redis-ключей. `null` значит взять глобальное значение |
 | `whitelistIps` | `string[]` | `[]` | IP-адреса, которые нужно добавить к глобальному whitelist |
+| `blockDuration` | `array{network?: int, fingerprint?: int, user?: int}` или `null` | `null` | Время блокировки в секундах при превышении лимита. `null` = блокировка выключена. Если ключ отсутствует, используется 3600 сек (1 час). |
 
 ### Правило merge
 
@@ -127,6 +128,9 @@ $router->addGlobalMiddleware(RateLimitMiddleware::class, [
     ],
 
     'keyPrefix' => 'rl:',
+
+    // Блокировка при превышении лимита (опционально)
+    'blockDuration' => ['network' => 3600, 'fingerprint' => 1800, 'user' => 3600],
 ]);
 ```
 
@@ -137,7 +141,7 @@ $router->addGlobalMiddleware(RateLimitMiddleware::class, [
 - `#[RateLimit]` на методе переопределяет class-level настройки
 - `whitelistIps` из атрибутов дополняет global whitelist
 
----
+---$blockDurations
 
 ## Поведение при превышении лимита
 
@@ -148,6 +152,47 @@ $router->addGlobalMiddleware(RateLimitMiddleware::class, [
   "error": "Rate limit exceeded: 60 requests per 60 seconds"
 }
 ```
+
+### Блокировка при превышении лимита (опционально)
+
+При превышении лимита можно включить блокировку по тому же признаку (bucket) на заданное время. Это позволяет защититься от повторных атак после превышения лимита.
+
+**Конфигурация через `#[RateLimit]`:**
+
+```php
+use SpsFW\Core\Attributes\RateLimit;
+
+class AuthController
+{
+    #[RateLimit(
+        requests: ['network' => 10, 'fingerprint' => 5],
+        blockDuration: ['network' => 3600, 'fingerprint' => 1800] // block for 1 hour / 30 min
+    )]
+    public function login(): Response { /* ... */ }
+}
+```
+
+**Конфигурация через global middleware:**
+
+```php
+$router->addGlobalMiddleware(RateLimitMiddleware::class, [
+    'requests' => ['network' => 60, 'fingerprint' => 30],
+    'blockDuration' => ['network' => 3600, 'fingerprint' => 1800],
+]);
+```
+
+#### Как работает блокировка
+
+1. При превышении лимита для конкретного bucket (network/fingerprint/user) устанавливается блокировка
+2. Блокировка действует на тот же самый признак — если превышен `network` (IP), блокировка по IP
+3. Во время блокировки все запросы с этим признаком получают `429` с информацией о времени блокировки
+4. После истечения времени блокировки запросы снова обрабатываются
+
+#### Параметры блокировки
+
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `blockDuration` | `array{network?: int, fingerprint?: int, user?: int}` или `null` | `null` | Время блокировки в секундах для каждого bucket. `null` = блокировка выключена. Если ключ отсутствует, используется `defaultBlockDuration` (3600 сек). |
 
 ---
 
@@ -177,9 +222,24 @@ $middleware = new RateLimitMiddleware(
     windowSeconds: 60,
     keyPrefix: 'rl:',
     whitelistIps: ['10.0.0.10'],
+    blockDuration: ['network' => 3600, 'fingerprint' => 1800],
+    defaultBlockDuration: 3600,
     redis: RedisClient::getInstance(),
 );
 ```
+
+### Параметры конструктора
+
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `requests` | `array{network?: int, fingerprint?: int, user?: int}` | `['network' => 60, 'fingerprint' => 60, 'user' => 60]` | Базовые лимиты |
+| `whitelistRequests` | `array{network?: int, fingerprint?: int, user?: int}` | `[]` | Более мягкие лимиты для whitelist IP |
+| `windowSeconds` | `int` | `60` | Размер окна в секундах |
+| `keyPrefix` | `string` | `'rl:'` | Префикс Redis-ключей |
+| `whitelistIps` | `string[]` | `[]` | IP-адреса для whitelist |
+| `blockDuration` | `array{network?: int, fingerprint?: int, user?: int}` или `null` | `null` | Время блокировки в секундах при превышении лимита. `null` = блокировка выключена. |
+| `defaultBlockDuration` | `int` | `3600` | Время блокировки по умолчанию, если ключ в `blockDuration` не указан |
+| `redis` | `?RedisClient` | `null` | Кастомный экземпляр RedisClient |
 
 ---
 

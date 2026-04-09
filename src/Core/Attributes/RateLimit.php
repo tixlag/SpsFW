@@ -15,6 +15,12 @@ use Attribute;
  *       whitelistRequests: ['network' => 100],
  *       whitelistIps: ['10.0.0.10']
  *   )]
+ *
+ * Блокировка при превышении лимита:
+ *   #[RateLimit(
+ *       requests: ['network' => 60],
+ *       blockDuration: ['network' => 3600]  // block IP for 1 hour when limit exceeded
+ *   )]
  */
 #[Attribute(Attribute::TARGET_METHOD | Attribute::TARGET_CLASS)]
 readonly class RateLimit
@@ -29,6 +35,7 @@ readonly class RateLimit
      *
      * @param array{network?: int, fingerprint?: int, user?: int} $requests
      * @param array{network?: int, fingerprint?: int, user?: int} $whitelistRequests
+     * @param array{network?: int, fingerprint?: int, user?: int} $blockDuration duration in seconds to block when limit exceeded, null = no block
      */
     public function __construct(
         public array $requests = [],
@@ -36,5 +43,6 @@ readonly class RateLimit
         public ?int $window = null,
         public ?string $prefix = null,
         public array $whitelistIps = [],
+        public ?array $blockDuration = null,
     ) {}
 }
