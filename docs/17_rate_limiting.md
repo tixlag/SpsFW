@@ -91,7 +91,7 @@ class ProductController
 | `requests` | `array{network?: int, fingerprint?: int, user?: int}` | `[]` | Базовые лимиты. Пустой массив значит "взять global defaults" |
 | `whitelistRequests` | `array{network?: int, fingerprint?: int, user?: int}` | `[]` | Более мягкие лимиты для whitelist IP |
 | `window` | `?int` | `null` | Размер окна. `null` значит взять глобальное значение |
-| `prefix` | `?string` | `null` | Префикс Redis-ключей. `null` значит взять глобальное значение |
+| `prefix` | `?string` | `null` | Префикс Redis-ключей. `null` значит взять глобальное значение `'rl:'`. Если указан префикс `'reset-password:'`, ключи будут `'reset-password:network:...'`, а не `'rl:reset-password:network:...'` |
 | `whitelistIps` | `string[]` | `[]` | IP-адреса, которые нужно добавить к глобальному whitelist |
 | `blockDuration` | `array{network?: int, fingerprint?: int, user?: int}` или `null` | `null` | Время блокировки в секундах при превышении лимита. `null` = блокировка выключена. Если ключ отсутствует, используется 3600 сек (1 час). |
 

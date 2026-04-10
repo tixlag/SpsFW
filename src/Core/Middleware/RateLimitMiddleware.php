@@ -58,24 +58,31 @@ class RateLimitMiddleware implements MiddlewareInterface
         $keys = $this->resolveKeys($request, $limits);
 
         foreach ($keys as $bucket => $key) {
+            // Add prefix to key, but only if key doesn't already start with prefix
+            // This handles the case when #[RateLimit] prefix already contains 'rl:'
+            $fullKey = $key;
+            if (!str_starts_with($key, $this->keyPrefix)) {
+                $fullKey = $this->keyPrefix . $key;
+            }
+
             // Check if this bucket is currently blocked
-            if ($this->isBlocked($key)) {
-                $remaining = $this->getBlockRemainingTime($key);
+            if ($this->isBlocked($fullKey)) {
+                $remaining = $this->getBlockRemainingTime($fullKey);
                 throw new TooManyRequestsException(
-                    sprintf('Rate limit blocked for %d more seconds', $remaining)
+                    sprintf('Лимит превышен (%s): блокировка на %d секунд', $bucket, $remaining)
                 );
             }
 
-            $count = $this->redis->incrWithTtl($key, $this->windowSeconds);
+            $count = $this->redis->incrWithTtl($fullKey, $this->windowSeconds);
             if ($count > $limits[$bucket]) {
                 // Limit exceeded - set block if block duration is configured
                 $blockDurations = $this->resolveBlockDurations();
                 $blockDuration = $blockDurations[$bucket] ?? null;
                 if ($blockDuration !== null && $blockDuration > 0) {
-                    $this->setBlock($key, $blockDuration);
+                    $this->setBlock($fullKey, $blockDuration);
                 }
                 throw new TooManyRequestsException(
-                    sprintf('Rate limit exceeded: %d requests per %d seconds', $limits[$bucket], $this->windowSeconds)
+                    sprintf('Превышен лимит запросов (%s): %d запросов в %d секунд', $bucket, $limits[$bucket], $this->windowSeconds)
                 );
             }
         }
@@ -100,18 +107,21 @@ class RateLimitMiddleware implements MiddlewareInterface
 
         if ($user !== null) {
             if ($limits['user'] !== null) {
-                $keys['user'] = $this->keyPrefix . 'user:' . $user->uuid;
+                // Without prefix - prefix added in handle() and setBlock()
+                $keys['user'] = 'user:' . $user->uuid;
             }
             return $keys;
         }
 
         $fingerprint = $this->buildFingerprint($request, $ip);
         if ($limits['fingerprint'] !== null) {
-            $keys['fingerprint'] = $this->keyPrefix . 'fingerprint:' . $fingerprint;
+            // Without prefix - prefix added in handle() and setBlock()
+            $keys['fingerprint'] = 'fingerprint:' . $fingerprint;
         }
 
         if ($limits['network'] !== null) {
-            $keys['network'] = $this->keyPrefix . 'network:' . $ip;
+            // Without prefix - prefix added in handle() and setBlock()
+            $keys['network'] = 'network:' . $ip;
         }
 
         return $keys;
@@ -160,18 +170,21 @@ class RateLimitMiddleware implements MiddlewareInterface
     /**
      * Check if the given rate limit key is currently blocked.
      */
-    private function isBlocked(string $key): bool
+    private function isBlocked(string $fullKey): bool
     {
-        $blockKey = $this->keyPrefix . 'block:' . $key;
+        // $fullKey already contains $keyPrefix from handle(), insert 'block:' after prefix
+        // Example: rl:reset-password:network:1.2.3.4 -> rl:reset-password:block:network:1.2.3.4
+        $blockKey = $this->insertBlockInKey($fullKey);
         return (bool) $this->redis->get($blockKey);
     }
 
     /**
      * Get remaining block time in seconds.
      */
-    private function getBlockRemainingTime(string $key): int
+    private function getBlockRemainingTime(string $fullKey): int
     {
-        $blockKey = $this->keyPrefix . 'block:' . $key;
+        // $fullKey already contains $keyPrefix from handle(), insert 'block:' after prefix
+        $blockKey = $this->insertBlockInKey($fullKey);
         $ttl = $this->redis->ttl($blockKey);
         return $ttl > 0 ? $ttl : 0;
     }
@@ -179,10 +192,27 @@ class RateLimitMiddleware implements MiddlewareInterface
     /**
      * Set block for the given rate limit key.
      */
-    private function setBlock(string $key, int $durationSeconds): void
+    private function setBlock(string $fullKey, int $durationSeconds): void
     {
-        $blockKey = $this->keyPrefix . 'block:' . $key;
+        // $fullKey already contains $keyPrefix from handle(), insert 'block:' after prefix
+        $blockKey = $this->insertBlockInKey($fullKey);
         $this->redis->setex($blockKey, $durationSeconds, '1');
+    }
+
+    /**
+     * Insert 'block:' into key after prefix.
+     * Example: rl:reset-password:network:1.2.3.4 -> rl:reset-password:block:network:1.2.3.4
+     * Example: reset-password:network:1.2.3.4 -> reset-password:block:network:1.2.3.4
+     */
+    private function insertBlockInKey(string $key): string
+    {
+        // Find position after current prefix (whatever it is - 'rl:' or custom like 'reset-password:')
+        // If key doesn't start with our prefix, add prefix first
+        if (!str_starts_with($key, $this->keyPrefix)) {
+            $key = $this->keyPrefix . $key;
+        }
+        $prefixLen = strlen($this->keyPrefix);
+        return substr($key, 0, $prefixLen) . 'block:' . substr($key, $prefixLen);
     }
 
     private function resolveIp(): string
