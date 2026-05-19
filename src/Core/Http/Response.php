@@ -45,18 +45,8 @@ class Response
     {
         $user = Auth::getOrNull();
 
-        // Безопасно получаем previous exception
-        $previous = null;
-        if ($exception && $exception->getPrevious()) {
-            $prevException = $exception->getPrevious();
-            $previous = [
-                'class' => basename(str_replace('\\', '/', get_class($prevException))),
-                'message' => $prevException->getMessage(),
-                'code' => $prevException->getCode(),
-                'file' => $prevException->getFile(),
-                'line' => $prevException->getLine(),
-            ];
-        }
+        // Безопасно получаем всю цепочку previous exception
+        $previous = $exception ? self::serializeThrowable($exception->getPrevious()) : null;
 
         // Безопасно обрабатываем trace
         $trace = [];
@@ -105,6 +95,25 @@ class Response
                 'previous' => $isDebug ? $previous : null,
                 'trace' => $isDebug ? $trace : [],
             ]
+        ];
+    }
+
+    /**
+     * Безопасно сериализует Throwable и всю цепочку previous.
+     */
+    private static function serializeThrowable(?\Throwable $throwable): ?array
+    {
+        if ($throwable === null) {
+            return null;
+        }
+
+        return [
+            'class' => basename(str_replace('\\', '/', get_class($throwable))),
+            'message' => $throwable->getMessage(),
+            'code' => $throwable->getCode(),
+            'file' => $throwable->getFile(),
+            'line' => $throwable->getLine(),
+            'previous' => self::serializeThrowable($throwable->getPrevious()),
         ];
     }
 
