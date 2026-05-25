@@ -10,12 +10,12 @@
     "ext-pcntl": "*",
     "ext-redis": "*",
     "robmorgan/phinx": "^0.16.9",
-    "firebase/php-jwt": "^6.11",
     "zircote/swagger-php": "^5.1",
     "php-amqplib/php-amqplib": "^3.0",
     "guzzlehttp/guzzle": "^7.10",
     "ext-posix": "*",
-    "monolog/monolog": "^3.10"
+    "monolog/monolog": "^3.10",
+    "firebase/php-jwt": "^7.0"
   },
   "autoload": {
     "psr-4": {
