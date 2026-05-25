@@ -91,8 +91,9 @@ class Validator
                     if (!is_array($rawValue)) {
                         throw new ValidationException("$propertyName ожидает массив");
                     }
+                    $isEnum = (new ReflectionClass($rules['ref']))->isEnum();
                     foreach ($rawValue as $rawNestedDto) {
-                        if (!is_array($rawNestedDto)) {
+                        if (!$isEnum && !is_array($rawNestedDto)) {
                             throw new ValidationException("$propertyName ожидает массив");
                         }
                         $nestedDtos[] = self::validateDtoWithCachedRules(
@@ -186,22 +187,54 @@ class Validator
                 $propertyName = $attributesOpenApi['property'] ?? $property->getName();
                 $rawValue = isset($reqParams[$propertyName]) ? $reqParams[$propertyName] : null;
                 foreach ($attributesOpenApi as $attributeOpenApiKey => $attributeOpenApiValue) {
-                    if ($attributeOpenApiKey === 'ref') {
-                        if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
+                    if ($attributeOpenApiKey === 'ref' || $attributeOpenApiKey === 'items') {
+                        $refClass = $attributeOpenApiKey === 'items' && isset($attributeOpenApiValue->ref)
+                            ? $attributeOpenApiValue->ref
+                            : $attributeOpenApiValue;
+
+                        if (!class_exists($refClass)) {
+                            break;
+                        }
+
+                        if ($attributeOpenApiKey === 'items' || (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array')) {
+                            if ($rawValue === null) {
+                                $property->setValue($dto, null);
+                                break;
+                            }
+                            if (!is_array($rawValue)) {
+                                throw new ValidationException(
+                                    "$propertyName ожидает массив"
+                                );
+                            }
                             $nestedDtos = [];
+                            $isEnum = (new ReflectionClass($refClass))->isEnum();
                             foreach ($rawValue as $rawNestedDto) {
-                                if (!is_array($rawNestedDto)) {
+                                if (!$isEnum && !is_array($rawNestedDto)) {
                                     throw new ValidationException(
                                         "$propertyName ожидает массив"
                                     );
                                 }
-                                $value = self::validateDto($attributeOpenApiValue, $rawNestedDto);
+                                if ($isEnum) {
+                                    $value = $refClass::from($rawNestedDto);
+                                } else {
+                                    $value = self::validateDto($refClass, $rawNestedDto);
+                                }
                                 $nestedDtos[] = $value;
                             }
                             $property->setValue($dto, $nestedDtos);
                             break;
                         }
-                        $value = self::validateDto($attributeOpenApiValue, $rawValue);
+
+                        $isEnum = (new ReflectionClass($refClass))->isEnum();
+                        if ($isEnum) {
+                            if ($rawValue === null) {
+                                $value = null;
+                            } else {
+                                $value = $refClass::from($rawValue);
+                            }
+                        } else {
+                            $value = self::validateDto($refClass, $rawValue);
+                        }
                         $property->setValue($dto, $value);
                         break;
                     }

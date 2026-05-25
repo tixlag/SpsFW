@@ -393,7 +393,7 @@ class Router
                             $attributeValue = $attributeValue->ref;
                         }
                         if (!class_exists($attributeValue)) break;
-                        if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
+                        if ($attributeKey === 'items' || (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array')) {
                             $propertyRules['ref'] = $attributeValue;
                             $propertyRules['type'] = 'array';
                             $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
@@ -453,7 +453,7 @@ class Router
                                 $attributeValue = $attributeValue->ref;
                             }
                             if (!class_exists($attributeValue)) break;
-                            if (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array') {
+                            if ($attributeKey === 'items' || (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array')) {
                                 $propertyRules['ref'] = $attributeValue;
                                 $propertyRules['type'] = 'array';
                                 $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
