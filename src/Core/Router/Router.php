@@ -940,7 +940,7 @@ class Router
                         $args[] = $dependency;
                         continue 2;
                     }
-                    if (is_array($dependency) && is_a($dependency[1], $typeName)) {
+                    if (is_array($dependency) && isset($dependency[1]) && is_a($dependency[1], $typeName)) {
                         $args[] = $dependency[1];
                         continue 2;
                     }
