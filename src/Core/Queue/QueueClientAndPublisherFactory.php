@@ -7,6 +7,9 @@ use SpsFW\Core\Queue\LargeMessage\ChunkedMessageHandler;
 use SpsFW\Core\Queue\LargeMessage\LargeMessageHandlerInterface;
 use SpsFW\Core\Queue\Outbox\OutboxPublisher;
 use SpsFW\Core\Queue\Outbox\OutboxStorage;
+use SpsFW\Core\Queue\Outbox\OutboxWakeupInterface;
+use SpsFW\Core\Queue\Outbox\TransactionManager;
+use SpsFW\Core\Queue\Outbox\TransactionalOutboxPublisher;
 use SpsFW\Core\Workers\WorkerConfig;
 
 /**
@@ -128,11 +131,14 @@ class QueueClientAndPublisherFactory
         string $routingKey = "",
         string $exchangeType = AMQPExchangeType::DIRECT,
         array $exchangeArguments = [],
-        ?LargeMessageHandlerInterface $largeMessageHandler = null
+        ?LargeMessageHandlerInterface $largeMessageHandler = null,
+        array $queueArguments = [],
+        array $bindingKeys = [],
     ): RabbitMQQueuePublisher {
         $cfg = array_merge($this->buildConfig(), [
             "exchange_arguments" => $exchangeArguments,
-            "queue_arguments"    => [],
+            "queue_arguments"    => $queueArguments,
+            "binding_keys"       => $bindingKeys !== [] ? $bindingKeys : ($routingKey !== '' ? [$routingKey] : []),
         ]);
 
         $handler = $largeMessageHandler ?? $this->largeMessageHandler;
@@ -157,16 +163,21 @@ class QueueClientAndPublisherFactory
     public function createByWorkerNameWithoutOutbox(string $workerName): RabbitMQQueuePublisher
     {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
-        $exchangeType = !empty($workerConfig["delayed"])
-            ? "x-delayed-message"
-            : AMQPExchangeType::DIRECT;
+        if ($workerConfig === null) {
+            throw new \InvalidArgumentException("Unknown queue worker: {$workerName}");
+        }
+        $exchangeType = $workerConfig['exchange_type']
+            ?? (!empty($workerConfig["delayed"]) ? "x-delayed-message" : AMQPExchangeType::DIRECT);
+        $publishRoutingKey = $workerConfig['publish_routing_key'] ?? $workerConfig['routing_key'];
 
         return $this->createWithoutOutbox(
             queueName:       $workerConfig["queue"],
             exchange:        $workerConfig["exchange"],
-            routingKey:      $workerConfig["routing_key"],
+            routingKey:      $publishRoutingKey,
             exchangeType:    $exchangeType,
             exchangeArguments: $workerConfig["exchange_arguments"] ?? [],
+            queueArguments: $workerConfig['queue_arguments'] ?? [],
+            bindingKeys: $workerConfig['binding_keys'] ?? [$workerConfig['routing_key']],
         );
     }
 
@@ -278,6 +289,56 @@ class QueueClientAndPublisherFactory
         return new OutboxPublisher($publisher, $storage, $autoFlushBatch);
     }
 
+    public function createTransactional(
+        string $queueName,
+        string $exchange = '',
+        string $routingKey = '',
+        ?OutboxStorage $storage = null,
+        ?TransactionManager $transactionManager = null,
+        ?OutboxWakeupInterface $wakeup = null,
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+        array $queueArguments = [],
+        array $bindingKeys = [],
+    ): TransactionalOutboxPublisher {
+        $storage ??= $this->outboxStorage ?? throw new \LogicException(
+            'OutboxStorage must be provided for transactional publication.',
+        );
+
+        return new TransactionalOutboxPublisher(
+            $this->createWithoutOutbox(
+                queueName: $queueName,
+                exchange: $exchange,
+                routingKey: $routingKey,
+                exchangeType: $exchangeType,
+                exchangeArguments: $exchangeArguments,
+                queueArguments: $queueArguments,
+                bindingKeys: $bindingKeys,
+            ),
+            $storage,
+            $transactionManager,
+            $wakeup,
+        );
+    }
+
+    public function createByWorkerNameTransactional(
+        string $workerName,
+        ?OutboxStorage $storage = null,
+        ?TransactionManager $transactionManager = null,
+        ?OutboxWakeupInterface $wakeup = null,
+    ): TransactionalOutboxPublisher {
+        $storage ??= $this->outboxStorage ?? throw new \LogicException(
+            'OutboxStorage must be provided for transactional publication.',
+        );
+
+        return new TransactionalOutboxPublisher(
+            $this->createByWorkerNameWithoutOutbox($workerName),
+            $storage,
+            $transactionManager,
+            $wakeup,
+        );
+    }
+
     // -------------------------------------------------------------------------
     // Client factories
     // -------------------------------------------------------------------------
@@ -285,17 +346,22 @@ class QueueClientAndPublisherFactory
     public function createClientByWorkerName(string $workerName): RabbitMQClient
     {
         $workerConfig = $this->workerConfig->getQueueConfig($workerName);
-        $exchangeType = !empty($workerConfig["delayed"])
-            ? "x-delayed-message"
-            : AMQPExchangeType::DIRECT;
+        if ($workerConfig === null) {
+            throw new \InvalidArgumentException("Unknown queue worker: {$workerName}");
+        }
+        $exchangeType = $workerConfig['exchange_type']
+            ?? (!empty($workerConfig["delayed"]) ? "x-delayed-message" : AMQPExchangeType::DIRECT);
+        $publishRoutingKey = $workerConfig['publish_routing_key'] ?? $workerConfig['routing_key'];
 
         $client = new RabbitMQClient(
             exchange:     $workerConfig["exchange"],
             exchangeType: $exchangeType,
             queue:        $workerConfig["queue"],
-            routingKey:   $workerConfig["routing_key"],
+            routingKey:   $publishRoutingKey,
             config:       array_merge($this->buildConfig(), [
                 "exchange_arguments" => $workerConfig["exchange_arguments"] ?? [],
+                "queue_arguments" => $workerConfig["queue_arguments"] ?? [],
+                "binding_keys" => $workerConfig['binding_keys'] ?? [$workerConfig['routing_key']],
             ]),
             largeMessageHandler: $this->largeMessageHandler,
         );
@@ -303,7 +369,7 @@ class QueueClientAndPublisherFactory
         $this->ensureDlqTopology(
             $workerConfig["queue"],
             $workerConfig["exchange"],
-            $workerConfig["routing_key"]
+            $publishRoutingKey
         );
 
         return $client;

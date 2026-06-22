@@ -22,6 +22,7 @@ class RabbitMQClient
     private string $routingKey;
     private string $consumerTag = '';
     private ?LargeMessageHandlerInterface $largeMessageHandler;
+    private bool $reliablePublishingInitialized = false;
 
     /**
      * Инициализация подключения к RabbitMQ
@@ -128,9 +129,13 @@ class RabbitMQClient
                 );
             }
 
-            // привязка как раньше
-            if ($exchange && $queue && $routingKey) {
-                $this->channel->queue_bind($queue, $exchange, $routingKey);
+            $bindingKeys = $config['binding_keys'] ?? ($routingKey !== '' ? [$routingKey] : []);
+            if ($exchange && $queue) {
+                foreach (array_values(array_unique($bindingKeys)) as $bindingKey) {
+                    if (is_string($bindingKey) && $bindingKey !== '') {
+                        $this->channel->queue_bind($queue, $exchange, $bindingKey);
+                    }
+                }
             }
         } catch (AMQPIOException $e) {
             throw new Exception("Ошибка подключения к RabbitMQ: " . $e->getMessage());
@@ -164,6 +169,61 @@ class RabbitMQClient
         );
 
         $this->channel->basic_publish($message, $exchange, $routingKey);
+    }
+
+    /**
+     * Publish with publisher confirms and mandatory routing.
+     *
+     * The call returns only after RabbitMQ confirms persistence. Unroutable
+     * messages and broker nacks are raised as exceptions.
+     */
+    public function publishReliable(
+        mixed $data,
+        array $properties = [],
+        ?string $routingKey = null,
+        ?string $exchange = null,
+        float $timeoutSeconds = 5.0,
+    ): void {
+        $routingKey = $routingKey ?? $this->routingKey;
+        $exchange = $exchange ?? $this->exchange;
+
+        if ($this->largeMessageHandler && $this->largeMessageHandler->needsChunking($data)) {
+            throw new \RuntimeException('Reliable outbox publication does not support chunked messages.');
+        }
+
+        $returned = null;
+        if (!$this->reliablePublishingInitialized) {
+            $this->channel->confirm_select();
+            $this->channel->set_nack_handler(static function (): void {
+                throw new \RuntimeException('RabbitMQ negatively acknowledged a published message.');
+            });
+            $this->reliablePublishingInitialized = true;
+        }
+        $this->channel->set_return_listener(
+            static function (...$arguments) use (&$returned): void {
+                $returned = sprintf(
+                    'RabbitMQ returned unroutable message: %s (%s -> %s)',
+                    (string) ($arguments[1] ?? 'NO_ROUTE'),
+                    (string) ($arguments[2] ?? ''),
+                    (string) ($arguments[3] ?? ''),
+                );
+            },
+        );
+
+        $message = new AMQPMessage(
+            json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+            array_merge([
+                'content_type' => 'application/json',
+                'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
+            ], $properties),
+        );
+
+        $this->channel->basic_publish($message, $exchange, $routingKey, true);
+        $this->channel->wait_for_pending_acks_returns(max(0.1, $timeoutSeconds));
+
+        if ($returned !== null) {
+            throw new \RuntimeException($returned);
+        }
     }
 
     /**

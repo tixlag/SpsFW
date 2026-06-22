@@ -31,6 +31,7 @@
   ],
   "minimum-stability": "RC",
   "scripts": {
+    "test": "php tests/run.php",
     "migrate:dev": "APP_ENV=dev vendor/bin/phinx migrate",
     "migrate:prod": "APP_ENV=prod vendor/bin/phinx migrate",
     "rollback:dev": "APP_ENV=dev vendor/bin/phinx rollback",

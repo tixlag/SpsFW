@@ -2,6 +2,7 @@
 .env.dev
 .env
 /vendor/
+/vendor
 composer.phar
 */openapi.yaml
 /.cache/

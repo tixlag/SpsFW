@@ -1,5 +1,35 @@
 # 16. Outbox Pattern (надёжная публикация в RabbitMQ)
 
+## Transactional and scheduled outbox
+
+`OutboxPublisher` remains a compatibility fallback: it first tries RabbitMQ and
+stores the message only when publication fails. Critical business events should
+use `TransactionalOutboxPublisher`, which always stores a fully prepared
+message in the same database transaction as the business change.
+
+```php
+$transactionManager->transactional(function () use ($publisher, $job, $when): void {
+    $publisher->publishAt(
+        $job,
+        $when,
+        ['deduplicationKey' => 'task-reminder:' . $job->reminderId],
+    );
+});
+```
+
+`OutboxRelay` claims due rows with `FOR UPDATE SKIP LOCKED`, commits the lease,
+publishes with AMQP mandatory routing and publisher confirms, then deletes the
+claimed row. A crash after broker confirmation can produce a duplicate, so job
+handlers must remain idempotent.
+
+Wakeup strategies:
+
+- `PostgresOutboxWakeup`: PostgreSQL `LISTEN/NOTIFY`;
+- `RedisOutboxWakeup`: portable MySQL/MariaDB wakeup;
+- `SleepOutboxWakeup`: indexed fallback with a bounded wait.
+
+The outbox schema supports PostgreSQL 9.5+, MySQL 8+ and MariaDB 10.6+.
+
 ## Зачем
 
 При публикации задачи в RabbitMQ брокер может быть временно недоступен. Простой вызов `$publisher->publish()` в таком случае упадёт с исключением и задача будет потеряна.
