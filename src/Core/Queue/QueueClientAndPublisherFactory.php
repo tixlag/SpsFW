@@ -331,6 +331,29 @@ class QueueClientAndPublisherFactory
         return $client;
     }
 
+    public function createClientWithArguments(
+        string $queueName,
+        string $exchange = "",
+        string $routingKey = "",
+        array $queueArguments = [],
+        ?LargeMessageHandlerInterface $largeMessageHandler = null
+    ): RabbitMQClient {
+        $handler = $largeMessageHandler ?? $this->largeMessageHandler;
+
+        $client = new RabbitMQClient(
+            exchange:            $exchange,
+            exchangeType:        AMQPExchangeType::DIRECT,
+            queue:               $queueName,
+            routingKey:          $routingKey,
+            config:              array_merge($this->buildConfig(), [
+                'queue_arguments' => $queueArguments
+            ]),
+            largeMessageHandler: $handler,
+        );
+
+        return $client;
+    }
+
     // -------------------------------------------------------------------------
     // Static helpers
     // -------------------------------------------------------------------------
