@@ -77,9 +77,15 @@ final class CapturingWakeup implements OutboxWakeupInterface
 
 $client = new ContractRabbitClient();
 $rabbitPublisher = new RabbitMQQueuePublisher($client, 'event.ready', 'crm.events');
+$offlinePublisher = new RabbitMQQueuePublisher(null, 'event.ready', 'crm.events');
 $executeAt = new DateTimeImmutable('2026-06-23T10:15:00+00:00');
 
 assert_true(method_exists(RabbitMQClient::class, 'publishReliable'), 'RabbitMQ client exposes reliable publication');
+assert_same(
+    'crm.events',
+    $offlinePublisher->prepare(new ContractJob())->exchange,
+    'message preparation does not require a broker connection',
+);
 
 $prepared = $rabbitPublisher->prepare(new ContractJob(), [
     'executeAt' => $executeAt,

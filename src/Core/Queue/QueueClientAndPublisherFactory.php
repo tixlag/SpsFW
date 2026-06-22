@@ -306,15 +306,7 @@ class QueueClientAndPublisherFactory
         );
 
         return new TransactionalOutboxPublisher(
-            $this->createWithoutOutbox(
-                queueName: $queueName,
-                exchange: $exchange,
-                routingKey: $routingKey,
-                exchangeType: $exchangeType,
-                exchangeArguments: $exchangeArguments,
-                queueArguments: $queueArguments,
-                bindingKeys: $bindingKeys,
-            ),
+            new RabbitMQQueuePublisher(null, $routingKey, $exchange),
             $storage,
             $transactionManager,
             $wakeup,
@@ -331,8 +323,17 @@ class QueueClientAndPublisherFactory
             'OutboxStorage must be provided for transactional publication.',
         );
 
+        $workerConfig = $this->workerConfig?->getQueueConfig($workerName);
+        if ($workerConfig === null) {
+            throw new \InvalidArgumentException("Unknown queue worker: {$workerName}");
+        }
+
         return new TransactionalOutboxPublisher(
-            $this->createByWorkerNameWithoutOutbox($workerName),
+            new RabbitMQQueuePublisher(
+                null,
+                $workerConfig['publish_routing_key'] ?? $workerConfig['routing_key'],
+                $workerConfig['exchange'],
+            ),
             $storage,
             $transactionManager,
             $wakeup,

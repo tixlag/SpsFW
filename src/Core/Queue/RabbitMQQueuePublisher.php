@@ -9,13 +9,13 @@ use SpsFW\Core\Queue\Interfaces\PayloadJobInterface;
 
 class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessageTransportInterface
 {
-    private RabbitMQClient $client;
+    private ?RabbitMQClient $client;
     private string $defaultRoutingKey;
     private string $defaultExchange;
 
     private const UTC = 'UTC';
 
-    public function __construct(RabbitMQClient $client, string $defaultRoutingKey = '', string $defaultExchange = '')
+    public function __construct(?RabbitMQClient $client, string $defaultRoutingKey = '', string $defaultExchange = '')
     {
         $this->client = $client;
         $this->defaultRoutingKey = $defaultRoutingKey;
@@ -46,6 +46,10 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
 
     public function publishPrepared(PreparedQueueMessage $message, bool $reliable = false): void
     {
+        if ($this->client === null) {
+            throw new \LogicException('This publisher can prepare messages only; no RabbitMQ client is attached.');
+        }
+
         if ($reliable) {
             $this->client->publishReliable(
                 $message->payload,
@@ -74,7 +78,7 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
 
     public function getClient(): RabbitMQClient
     {
-        return $this->client;
+        return $this->client ?? throw new \LogicException('No RabbitMQ client is attached.');
     }
 
     private function buildPublishArgs(JobInterface $job, array $options): array
