@@ -75,6 +75,18 @@ final class CapturingWakeup implements OutboxWakeupInterface
     }
 }
 
+final class FailingWakeup implements OutboxWakeupInterface
+{
+    public function notify(DateTimeImmutable $availableAt): void
+    {
+        throw new RuntimeException('wakeup unavailable');
+    }
+
+    public function wait(int $timeoutMilliseconds): void
+    {
+    }
+}
+
 $client = new ContractRabbitClient();
 $rabbitPublisher = new RabbitMQQueuePublisher($client, 'event.ready', 'crm.events');
 $offlinePublisher = new RabbitMQQueuePublisher(null, 'event.ready', 'crm.events');
@@ -115,6 +127,20 @@ assert_same(1, count($storage->messages), 'transactional publisher stores one me
 assert_same('contract:2', $storage->messages[0][1], 'deduplication key is persisted');
 assert_same('crm.events', $storage->messages[0][0]->exchange, 'stored message keeps exchange');
 assert_same(1, count($wakeup->notified), 'outbox wakes relay after commit');
+
+$failingWakeupStorage = new CapturingOutboxStorage();
+$failingWakeupPdo = new TransactionManagerPdo();
+$failingWakeupManager = new TransactionManager($failingWakeupPdo);
+$failingWakeupPublisher = new TransactionalOutboxPublisher(
+    $rabbitPublisher,
+    $failingWakeupStorage,
+    $failingWakeupManager,
+    new FailingWakeup(),
+);
+$failingWakeupManager->transactional(
+    static fn (): mixed => $failingWakeupPublisher->publish(new ContractJob()),
+);
+assert_same(1, count($failingWakeupStorage->messages), 'wakeup failure does not report a committed outbox write as failed');
 
 $fallbackStorage = new CapturingOutboxStorage();
 $fallback = new OutboxPublisher(

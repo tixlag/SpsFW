@@ -32,7 +32,14 @@ final readonly class TransactionalOutboxPublisher implements QueuePublisherInter
         );
 
         if ($this->wakeup !== null) {
-            $notify = fn (): mixed => $this->wakeup?->notify($prepared->availableAt);
+            $notify = function () use ($prepared): void {
+                try {
+                    $this->wakeup?->notify($prepared->availableAt);
+                } catch (\Throwable) {
+                    // Wakeups reduce latency only. The indexed relay fallback
+                    // remains authoritative and the outbox row is committed.
+                }
+            };
             if ($this->transactionManager !== null) {
                 $this->transactionManager->afterCommit($notify);
             } else {
