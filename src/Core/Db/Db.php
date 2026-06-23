@@ -69,7 +69,9 @@ class Db
                 }
             }
 
-            self::$pdo[$configId] = new PDO($dsns[$configId], $username, $password, $options);
+            self::$pdo[$configId] = $adapter === 'pgsql' && class_exists(\Pdo\Pgsql::class)
+                ? new \Pdo\Pgsql($dsns[$configId], $username, $password, $options)
+                : new PDO($dsns[$configId], $username, $password, $options);
 
             if ($debugMode && in_array($adapter, ['mysql', 'mariadb'], true)) {
                 self::$pdo[$configId]->query("SET profiling = 1;");

@@ -22,6 +22,11 @@ publishes with AMQP mandatory routing and publisher confirms, then deletes the
 claimed row. A crash after broker confirmation can produce a duplicate, so job
 handlers must remain idempotent.
 
+The relay transport should be wrapped in
+`ReconnectablePreparedMessageTransport`. A failed AMQP connection is discarded;
+the next retry creates a fresh client and continues draining the same leased
+outbox table after RabbitMQ recovers.
+
 Wakeup strategies:
 
 - `PostgresOutboxWakeup`: PostgreSQL `LISTEN/NOTIFY`;
@@ -29,6 +34,11 @@ Wakeup strategies:
 - `SleepOutboxWakeup`: indexed fallback with a bounded wait.
 
 The outbox schema supports PostgreSQL 9.5+, MySQL 8+ and MariaDB 10.6+.
+
+For a framework checkout mounted outside `vendor/` (for example `/opt/spsfw` in
+Docker), set `SPSFW_PROJECT_ROOT=/app`. DI, route and job-registry caches will
+then be written to the application `.cache` directory instead of the read-only
+framework source.
 
 ## Зачем
 
@@ -151,3 +161,10 @@ echo "Flushed: $flushed\n";
 | `exchange`    | VARCHAR(255)                     | Имя exchange                  |
 | `attempts`    | INT                              | Число попыток (для аналитики) |
 | `created_at`  | TIMESTAMPTZ / DATETIME(3)        | Время добавления              |
+| `message_id`  | VARCHAR(255)                     | Стабильный ID сообщения       |
+| `available_at`| TIMESTAMPTZ / DATETIME(6)        | Не публиковать раньше времени |
+| `next_attempt_at` | TIMESTAMPTZ / DATETIME(6)    | Следующая попытка relay       |
+| `deduplication_key` | VARCHAR(255), UNIQUE        | Идемпотентная запись          |
+| `claim_token` | VARCHAR(36), nullable             | Lease конкретного relay       |
+| `claimed_until` | TIMESTAMPTZ / DATETIME(6)      | Срок lease                    |
+| `last_error`  | TEXT, nullable                    | Последняя ошибка публикации   |

@@ -21,7 +21,7 @@ class V20260401000004 extends AbstractMigration
         $adapter = $this->getAdapter()->getAdapterType();
 
         if ($adapter === 'pgsql') {
-            $this->query("
+            $this->execute("
                 CREATE TABLE IF NOT EXISTS queue_outbox (
                     id          UUID                     NOT NULL DEFAULT gen_random_uuid(),
                     payload     JSONB                    NOT NULL,
@@ -32,13 +32,14 @@ class V20260401000004 extends AbstractMigration
                     created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 
                     PRIMARY KEY (id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_queue_outbox_created_at ON queue_outbox (created_at ASC);
+                )
             ");
+            $this->execute(
+                'CREATE INDEX IF NOT EXISTS idx_queue_outbox_created_at ON queue_outbox (created_at ASC)'
+            );
         } else {
             // MySQL / MariaDB
-            $this->query("
+            $this->execute("
                 CREATE TABLE IF NOT EXISTS queue_outbox (
                     id          BINARY(16)   NOT NULL,
                     payload     JSON     NOT NULL,
@@ -57,6 +58,6 @@ class V20260401000004 extends AbstractMigration
 
     public function down(): void
     {
-        $this->query('DROP TABLE IF EXISTS queue_outbox');
+        $this->execute('DROP TABLE IF EXISTS queue_outbox');
     }
 }

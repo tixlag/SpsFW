@@ -261,7 +261,7 @@ class QueueClientAndPublisherFactory
         string $queueName,
         string $exchange = "",
         string $routingKey = "",
-        OutboxStorage $storage = null,
+        ?OutboxStorage $storage = null,
         int $autoFlushBatch = 10,
         string $exchangeType = AMQPExchangeType::DIRECT,
         array $exchangeArguments = [],
@@ -279,7 +279,7 @@ class QueueClientAndPublisherFactory
      */
     public function createByWorkerNameWithOutbox(
         string $workerName,
-        OutboxStorage $storage = null,
+        ?OutboxStorage $storage = null,
         int $autoFlushBatch = 10,
     ): OutboxPublisher {
         $storage ??= $this->outboxStorage ?? throw new \LogicException(

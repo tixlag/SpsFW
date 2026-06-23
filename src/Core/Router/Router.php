@@ -79,6 +79,7 @@ class Router
         __DIR__ . '/../',
         __DIR__ . '/../../../../../../src',
     ];
+    protected string $cacheDir;
 
 
 //    protected ?RedisHelper $redis = null;
@@ -94,11 +95,13 @@ class Router
     public function __construct(
         ?string $controllersDir = null,
         protected bool $useCache = true,
-        protected string $cacheDir = __DIR__ . '/../../../../../../.cache/',
+        ?string $cacheDir = null,
         array $dependencies = []
     ) {
-//        $this->cacheDir =  PathManager::getCachePath();
-//        $this->controllersDirs = PathManager::getControllersDirs();
+        $this->cacheDir = $cacheDir !== null && $cacheDir !== ''
+            ? $cacheDir
+            : PathManager::getCachePath();
+        $this->controllersDirs = PathManager::getControllersDirs();
         PathManager::ensureDirectoryExists($this->cacheDir);
 //        $scannerDirs = [
 //            __DIR__ . '/../../',              // фреймворк
@@ -368,6 +371,7 @@ class Router
                 $attributesOpenApi = $propertyAttribute->getArguments();
                 $propertyName = $attributesOpenApi['property'] ?? $property->getName();
                 $propertyType = $property->getType();
+                $propertyClass = $this->reflectionClassName($propertyType);
 
                 // Дефолт: сначала из свойства, затем из параметра конструктора
                 $propertyDefaultValue = null;
@@ -386,9 +390,9 @@ class Router
                 $propertyRules['real_name'] = $realPropertyName;
 
                 foreach ($attributesOpenApi as $attributeKey => $attributeValue) {
-                    if ($attributeKey === 'ref' || !$propertyType->isBuiltin() || $attributeKey === 'items') {
-                        if (!$propertyType->isBuiltin()) {
-                            $attributeValue = $propertyType->getName();
+                    if ($attributeKey === 'ref' || $propertyClass !== null || $attributeKey === 'items') {
+                        if ($propertyClass !== null) {
+                            $attributeValue = $propertyClass;
                         } elseif ($attributeKey === 'items' && isset($attributeValue->ref)) {
                             $attributeValue = $attributeValue->ref;
                         }
@@ -431,6 +435,7 @@ class Router
                     $attributesOpenApi = $paramAttribute->getArguments();
                     $propertyName = $attributesOpenApi['property'] ?? $realParamName;
                     $paramType = $param->getType();
+                    $paramClass = $this->reflectionClassName($paramType);
 
                     $defaultValue = null;
                     if ($param->isDefaultValueAvailable()) {
@@ -446,9 +451,9 @@ class Router
                     $propertyRules['real_name'] = $realParamName;
 
                     foreach ($attributesOpenApi as $attributeKey => $attributeValue) {
-                        if ($attributeKey === 'ref' || ($paramType && !$paramType->isBuiltin()) || $attributeKey === 'items') {
-                            if ($paramType && !$paramType->isBuiltin()) {
-                                $attributeValue = $paramType->getName();
+                        if ($attributeKey === 'ref' || $paramClass !== null || $attributeKey === 'items') {
+                            if ($paramClass !== null) {
+                                $attributeValue = $paramClass;
                             } elseif ($attributeKey === 'items' && isset($attributeValue->ref)) {
                                 $attributeValue = $attributeValue->ref;
                             }
@@ -476,6 +481,24 @@ class Router
         }
 
         return $rules;
+    }
+
+    private function reflectionClassName(?\ReflectionType $type): ?string
+    {
+        if ($type instanceof ReflectionNamedType) {
+            return $type->isBuiltin() ? null : $type->getName();
+        }
+
+        if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
+            foreach ($type->getTypes() as $nestedType) {
+                $className = $this->reflectionClassName($nestedType);
+                if ($className !== null) {
+                    return $className;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -6,6 +6,7 @@ use ReflectionClass;
 use ReflectionException;
 use SpsFW\Core\Config;
 use SpsFW\Core\Exceptions\BaseException;
+use SpsFW\Core\Router\PathManager;
 
 class DIContainer
 {
@@ -30,15 +31,14 @@ class DIContainer
         }
     }
 
-    public static function getInstance(string $cachePath = ''): self
+    public static function getInstance(?string $cachePath = null): self
     {
         if (self::$instance === null) {
-            if ($cachePath === '') {
-                // Путь по умолчанию — можно вынести в константу или Config
-                $cachePath = __DIR__ . '/../../../../../../.cache/';
-                if (!is_dir($cachePath)) {
-                    mkdir($cachePath, 0777, true);
-                }
+            $cachePath = $cachePath !== null && $cachePath !== ''
+                ? $cachePath
+                : PathManager::getCachePath();
+            if (!is_dir($cachePath)) {
+                mkdir($cachePath, 0777, true);
             }
             self::$instance = new self($cachePath);
         }

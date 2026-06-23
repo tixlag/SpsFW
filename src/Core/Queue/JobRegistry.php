@@ -7,6 +7,7 @@ use SpsFW\Core\DI\DIContainer;
 use SpsFW\Core\Queue\Interfaces\JobHandlerInterface;
 use SpsFW\Core\Queue\Interfaces\JobInterface;
 use SpsFW\Core\Queue\Interfaces\PayloadJobInterface;
+use SpsFW\Core\Router\PathManager;
 
 class JobRegistry
 {
@@ -14,9 +15,9 @@ class JobRegistry
 
     private array $registeredJobs = [];
 
-    public function __construct(string $cachePath = __DIR__ . "/../../../../../../.cache")
+    public function __construct(?string $cachePath = null)
     {
-        $this->fromCache($cachePath);
+        $this->fromCache($cachePath ?? PathManager::getCachePath());
     }
 
     public function getRegisteredJobs(): array
@@ -35,9 +36,10 @@ class JobRegistry
      * @param string $cachePath — путь к кешу (например, var/cache)
      * @return self
      */
-    public static function loadFromCache(string $cachePath = __DIR__ . "/../../../../../../.cache"): self
+    public static function loadFromCache(?string $cachePath = null): self
     {
-        $instance = new self();
+        $cachePath ??= PathManager::getCachePath();
+        $instance = new self($cachePath);
         $cacheFile = $cachePath . '/job_registry.php';
 
         if (file_exists($cacheFile)) {
@@ -50,8 +52,9 @@ class JobRegistry
         return $instance;
     }
 
-    public function fromCache(string $cachePath = __DIR__ . "/../../../../../../.cache"): self
+    public function fromCache(?string $cachePath = null): self
     {
+        $cachePath ??= PathManager::getCachePath();
         $cacheFile = $cachePath . '/job_registry.php';
 
         if (file_exists($cacheFile)) {

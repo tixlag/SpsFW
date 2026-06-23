@@ -32,11 +32,16 @@ final class PostgresOutboxWakeup implements OutboxWakeupInterface
             $this->listening = true;
         }
 
-        if (!method_exists($this->pdo, 'pgsqlGetNotify')) {
-            usleep(max(1, $timeoutMilliseconds) * 1000);
+        if ($this->pdo instanceof \Pdo\Pgsql) {
+            $this->pdo->getNotify(PDO::FETCH_ASSOC, max(0, $timeoutMilliseconds));
             return;
         }
 
-        $this->pdo->pgsqlGetNotify(PDO::FETCH_ASSOC, max(0, $timeoutMilliseconds));
+        if (PHP_VERSION_ID < 80500 && method_exists($this->pdo, 'pgsqlGetNotify')) {
+            $this->pdo->pgsqlGetNotify(PDO::FETCH_ASSOC, max(0, $timeoutMilliseconds));
+            return;
+        }
+
+        usleep(max(1, $timeoutMilliseconds) * 1000);
     }
 }
