@@ -200,8 +200,9 @@ class DICacheBuilder
      * @throws BaseException
      * @throws ReflectionException
      */
-    public static function compileDI(?DIContainer $container = null, string $cachePath = __DIR__ . "/../../../../../../.cache"): void
+    public static function compileDI(?DIContainer $container = null, ?string $cachePath = null): void
     {
+        $cachePath ??= PathManager::getCachePath();
         $allClasses = [];
 
         $scannerDirs = PathManager::getControllersDirs();

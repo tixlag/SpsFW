@@ -7,15 +7,15 @@ use SpsFW\Core\Queue\Interfaces\QueuePublisherInterface;
 use SpsFW\Core\Queue\Interfaces\JobInterface;
 use SpsFW\Core\Queue\Interfaces\PayloadJobInterface;
 
-class RabbitMQQueuePublisher implements QueuePublisherInterface
+class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessageTransportInterface
 {
-    private RabbitMQClient $client;
+    private ?RabbitMQClient $client;
     private string $defaultRoutingKey;
     private string $defaultExchange;
 
     private const UTC = 'UTC';
 
-    public function __construct(RabbitMQClient $client, string $defaultRoutingKey = '', string $defaultExchange = '')
+    public function __construct(?RabbitMQClient $client, string $defaultRoutingKey = '', string $defaultExchange = '')
     {
         $this->client = $client;
         $this->defaultRoutingKey = $defaultRoutingKey;
@@ -24,23 +24,61 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface
 
     public function publish(JobInterface $job, array $options = []): void
     {
+        $this->publishPrepared($this->prepare($job, $options));
+    }
+
+    public function prepare(JobInterface $job, array $options = []): PreparedQueueMessage
+    {
         [$payload, $properties, $routingKey, $exchange] = $this->buildPublishArgs($job, $options);
-        $this->client->publish($payload, $properties, $routingKey, $exchange);
+        $availableAt = isset($options['executeAt']) && $options['executeAt'] instanceof \DateTimeInterface
+            ? \DateTimeImmutable::createFromInterface($options['executeAt'])
+            : new \DateTimeImmutable('now', new \DateTimeZone(self::UTC));
+
+        return new PreparedQueueMessage(
+            payload: $payload,
+            properties: $properties,
+            routingKey: $routingKey,
+            exchange: $exchange,
+            messageId: (string) $payload['meta']['messageId'],
+            availableAt: $availableAt,
+        );
+    }
+
+    public function publishPrepared(PreparedQueueMessage $message, bool $reliable = false): void
+    {
+        if ($this->client === null) {
+            throw new \LogicException('This publisher can prepare messages only; no RabbitMQ client is attached.');
+        }
+
+        if ($reliable) {
+            $this->client->publishReliable(
+                $message->payload,
+                $message->properties,
+                $message->routingKey,
+                $message->exchange,
+            );
+            return;
+        }
+
+        $this->client->publish(
+            $message->payload,
+            $message->properties,
+            $message->routingKey,
+            $message->exchange,
+        );
     }
 
     /**
-     * Собирает payload (массив) для публикации без отправки в брокер.
-     * Используется OutboxPublisher для сохранения в БД при недоступности RabbitMQ.
+     * @deprecated Use prepare() when routing metadata must be persisted.
      */
     public function buildPayload(JobInterface $job, array $options = []): array
     {
-        [$payload] = $this->buildPublishArgs($job, $options);
-        return $payload;
+        return $this->prepare($job, $options)->payload;
     }
 
     public function getClient(): RabbitMQClient
     {
-        return $this->client;
+        return $this->client ?? throw new \LogicException('No RabbitMQ client is attached.');
     }
 
     private function buildPublishArgs(JobInterface $job, array $options): array

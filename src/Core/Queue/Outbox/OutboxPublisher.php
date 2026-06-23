@@ -112,12 +112,7 @@ class OutboxPublisher implements QueuePublisherInterface
 
     private function saveToOutbox(JobInterface $job, array $options): void
     {
-        $payload    = $this->publisher->buildPayload($job, $options);
-        $properties = $this->serializeProperties($options['properties'] ?? []);
-        $routingKey = $options['routingKey'] ?? '';
-        $exchange   = $options['exchange']   ?? '';
-
-        $this->storage->save($payload, $properties, $routingKey, $exchange);
+        $this->storage->savePrepared($this->publisher->prepare($job, $options));
     }
 
     /**

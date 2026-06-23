@@ -13,6 +13,17 @@ class PathManager
     public static function getProjectRoot(): string
     {
         if (static::$projectRoot === null) {
+            $configuredRoot = $_ENV['SPSFW_PROJECT_ROOT'] ?? getenv('SPSFW_PROJECT_ROOT');
+            if (is_string($configuredRoot) && trim($configuredRoot) !== '') {
+                $configuredRoot = realpath(trim($configuredRoot));
+                if ($configuredRoot === false || !is_file($configuredRoot . '/composer.json')) {
+                    throw new \RuntimeException('SPSFW_PROJECT_ROOT must point to a project containing composer.json');
+                }
+
+                static::$projectRoot = $configuredRoot;
+                return static::$projectRoot;
+            }
+
             static::$projectRoot = self::findProjectRoot(__DIR__);
 
             // Debug информация

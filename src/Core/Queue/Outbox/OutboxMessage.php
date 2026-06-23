@@ -12,6 +12,9 @@ class OutboxMessage
         public readonly string            $exchange,
         public readonly int               $attempts,
         public readonly \DateTimeImmutable $createdAt,
+        public readonly string $messageId = '',
+        public readonly ?\DateTimeImmutable $availableAt = null,
+        public readonly string $claimToken = '',
     ) {}
 
     public static function fromRow(array $row): self
@@ -24,6 +27,9 @@ class OutboxMessage
             exchange:   $row['exchange'],
             attempts:   (int) $row['attempts'],
             createdAt:  new \DateTimeImmutable($row['created_at']),
+            messageId: (string) ($row['message_id'] ?? ($row['payload']['meta']['messageId'] ?? '')),
+            availableAt: new \DateTimeImmutable((string) ($row['available_at'] ?? $row['created_at'])),
+            claimToken: (string) ($row['claim_token'] ?? ''),
         );
     }
 }

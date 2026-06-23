@@ -1,5 +1,45 @@
 # 16. Outbox Pattern (надёжная публикация в RabbitMQ)
 
+## Transactional and scheduled outbox
+
+`OutboxPublisher` remains a compatibility fallback: it first tries RabbitMQ and
+stores the message only when publication fails. Critical business events should
+use `TransactionalOutboxPublisher`, which always stores a fully prepared
+message in the same database transaction as the business change.
+
+```php
+$transactionManager->transactional(function () use ($publisher, $job, $when): void {
+    $publisher->publishAt(
+        $job,
+        $when,
+        ['deduplicationKey' => 'task-reminder:' . $job->reminderId],
+    );
+});
+```
+
+`OutboxRelay` claims due rows with `FOR UPDATE SKIP LOCKED`, commits the lease,
+publishes with AMQP mandatory routing and publisher confirms, then deletes the
+claimed row. A crash after broker confirmation can produce a duplicate, so job
+handlers must remain idempotent.
+
+The relay transport should be wrapped in
+`ReconnectablePreparedMessageTransport`. A failed AMQP connection is discarded;
+the next retry creates a fresh client and continues draining the same leased
+outbox table after RabbitMQ recovers.
+
+Wakeup strategies:
+
+- `PostgresOutboxWakeup`: PostgreSQL `LISTEN/NOTIFY`;
+- `RedisOutboxWakeup`: portable MySQL/MariaDB wakeup;
+- `SleepOutboxWakeup`: indexed fallback with a bounded wait.
+
+The outbox schema supports PostgreSQL 9.5+, MySQL 8+ and MariaDB 10.6+.
+
+For a framework checkout mounted outside `vendor/` (for example `/opt/spsfw` in
+Docker), set `SPSFW_PROJECT_ROOT=/app`. DI, route and job-registry caches will
+then be written to the application `.cache` directory instead of the read-only
+framework source.
+
 ## Зачем
 
 При публикации задачи в RabbitMQ брокер может быть временно недоступен. Простой вызов `$publisher->publish()` в таком случае упадёт с исключением и задача будет потеряна.
@@ -121,3 +161,10 @@ echo "Flushed: $flushed\n";
 | `exchange`    | VARCHAR(255)                     | Имя exchange                  |
 | `attempts`    | INT                              | Число попыток (для аналитики) |
 | `created_at`  | TIMESTAMPTZ / DATETIME(3)        | Время добавления              |
+| `message_id`  | VARCHAR(255)                     | Стабильный ID сообщения       |
+| `available_at`| TIMESTAMPTZ / DATETIME(6)        | Не публиковать раньше времени |
+| `next_attempt_at` | TIMESTAMPTZ / DATETIME(6)    | Следующая попытка relay       |
+| `deduplication_key` | VARCHAR(255), UNIQUE        | Идемпотентная запись          |
+| `claim_token` | VARCHAR(36), nullable             | Lease конкретного relay       |
+| `claimed_until` | TIMESTAMPTZ / DATETIME(6)      | Срок lease                    |
+| `last_error`  | TEXT, nullable                    | Последняя ошибка публикации   |
