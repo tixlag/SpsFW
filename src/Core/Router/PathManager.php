@@ -121,7 +121,7 @@ class PathManager
             $dirs[] = $srcPath;
         }
 
-        return array_reverse($dirs);
+        return $dirs;
     }
 
     /**
