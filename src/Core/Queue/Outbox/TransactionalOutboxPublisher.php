@@ -26,6 +26,48 @@ final readonly class TransactionalOutboxPublisher implements QueuePublisherInter
         unset($options['deduplicationKey']);
 
         $prepared = $this->publisher->prepare($job, $options);
+        $this->storePrepared($prepared, $deduplicationKey);
+    }
+
+    /**
+     * Сохраняет готовое тело JSON-сообщения в outbox без обертки фреймворка.
+     *
+     * publish(JobInterface) подходит для PHP-воркеров SpsFW, но добавляет
+     * jobName/payload/meta. Для очередей, которые читает внешний сервис со своим
+     * контрактом сообщения, нужно использовать этот метод.
+     */
+    public function publishPayload(array $payload, array $options = []): void
+    {
+        $deduplicationKey = isset($options['deduplicationKey'])
+            ? trim((string) $options['deduplicationKey'])
+            : null;
+        unset($options['deduplicationKey']);
+
+        $prepared = $this->publisher->preparePayload($payload, $options);
+        $this->storePrepared($prepared, $deduplicationKey);
+    }
+
+    public function publishAt(JobInterface $job, \DateTimeInterface $when, array $options = []): void
+    {
+        $options['executeAt'] = $when;
+        $this->publish($job, $options);
+    }
+
+    /**
+     * Сохраняет готовое тело сообщения в outbox с временем доставки.
+     *
+     * Это аналог publishAt(JobInterface) для внешних потребителей. Время
+     * доставки попадет в queue_outbox.available_at, а Redis-пробуждение будет
+     * выполнено только после успешного commit через TransactionManager.
+     */
+    public function publishPayloadAt(array $payload, \DateTimeInterface $when, array $options = []): void
+    {
+        $options['executeAt'] = $when;
+        $this->publishPayload($payload, $options);
+    }
+
+    private function storePrepared(\SpsFW\Core\Queue\PreparedQueueMessage $prepared, ?string $deduplicationKey): void
+    {
         $this->storage->savePrepared(
             $prepared,
             $deduplicationKey !== '' ? $deduplicationKey : null,
@@ -46,11 +88,5 @@ final readonly class TransactionalOutboxPublisher implements QueuePublisherInter
                 $notify();
             }
         }
-    }
-
-    public function publishAt(JobInterface $job, \DateTimeInterface $when, array $options = []): void
-    {
-        $options['executeAt'] = $when;
-        $this->publish($job, $options);
     }
 }

@@ -146,7 +146,7 @@ composer rollback:dev      # откатить последнюю
 | `users__refresh_tokens` | Auth / JWT refresh tokens |
 | `users__access_rules` | Auth / Access control |
 | `access_rules` | Auth / Access control |
-| `outbox_messages` | Queue / Outbox pattern |
+| `queue_outbox` | Queue / transactional outbox |
 
 Они применяются автоматически вместе с миграциями проекта — `PhinxConfigFactory` находит их по маркерам внутри фреймворка.
 

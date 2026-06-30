@@ -27,6 +27,19 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
         $this->publishPrepared($this->prepare($job, $options));
     }
 
+    /**
+     * Публикует уже готовое тело JSON-сообщения без обертки фреймворка.
+     *
+     * Обычный publish(JobInterface) нужен для PHP-воркеров SpsFW: он добавляет
+     * jobName/payload/meta. Для внешних потребителей, например Go-сервисов,
+     * такая обертка ломает контракт сообщения, поэтому здесь тело сообщения
+     * сохраняется и отправляется ровно в том виде, в котором его передал клиентский код.
+     */
+    public function publishPayload(array $payload, array $options = []): void
+    {
+        $this->publishPrepared($this->preparePayload($payload, $options));
+    }
+
     public function prepare(JobInterface $job, array $options = []): PreparedQueueMessage
     {
         [$payload, $properties, $routingKey, $exchange] = $this->buildPublishArgs($job, $options);
@@ -40,6 +53,36 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
             routingKey: $routingKey,
             exchange: $exchange,
             messageId: (string) $payload['meta']['messageId'],
+            availableAt: $availableAt,
+        );
+    }
+
+    /**
+     * Подготавливает готовое тело сообщения для прямой отправки или сохранения в outbox.
+     *
+     * prepare(JobInterface) здесь не подходит: он добавляет служебную обертку
+     * SpsFW и x-delay для RabbitMQ-плагина. Этот метод оставляет payload без
+     * изменений, а время доставки хранит в PreparedQueueMessage::availableAt,
+     * чтобы расписанием управлял outbox.
+     */
+    public function preparePayload(array $payload, array $options = []): PreparedQueueMessage
+    {
+        $messageId = (string) ($options['messageId'] ?? bin2hex(random_bytes(16)));
+        $availableAt = isset($options['executeAt']) && $options['executeAt'] instanceof \DateTimeInterface
+            ? \DateTimeImmutable::createFromInterface($options['executeAt'])
+            : new \DateTimeImmutable('now', new \DateTimeZone(self::UTC));
+
+        $properties = $options['properties'] ?? [];
+        if (!isset($properties['message_id'])) {
+            $properties['message_id'] = $messageId;
+        }
+
+        return new PreparedQueueMessage(
+            payload: $payload,
+            properties: $properties,
+            routingKey: $options['routingKey'] ?? $this->defaultRoutingKey,
+            exchange: $options['exchange'] ?? $this->defaultExchange,
+            messageId: $messageId,
             availableAt: $availableAt,
         );
     }
@@ -144,6 +187,18 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
     {
         $options['executeAt'] = $when;
         $this->publish($job, $options);
+    }
+
+    /**
+     * Публикует готовое тело сообщения в заданное время.
+     *
+     * Это аналог publishAt(JobInterface) для внешних потребителей, которые не
+     * понимают обертку SpsFW jobName/payload/meta.
+     */
+    public function publishPayloadAt(array $payload, \DateTimeInterface $when, array $options = []): void
+    {
+        $options['executeAt'] = $when;
+        $this->publishPayload($payload, $options);
     }
 
     private function mergeApplicationHeaders(array $properties, array $headersToMerge): array

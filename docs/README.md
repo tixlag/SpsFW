@@ -28,3 +28,9 @@
 15. [Preload и OPcache](15_preload_opcache.md) — прогрев кеша, `php.ini`, CI/CD деплой
 16. [Outbox Pattern](16_outbox_pattern.md) — надёжная публикация в RabbitMQ через БД-буфер
 17. [Rate Limiting](17_rate_limiting.md) — `#[RateLimit]`, `RateLimitMiddleware`, 429 Too Many Requests
+
+## Для разработчиков
+
+Этот раздел — про внутреннее устройство фреймворка, компромиссы и runtime-поведение.
+
+- [Раздел для разработчиков](developers/README.md) — внутренние принципы, очереди, transactional outbox, wakeup-стратегии и оценка сложности.

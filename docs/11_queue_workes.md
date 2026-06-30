@@ -1,5 +1,8 @@
 # Инструкция по использованию системы очередей RabbitMQ
 
+> Этот документ описывает базовый workflow очередей.
+> Актуальные детали надёжности, DLQ, transactional outbox и wakeup-стратегий см. в `13_queue_reliability_update.md`, `16_outbox_pattern.md` и `developers/queue-outbox.md`.
+
 ## Краткий воркфлоу для разработчика
 
 **5 шагов для создания новой очереди:**
@@ -641,6 +644,64 @@ done
 * Фабрика `QueueClientAndPublisherFactory` умеет создавать delayed-exchange и множество очередей/routing keys, а также `createWithRetry()` поддерживает delayed exchange.
 * В payload автоматически кладём мета-поле `meta.executeAt` (если было передано) — это страховка на стороне consumer.
 * Всегда используем UTC для расчёта времени/задержки.
+* Если нужен не просто `delayMs`, а сообщение “через месяц” или “ровно в дату”, тогда publisher выбирается иначе: для broker-managed delay создаём `RabbitMQQueuePublisher` с `x-delayed-message`, для календарного расписания создаём `OutboxPublisher` / `TransactionalOutboxPublisher` и сохраняем `available_at` в БД.
+
+## Какой publisher создавать для delayed-сообщения
+
+### 1) Broker-managed delay: нужен RabbitMQ delayed exchange
+
+Если задержка небольшая и плагин `rabbitmq_delayed_message_exchange` уже есть, создаём обычный `RabbitMQQueuePublisher` через фабрику и включаем delayed exchange:
+
+```php
+$publisher = $factory->create(
+    queueName: 'notifications_email',
+    exchange: 'delayed_notifications',
+    routingKey: 'notification.email',
+    exchangeType: 'x-delayed-message',
+    exchangeArguments: ['x-delayed-type' => 'direct'],
+);
+
+$publisher->publishAt(
+    $job,
+    new \DateTimeImmutable('+2 hours', new \DateTimeZone('UTC')),
+);
+```
+
+Это вариант для коротких задержек, когда брокер сам хранит delayed message до нужного времени.
+
+### 2) Calendar schedule: нужен outbox publisher
+
+Если сообщение должно уйти через месяц, в конкретную дату или должно пережить долгую недоступность брокера, создаём outbox publisher:
+
+```php
+$publisher = $factory->createByWorkerNameWithOutbox('notifications_worker', $outboxStorage);
+
+$publisher->publishAt(
+    $job,
+    new \DateTimeImmutable('+1 month', new \DateTimeZone('UTC')),
+    ['deduplicationKey' => 'reminder:' . $userId . ':1m'],
+);
+```
+
+Если schedule должен быть атомарен вместе с бизнес-изменением, используем transactional variant:
+
+```php
+$publisher = $factory->createByWorkerNameTransactional(
+    'notifications_worker',
+    $outboxStorage,
+    $transactionManager,
+    $wakeup,
+);
+
+$transactionManager->transactional(function () use ($publisher, $job): void {
+    $publisher->publishAt(
+        $job,
+        new \DateTimeImmutable('2026-07-23 09:00:00', new \DateTimeZone('UTC')),
+    );
+});
+```
+
+В outbox-режиме `publishAt()` не держит сообщение в RabbitMQ весь срок ожидания — оно сохраняет `available_at` в БД, а relay публикует сообщение, когда дата наступает.
 
 ---
 
@@ -775,7 +836,4 @@ _(реализовано)_
 4. **Не меняем JobInterface** — все изменения происходят через опции публикации (`publish()`/`publishAt()`), поэтому существующие Job классы не требуют правки.
 5. **Тестируйте в среде с плагином** — локально плагин может отсутствовать; для локального fallback используйте TTL+DLX или тестовый режим.
 6. **Мониторинг** — логируйте `publishedAt`, `executeAt`, `delayMs` и `jobId` (если есть) для удобства расследования задержек и дублирования.
-
-
-# TODO
-**Dedup / idempotency** — при высоких нагрузках/повторах подумать о `jobId` и идемпотентной обработке в handler.
+7. **Идемпотентность** — при retry, DLQ и outbox дубли возможны по определению; задавайте стабильный `jobId` и делайте handler идемпотентным.

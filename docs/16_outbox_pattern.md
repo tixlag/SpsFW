@@ -1,5 +1,7 @@
 # 16. Outbox Pattern (надёжная публикация в RabbitMQ)
 
+Подробный внутренний разбор механизма, включая `LISTEN/NOTIFY`, Redis-замену для MySQL/MariaDB, lease-модель и оценки сложности, см. в `developers/queue-outbox.md`.
+
 ## Transactional and scheduled outbox
 
 `OutboxPublisher` remains a compatibility fallback: it first tries RabbitMQ and
@@ -30,8 +32,8 @@ outbox table after RabbitMQ recovers.
 Wakeup strategies:
 
 - `PostgresOutboxWakeup`: PostgreSQL `LISTEN/NOTIFY`;
-- `RedisOutboxWakeup`: portable MySQL/MariaDB wakeup;
-- `SleepOutboxWakeup`: indexed fallback with a bounded wait.
+- `RedisOutboxWakeup`: Redis wakeup для MySQL/MariaDB и любых окружений без PostgreSQL notifications;
+- `SleepOutboxWakeup`: bounded fallback без дополнительной инфраструктуры.
 
 The outbox schema supports PostgreSQL 9.5+, MySQL 8+ and MariaDB 10.6+.
 
