@@ -27,7 +27,7 @@ use UnitEnum;
  * Boundaries (plan §7) — returned as an explicit *unsupported* result so the builder can surface a
  * CompileDiagnostics error / halt instead of silently losing information:
  *  - genuine union    : two or more non-null members (int|string) — not auto-derived
- *  - intersection     : (A&B) — not auto-derived
+ *  - intersection     : (A&B), including the nullable DNF form (A&B)|null — not auto-derived
  * A mapping with `unsupported === true` carries a human-readable `reason`; callers should check
  * {@see isUnsupported()} before trusting `type`/`ref`/`enum`.
  *
@@ -165,20 +165,25 @@ final class TypeMapper
             // null-only union.
             return $this->pack(nullable: true);
         }
-        if (count($nonNull) === 1) {
-            // T|null (the only union that maps cleanly): collapse to the single member, nullable.
+        if (count($nonNull) === 1 && $nonNull[0] instanceof ReflectionNamedType) {
+            // T|null (the only union that maps cleanly): collapse to the single NAMED member, nullable.
             $mapped = $this->mapNamed($nonNull[0], $formatOverride);
             $mapped['nullable'] = true;
             return $mapped;
         }
 
-        // Genuine union (two or more non-null members) is not auto-derived (plan §7 boundary).
+        // Not auto-derived (plan §7 boundary): a genuine union (two or more non-null members) OR a
+        // nullable intersection member ((A&B)|null, PHP 8.2 DNF — a single non-named member). mapNamed()
+        // is intentionally NOT called here: the member is not a ReflectionNamedType.
         $names = array_map(
             static function (ReflectionType $t): string {
                 return $t instanceof ReflectionNamedType ? $t->getName() : (string) $t;
             },
             $nonNull,
         );
+        if (count($nonNull) === 1) {
+            return $this->unsupported('intersection (' . $names[0] . ')|null is not auto-derived; use #[Field]/#[Items] or the OA escape hatch');
+        }
         return $this->unsupported('union ' . implode('|', $names) . ' is not auto-derived; use #[Field]/#[Items] or the OA escape hatch');
     }
 

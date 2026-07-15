@@ -274,31 +274,46 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 - job_registry — явно в Coordinator.
 
 ## 19. operationId inventory ПЕРЕД первым новым snapshot (артефакты — в AUDIT)
-**Статус reconciliation: ВЫПОЛНЕНО** (M0 closure). Полная таблица —
+**Статус reconciliation: ВЫПОЛНЕНО** (M0 closure, rev. 3). Полная таблица —
 `docs/metadata_compiler_audit/operation_id_reconciliation.tsv` (генератор `gen_operation_id_reconciliation.php`);
 итоги и findings — AUDIT §4. **Lockfile пока НЕ создаётся** (требовалось: сначала таблица — теперь она есть;
-создание отложено на M9 из-за дрейфа 306 операций, см. ниже).
+создание отложено на M9 — см. pre-M9 policy ниже).
 
-Итоги reconciliation (R=377 routes, S=300 paths/347 ops, P=347 generated funcs):
+Итоги reconciliation (R=377 routes, S=300 paths/347 ops, P=347 generated funcs, снапшот 2026-07):
 - **R∩S = 345** (документированных маршрутов); **R\S = 32** (недокументированных — нет в spec/клиенте,
-  напр. `GET /api/test`); **S\R = 2** (orphan spec-операций без backend-route).
-- **explicit = 40** (operationId в spec); **method-fallback = 306** (в spec **без** operationId — processor
-  не активен); S∩P = 347 (клиент 1:1 со spec).
-- **Главный finding (§4.3 AUDIT):** для 306 fallback-операций `generated_function` path-derived
-  (`deleteApiAchievementsDeleteLevelUuid`) ≠ предлагаемый `canonical_id` (method name `deleteAchievementLevel`),
-  причём `generated_query_key == generated_function` всегда. ⇒ назначение canonical=method-name **переименует
-  функцию и query-key в клиенте** для 306 операций → breaking change, только в M9 с регенерацией P.
-  Для 40 explicit: `generated_function == operationId == canonical` (дрейфа нет).
+  напр. `GET /api/test`); **S\R = 2** (orphan/stale spec-операций без backend-route).
+- **explicit = 39** (operationId в spec, все в R∩S); **method-fallback = 306** (в spec **без** operationId —
+  processor не активен); S∩P = 347 (клиент 1:1 со spec).
+- **query-key (извлечён из реального P, не фабрикуется как qk=fn):** ключ имеют **172/347** операций (все
+  GET-queries); **175 мутаций** query-key-геттера не имеют → `-`. Тезис «query_key == function_name всегда»
+  **неверен и удалён** — для 172 ops с ключом qk==fn, но 175 ops ключа лишены вовсе.
+- **⚠️ 19 bare-method-name коллизий** среди migration-кандидатов 306 fallback-операций (`create`, `delete`,
+  `me`, `index`, `getAll`, …) ⇒ **bare method-name не годится как canonical id** — требуется
+  controller-qualified id. Готовых canonical_id-коллизий (explicit + route-only add) — **0**.
+
+**Pre-M9 policy (зафиксирована):**
+1. **39 explicit IDs сохраняются** как есть (`generated_function == operationId`, дрейфа нет) → `lockfile=in`.
+2. **306 legacy operations сохраняют operationId=null**, чтобы НЕ менять P (клиент): в TSV это
+   `lockfile=deferred`, `canonical_id='-'`, bare method-name уходит в `migration_candidate_id`.
+   Controller-qualified id для них вводится **только в согласованном M9** с регенерацией клиента
+   (переименует функцию+query-key → breaking change, требует coordinated client regen).
+3. **Новые route-only add (22)** получают canonical id по конвенции **`<ControllerShort><Method>`** с
+   compile-time uniqueness-check (0 коллизий) — готовые lockfile-ids → `lockfile=in`.
+4. **4 route-only** (public-vs-internal неизвестен) → `pending`, `lockfile=out` до решения владельца;
+   **6 exclude** (test/util/HTML/binary) и **2 spec-only stale** (orphan + method-drift PATCH/POST) — вне lockfile.
+   Итого lockfile: **in=61** (39 explicit + 22 add), **deferred=306**, **out=12** (4 pending + 6 exclude + 2 stale).
 
 Правила canonical ID (после reconciliation):
-1. `canonical ID` = явный operationId (для 40 explicit).
-2. Для 306 fallback — **предлагается** method-name (но меняет клиент → только M9).
+1. `canonical_id` (TSV) = готовый id для lockfile: явный operationId (39 explicit) **или**
+   `<ControllerShort><Method>` (22 route-only add). Остальные → `-`.
+2. `migration_candidate_id` (TSV) = bare method-name, который legacy-op ПОЛУЧИЛ БЫ в M9 — может коллидировать
+   (19 коллизий), **не является** готовым lockfile-id; отделён от canonical_id именно поэтому.
 3. База join — `route_inventory.txt` + TSV (§4 AUDIT). Сопоставление по нормализованному `METHOD:normpath`
    (path-параметры схлопнуты в `{}` — swagger-php snake_case vs orval camelCase).
-4. `config/operation_id_map.lock.php` (или `#[Operation(id:)]`) — на M9, с учётом дрейфа 306 операций.
-   Новые операции — конвенция `<ControllerShort><Method>` + uniqueness; существующие — из lockfile.
-- ⚠️ **Drift (зафиксирован в AUDIT §4.6):** `public_next/openapi.yaml` — отдельный файл (3.0.0, 143 opId),
-  не равен cache-спеки (3.1.0, 300 paths/347 ops/40 явных), которую читает Orval. Классифицировать отдельно
+4. `config/operation_id_map.lock.php` (или `#[Operation(id:)]`) — на M9, с учётом: (а) preserve 39 explicit;
+   (б) controller-qualified id для 306 deferred; (в) 22 route-only add по новой конвенции; (г) exclude/stale не входят.
+- ⚠️ **Drift (зафиксирован в AUDIT §4.7):** `public_next/openapi.yaml` — отдельный файл (3.0.0, 143 opId),
+  не равен cache-спеки (3.1.0, 300 paths/347 ops/39 явных), которую читает Orval. Классифицировать отдельно
   (устаревший коммит/другой продукт → кандидат на удаление/архив в M9).
 
 ## 20. Пошаговый план реализации (характеризация-first, per-repo)

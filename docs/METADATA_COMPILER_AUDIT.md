@@ -142,7 +142,7 @@ FQCN не содержит `.php`, поэтому `str_ends_with($class, 'Test.p
 
 Колонки TSV (12): `METHOD | path | controller::method | in_spec | legacy_op_id |
 id_source(explicit|method-fallback|route-only|spec-only) | generated_function | query_key |
-proposed_new_id | canonical_id | lockfile(in|out) | classification`. Сопоставление R↔S↔P идёт по
+migration_candidate_id | canonical_id | lockfile(in|deferred|out) | classification`. Сопоставление R↔S↔P идёт по
 **нормализованному** ключу `METHOD:normpath`, где path-параметры схлопнуты в `{}` — это необходимо, т.к.
 swagger-php эмиттит snake_case path-params (`{code_1c}`), а orval переписывает url camelCase TS-варами
 (`${code1c}`); структура (позиции параметров) сохраняется. **query_key извлекается из реального P**
@@ -175,10 +175,12 @@ swagger-php эмиттит snake_case path-params (`{code_1c}`), а orval пер
 | из них generated_query_key == generated_function | **172 / 172** |
 | P: мутаций без query-key (→ `-`) | **175** |
 | нормализованных коллизий ключей R / S / P | **0 / 0 / 0** |
-| canonical_id коллизий (bare method-name fallback) | **19** |
-| route-only → add (в lockfile) | **26** |
+| canonical_id коллизий (готовых ids: explicit + route-only add) | **0** |
+| migration_candidate_id коллизий (bare method-name, deferred M9) | **19** |
+| route-only → add (в lockfile) | **22** |
+| route-only → pending (вне lockfile, до решения владельца) | **4** |
 | route-only → exclude (вне lockfile) | **6** |
-| lockfile: in / out | **371 / 8** |
+| lockfile: in / deferred / out | **61 / 306 / 12** |
 
 **Объяснение разрыва 377 routes / 300 spec paths / 39 operationId:**
 - 377 routes → 345 из них документированы в spec (имеют OA), **32 routes без OA в spec не попадают**
@@ -198,22 +200,27 @@ swagger-php эмиттит snake_case path-params (`{code_1c}`), а orval пер
 - **Для 306 method-fallback** operations: operationId в spec **нет** ⇒ orval генерирует **path-derived**
   имя функции (напр. `deleteApiAchievementsDeleteLevelUuid`); query-key (для GET) == этому сгенерированному
   имени. При этом `canonical_id` = PHP method name (напр. `deleteAchievementLevel`) **≠** `generated_function`.
-- **⚠️ 19 canonical_id коллизий в bare-method-name fallback-множестве** (план §19 шаг 4 / §4.4 шаг 2):
+- **⚠️ 19 migration_candidate_id коллизий** (bare method-name среди 306 method-fallback; план §19):
   `create` (4×), `delete` (2×), `me`, `getAll`, `getByName`, `index` (2×), `yaml`, `deleteFile`,
   `addFilesInRecord`, `removeDriver`, `add`, `addDriver`, `close`. ⇒ **bare method-name как canonical id
-  НЕ жизнеспособен** — он не уникален. Controller-квалификация (`<ControllerShort><Method>`) обязательна и
-  для fallback-операций тоже, не только для новых. Это plan-impacting finding: §19/§4.4 требуют корректировки.
+  НЕ жизнеспособен** — он не уникален, поэтому вынесен в отдельную колонку `migration_candidate_id` и НЕ
+  помечается готовым lockfile-id. Controller-квалификация (`<ControllerShort><Method>`) обязательна.
+  Готовых canonical_id-коллизий (39 explicit + 22 route-only add) — **0**.
 
-### 4.4 Правило canonical ID (§19) — обновлено по итогам reconciliation (rev. 2)
-1. `canonical ID` = явный operationId (для 39 explicit) — **без изменений** (существующие explicit-op
-   не переименовываются).
-2. Для 306 fallback — **НЕ bare method-name** (19 коллизий, §4.3): требуется controller-qualified id
-   `<ControllerShort><Method>` с compile-time uniqueness-check. Переименование клиента → только в M9.
-3. База reconciliation (controller::method ↔ path, 377) — `route_inventory.txt` (§1); полный join — TSV (§4).
-4. **Lockfile пока НЕ создаётся** (по требованию: сначала таблица — теперь она есть, rev. 2). Создание
-   откладывается на M9 и должно учитывать: (а) дрейф 306 операций (§4.3); (б) controller-qualification для
-   fallback; (в) 26 route-only add-ops входят с новой конвенцией `<ControllerShort><Method>` (0 коллизий);
-   (г) 6 exclude + 2 stale НЕ входят в lockfile.
+### 4.4 Правило canonical ID (§19) — обновлено по итогам reconciliation (rev. 3)
+**Pre-M9 policy (зафиксирована, см. также план §19):**
+1. **39 explicit IDs сохраняются** как есть (`lockfile=in`).
+2. **306 legacy operations сохраняют operationId=null** — чтобы НЕ менять P (клиент). В TSV это
+   `lockfile=deferred`, `canonical_id='-'`, bare method-name уходит в `migration_candidate_id` (19 коллизий
+   ⇒ не готов как lockfile-id). Controller-qualified id для них — **только в согласованном M9**.
+3. **Новые route-only add (22)** получают canonical id `<ControllerShort><Method>` с uniqueness-check
+   (0 коллизий) → `lockfile=in`.
+4. **4 route-only** (public-vs-internal неизвестен) → `pending`, `lockfile=out`; **6 exclude** + **2 stale** → вне lockfile.
+   Итого: `in=61` (39 explicit + 22 add), `deferred=306`, `out=12` (4 pending + 6 exclude + 2 stale).
+
+База join (controller::method ↔ path, 377) — `route_inventory.txt` (§1); полный join — TSV (§4). Сопоставление
+по нормализованному `METHOD:normpath`. **Lockfile пока НЕ создаётся** (требовалось: сначала таблица — теперь
+она есть, rev. 3); создание отложено на M9 с учётом пунктов 1–4 выше.
 
 ### 4.5 Spec-only operations (S\R, 2 шт) → stale (не переносятся в lockfile)
 - `POST /api/auth/add-access-rules` (operationId `addAccessRules`) — **method drift**: spec/client = POST,
@@ -223,14 +230,16 @@ swagger-php эмиттит snake_case path-params (`{code_1c}`), а orval пер
   opId в lockfile **не переносится**.
 Оба — кандидаты на удаление из spec/клиента (решение в M7); в lockfile не попадают.
 
-### 4.6 Route-only operations (R\S, 32 шт) → ручная классификация (26 add / 6 exclude)
+### 4.6 Route-only operations (R\S, 32 шт) → ручная классификация (22 add / 4 pending / 6 exclude)
 Классификация: `docs/metadata_compiler_audit/operation_id_classification.php` (ключ = нормализованный
-route-key, `resolution` ∈ {add, exclude, stale}).
-- **add (26)** — реальные JSON `#[Route]` endpoint'ы, отсутствующие в spec; войдут в новый OpenAPI с
-  конвенцией `<ControllerShort><Method>` (0 коллизий предложенных id) и в lockfile. Напр.
+route-key, `resolution` ∈ {add, pending, exclude, stale}).
+- **add (22)** — реальные JSON `#[Route]` endpoint'ы, отсутствующие в spec; войдут в новый OpenAPI с
+  конвенцией `<ControllerShort><Method>` (0 коллизий) и в lockfile. Напр.
   `DELETE /api/achievements/{uuid}` → `AchievementDelete`, `GET /api/auth/reset` → `AuthReset`,
-  `GET /api/tickets/all` → `TicketAll`. ⚠️ помечены «confirm public-vs-internal»: `GET /api/import/tickets`,
-  `POST /api/exchange-1c/employees`, `POST /api/import/access-rules/bulk`, `POST /api/users/duplicate`.
+  `GET /api/tickets/all` → `TicketsGetAll`.
+- **pending (4)** — реальные endpoint'ы, но public-vs-internal неизвестен; `lockfile=out` до решения владельца:
+  `GET /api/import/tickets`, `POST /api/exchange-1c/employees`, `POST /api/import/access-rules/bulk`,
+  `POST /api/users/duplicate`.
 - **exclude (6)** — не публичные JSON API (test/util/HTML/binary), в spec и lockfile **не входят**:
   `GET /api/test`, `GET /test`, `POST /core/update`, `GET /qr`, `GET /api/qr-fast`, `GET /api/image-resize`.
 

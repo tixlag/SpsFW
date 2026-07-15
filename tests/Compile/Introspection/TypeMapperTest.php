@@ -55,6 +55,7 @@ class TmHolder
     public int|string $union;            // genuine union (2 non-null members) -> unsupported
     public ?TmDto $maybeDto;             // T|null nullable union -> supported, ref, nullable
     public \Countable&\IteratorAggregate $inter; // intersection -> unsupported
+    public (\Countable&\IteratorAggregate)|null $interMaybe; // nullable intersection (DNF) -> unsupported
 }
 
 $mapper = new TypeMapper();
@@ -137,6 +138,13 @@ assert_true(str_contains((string) $union['reason'], 'union'), 'unsupported union
 $inter = $map('inter');
 assert_true($mapper->isUnsupported($inter), 'intersection type is unsupported');
 assert_true(str_contains((string) $inter['reason'], 'intersection'), 'unsupported intersection carries a reason');
+
+// nullable intersection (A&B)|null (PHP 8.2 DNF) is NOT auto-derived either: the single non-null member
+// is an intersection, so it must NOT collapse through mapNamed() (which would TypeError on a non-named
+// member) — it returns an explicit unsupported result instead.
+$interMaybe = $map('interMaybe');
+assert_true($mapper->isUnsupported($interMaybe), 'nullable intersection (A&B)|null is unsupported');
+assert_true(str_contains((string) $interMaybe['reason'], 'intersection'), 'nullable intersection carries a reason');
 
 // null / absent type
 assert_true($mapper->map(null)['nullable'], 'null type maps to nullable');

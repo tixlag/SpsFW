@@ -18,6 +18,17 @@
  *     <ControllerShort><Method> with a uniqueness check; excluded ops are kept OUT of the lockfile.
  *   - spec-only/stale ops are NOT auto-carried into the operationId lockfile.
  *
+ * rev. 3 changes vs rev. 2 (pre-M9 policy + column split):
+ *   - canonical_id is SEPARATED from the bare method-name: a new migration_candidate_id column holds the
+ *     method-name a legacy op WOULD receive in a coordinated M9 (may collide); canonical_id holds only the
+ *     id READY to pin (explicit opId or route-only <ControllerShort><Method>). Colliding bare names are
+ *     therefore never presented as ready lockfile ids.
+ *   - pre-M9 policy: 39 explicit ids preserved; 306 method-fallback ops keep operationId=null (do NOT
+ *     change P) -> lockfile=deferred, canonical_id='-'; controller-qualified id only in coordinated M9.
+ *   - route-only 'pending' resolution: public-vs-internal undecided -> held OUT (lockfile=out) until owner.
+ *   - canonical_collisions counts only READY ids (expect 0); migration_candidate_collisions counts the
+ *     bare method-name collisions of the deferred M9 set.
+ *
  * This script REFERENCES the sibling repos (N, P) by path; SpsFW's clean checkout does NOT depend on
  * them at runtime — only the committed TSV output is the artifact. Re-run after spec/client changes.
  *
@@ -191,8 +202,10 @@ $counts = [
     'explicit_fn_matches_opid' => 0,
     'explicit_fn_mismatch' => 0,
     'lockfile_in' => 0,
+    'lockfile_deferred' => 0,
     'lockfile_out' => 0,
     'route_only_add' => 0,
+    'route_only_pending' => 0,
     'route_only_exclude' => 0,
     'route_only_stale' => 0,
 ];
@@ -227,44 +240,56 @@ foreach ($allKeys as $key) {
     if ($inSpec && !$inP) { $counts['spec_not_in_p']++; }
     if (!$inSpec && $inP) { $counts['p_not_in_spec']++; }
 
-    // id_source / canonical / lockfile / proposed_new_id / classification
+    // id_source / migration_candidate_id / canonical_id / lockfile / classification.
+    // canonical_id is the id READY to pin in the lockfile (non-colliding). migration_candidate_id is the
+    // bare method-name a legacy op WOULD receive in a coordinated M9 — it may collide, so it is kept
+    // SEPARATE from canonical_id: colliding bare names are never presented as ready lockfile ids.
     // Membership-first: a spec-only op is an orphan even when it carries an explicit operationId,
     // so it is classified spec-only (not carried into the lockfile) rather than hidden as 'explicit'.
     $idSource = '-';
     $canonical = '-';
-    $proposedNew = '-';
+    $migrationCandidate = '-';
     $lockfile = 'out';
     $classificationLabel = $classification[$key] ?? null;
 
     if ($inRoute && $inSpec) {
         // documented route
         if ($hasOpId) {
+            // pre-M9 policy: the 39 explicit ids are PRESERVED verbatim.
             $idSource = 'explicit';
             $canonical = $specOps[$key]['record']['opId'];
+            $lockfile = 'in';
             $counts['explicit']++;
             if ($inP) {
                 if ($fn === $canonical) { $counts['explicit_fn_matches_opid']++; } else { $counts['explicit_fn_mismatch']++; }
             }
         } else {
+            // pre-M9 policy: a legacy op without operationId keeps operationId=null (do NOT change P).
+            // The bare method-name is only a MIGRATION CANDIDATE (collides -> not a ready lockfile id);
+            // a controller-qualified id for these 306 ops is introduced only in the coordinated M9 step.
             $idSource = 'method-fallback';
-            $canonical = $mName; // plan §19: existing op without explicit id keeps method-name fallback
+            $migrationCandidate = $mName;
+            $lockfile = 'deferred';
             $counts['method_fallback']++;
         }
-        $lockfile = 'in';
     } elseif ($inRoute && !$inSpec) {
         // route-only: candidate id is the NEW convention <ControllerShort><Method>, not bare method-name
         $idSource = 'route-only';
-        $proposedNew = controllerShort($ctrl) . ucfirst($mName);
+        $csMethod = controllerShort($ctrl) . ucfirst($mName);
         $res = $classificationLabel['resolution'] ?? 'exclude';
-        $lockfile = $res === 'add' ? 'in' : 'out';
-        $canonical = $res === 'add' ? $proposedNew : '-';
         if ($res === 'add') {
+            $canonical = $csMethod; // ready to pin under the new convention
+            $lockfile = 'in';
             $counts['route_only_add']++;
-            if (isset($proposedIds[$proposedNew])) {
-                $proposedCollisions[] = ['id' => $proposedNew, 'first' => $proposedIds[$proposedNew], 'dup' => $key];
+            if (isset($proposedIds[$csMethod])) {
+                $proposedCollisions[] = ['id' => $csMethod, 'first' => $proposedIds[$csMethod], 'dup' => $key];
             } else {
-                $proposedIds[$proposedNew] = $key;
+                $proposedIds[$csMethod] = $key;
             }
+        } elseif ($res === 'pending') {
+            // public-vs-internal undecided -> held OUT until the owner confirms
+            $lockfile = 'out';
+            $counts['route_only_pending']++;
         } elseif ($res === 'stale') {
             $counts['route_only_stale']++;
         } else {
@@ -274,17 +299,18 @@ foreach ($allKeys as $key) {
         // in spec / client but NOT in routes -> orphan/stale; an explicit opId here is still an orphan
         // and must NOT be carried into the operationId lockfile.
         $idSource = 'spec-only';
-        $canonical = '-';
         $lockfile = 'out';
     }
 
-    if ($lockfile === 'in') { $counts['lockfile_in']++; } else { $counts['lockfile_out']++; }
+    if ($lockfile === 'in') { $counts['lockfile_in']++; }
+    elseif ($lockfile === 'deferred') { $counts['lockfile_deferred']++; }
+    else { $counts['lockfile_out']++; }
     $cls = $classificationLabel ? ($classificationLabel['resolution'] . ': ' . $classificationLabel['reason']) : '-';
 
-    $rows[] = [$method, $path, $ctrl, $inSpec ? 'Y' : 'N', $opId, $idSource, $fn, $qk, $proposedNew, $canonical, $lockfile, $cls];
+    $rows[] = [$method, $path, $ctrl, $inSpec ? 'Y' : 'N', $opId, $idSource, $fn, $qk, $migrationCandidate, $canonical, $lockfile, $cls];
 }
 
-/* ---------- global canonical-id uniqueness (these become M9 client names) ---------- */
+/* ---------- canonical-id uniqueness: only READY ids (lockfile=in) become lockfile entries ---------- */
 $canonicalSeen = [];
 $canonicalCollisions = [];
 foreach ($rows as $r) {
@@ -299,12 +325,28 @@ foreach ($rows as $r) {
     }
 }
 
+/* ---------- migration-candidate uniqueness: bare method-names (the deferred M9 set, NOT ready ids) ---------- */
+$migrationSeen = [];
+$migrationCollisions = [];
+foreach ($rows as $r) {
+    if ($r[8] === '-' || $r[8] === '') {
+        continue;
+    }
+    $mc = $r[8];
+    if (isset($migrationSeen[$mc])) {
+        $migrationCollisions[] = ['id' => $mc, 'first' => $migrationSeen[$mc], 'dup' => $r[0] . ' ' . $r[1]];
+    } else {
+        $migrationSeen[$mc] = $r[0] . ' ' . $r[1];
+    }
+}
+
 /* ---------- write TSV ---------- */
 $allCollisions = array_merge($routeCollisions, $specCollisions, $pCollisions);
 $fp = fopen($outPath, 'w');
-fwrite($fp, "# operationId reconciliation (rev. 2) — generated by gen_operation_id_reconciliation.php\n");
+fwrite($fp, "# operationId reconciliation (rev. 3) — generated by gen_operation_id_reconciliation.php\n");
 fwrite($fp, "# sources: R=route_inventory.txt  S=next/.cache/swagger/openapi.yml  P=public_next/.../endpoints\n");
 fwrite($fp, "# query_key is EXTRACTED from P's get{Fn}QueryKey getter (mutations have none -> -)\n");
+fwrite($fp, "# canonical_id = id READY to pin (explicit opId | route-only <ControllerShort><Method>); migration_candidate_id = bare method-name a legacy op WOULD get in M9 (may collide, NOT a ready lockfile id)\n");
 foreach ($counts as $k => $v) {
     fwrite($fp, "# count.$k=$v\n");
 }
@@ -320,7 +362,11 @@ fwrite($fp, "# canonical_collisions=" . count($canonicalCollisions) . "\n");
 foreach ($canonicalCollisions as $c) {
     fwrite($fp, "# canonical-collision {$c['id']} :: first={$c['first']} dup={$c['dup']}\n");
 }
-fwrite($fp, "METHOD\tpath\tcontroller::method\tin_spec\tlegacy_op_id\tid_source\tgenerated_function\tquery_key\tproposed_new_id\tcanonical_id\tlockfile\tclassification\n");
+fwrite($fp, "# migration_candidate_collisions=" . count($migrationCollisions) . "\n");
+foreach ($migrationCollisions as $c) {
+    fwrite($fp, "# migration-candidate-collision {$c['id']} :: first={$c['first']} dup={$c['dup']}\n");
+}
+fwrite($fp, "METHOD\tpath\tcontroller::method\tin_spec\tlegacy_op_id\tid_source\tgenerated_function\tquery_key\tmigration_candidate_id\tcanonical_id\tlockfile\tclassification\n");
 foreach ($rows as $r) {
     fwrite($fp, implode("\t", $r) . "\n");
 }
@@ -333,15 +379,15 @@ echo "explicit={$counts['explicit']} method-fallback={$counts['method_fallback']
 echo "P: total={$counts['in_p_client']} with_query_key={$counts['has_query_key']} (qk==fn={$counts['qk_equals_fn']}, qk!=fn={$counts['qk_differs_fn']})\n";
 echo "S∩P={$counts['spec_in_p']} S\\P={$counts['spec_not_in_p']} P\\S={$counts['p_not_in_spec']}\n";
 echo "explicit-id ops: fn==opId={$counts['explicit_fn_matches_opid']} fn!=opId={$counts['explicit_fn_mismatch']}\n";
-echo "lockfile: in={$counts['lockfile_in']} out={$counts['lockfile_out']} (route-only add={$counts['route_only_add']} exclude={$counts['route_only_exclude']} stale={$counts['route_only_stale']})\n";
-echo "collisions: R=" . count($routeCollisions) . " S=" . count($specCollisions) . " P=" . count($pCollisions) . " proposed_id=" . count($proposedCollisions) . " canonical=" . count($canonicalCollisions) . "\n";
+echo "lockfile: in={$counts['lockfile_in']} deferred={$counts['lockfile_deferred']} out={$counts['lockfile_out']} (route-only add={$counts['route_only_add']} pending={$counts['route_only_pending']} exclude={$counts['route_only_exclude']} stale={$counts['route_only_stale']})\n";
+echo "collisions: R=" . count($routeCollisions) . " S=" . count($specCollisions) . " P=" . count($pCollisions) . " proposed_id=" . count($proposedCollisions) . " canonical=" . count($canonicalCollisions) . " migration_candidate=" . count($migrationCollisions) . "\n";
 echo "rows=" . count($rows) . " written to $outPath\n";
 
 /* ---------- gap detail (for manual classification) ---------- */
 echo "\n=== ROUTE-ONLY (R\\S) — " . $counts['route_only'] . " ops ===\n";
 foreach ($rows as $r) {
     if ($r[5] === 'route-only') {
-        echo "  {$r[0]} {$r[1]}  |  {$r[2]}  |  proposed={$r[8]}\n";
+        echo "  {$r[0]} {$r[1]}  |  {$r[2]}  |  canonical={$r[9]} lockfile={$r[10]}\n";
     }
 }
 echo "\n=== SPEC-ONLY (S\\R) — " . $counts['spec_only'] . " ops ===\n";
