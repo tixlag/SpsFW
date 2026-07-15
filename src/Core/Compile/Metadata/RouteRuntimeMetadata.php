@@ -26,11 +26,11 @@ use SpsFW\Core\Validation\Enum\ParamsIn;
 final readonly class RouteRuntimeMetadata
 {
     /**
-     * @param list<string> $params
+     * @param array<string, null> $params ordered path-parameter names as `[name => null]` (true IR shape)
      * @param list<array{class: class-string, params: array<string, mixed>}> $middlewares
      * @param array<string, mixed> $accessRules
-     * @param list<array{in: ParamsIn, dto: class-string, rules: ValidationRuleGraph}> $dtos
-     * @param array<string, mixed> $phpIniSettings
+     * @param list<array{in: ?ParamsIn, dto: class-string, rules: ValidationRuleGraph}> $dtos
+     * @param ?array<string, mixed> $phpIniSettings null when no #[PhpIni] (matches the IR)
      */
     public function __construct(
         public string $controller,
@@ -42,7 +42,7 @@ final readonly class RouteRuntimeMetadata
         public array $middlewares = [],
         public array $accessRules = [],
         public array $dtos = [],
-        public array $phpIniSettings = [],
+        public ?array $phpIniSettings = null,
     ) {
     }
 
