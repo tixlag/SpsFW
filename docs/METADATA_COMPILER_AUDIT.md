@@ -276,6 +276,35 @@ array+ref/items/promoted-params/defaults). Паритет доказан не т
 cache producer `dtos`←graph) опирается на этот факт. Тесты F от N **не зависят** — числа выше зафиксированы
 артефактом аудита, runtime-зависимости нет.
 
+### 4.9 OperationMetadata projection + Step-3 diagnostics (M3)
+
+**Реализовано (F, Step 3):** `RouteMetadataCompiler::compileOperations()` / `compileOperationClasses()` /
+`compileAllOperations()` строят `OperationMetadata[]` из того же reflection-прохода, что и route-IR:
+operationId (через `OperationIdResolver`), pathParams (PHP-тип, не legacy OA `string`), queryParams (из
+`#[QueryParams]`-DTO, required из PHP-nullable/default), requestBody (из body-маркера + contentType),
+responses (вывод 200 из return-type либо `#[Response]`), security (`bearerAuth` / anonymous + `x-required-rules`),
+tags. Четыре новых атрибута `src/Core/Attributes/OpenApi/{Operation,Response,Items,Field}.php`.
+
+**Тесты:** `tests/Compile/Route/OperationProjectionTest.php` (полная проекция + 3 диагностики),
+`tests/Compile/OpenApi/OpenApiAttributesTest.php` (контракты атрибутов). 25/25 зелёных.
+
+**Три doc-диагностики (halt в managed mode, plan §7):**
+1. **path-param mismatch** — `{name}` без name-matching параметра в сигнатуре (`field=<name>`);
+2. **non-eligible return-type без `#[Response]`** — entity/framework-тип/`Http\Response`/genuine-union (`field=return`);
+3. **array return без item-типа** — `array`/`iterable` без `#[Response]` (`field=return`).
+
+**Eligibility gate (§6), подтверждён инвентарём N:** short-name оканчивается на `Dto` (case-insensitive)
+либо enum / `DateTimeInterface`. В N — **325** `*Dto`-классов (конвенция строгая, единичные outliers типа
+`allTicketsFiltersDTO`). Non-eligible требуют явного `#[Response(schema: …)]`.
+
+**Ключевое расхождение проекций (фиксируется тестом, не баг):** `SecurityMetadata.requiredRules` хранит
+`any`/`all` **независимо** (AccessRulesAll-only → `all=[…]` здесь), тогда как runtime-IR
+`collectAccessRules` коллапсирует All-only в `[]` и игнорирует class-level — поэтому `SecurityMetadata`
+не заменяет `RouteRuntimeMetadata.access_rules` (§3/§6C).
+
+**Quirk для emitter/тестов:** `ReflectionUnionType` нормализует порядок членов (`int|string` → `string|int`);
+диагностические сообщения и parity-сравнения не зависят от порядка.
+
 ---
 
 ---

@@ -264,6 +264,10 @@ final class DtoSchemaBuilder
             refClass: $refClass,
             hasDefault: $hasDefault,
             defaultValue: $defaultValue,
+            // Typed projection field (NOT read by the parity rule graph): whether the PHP type allows null.
+            // Populated now so the Step 3 query-param projection can mark optional params; the post-OA
+            // required source (plan §7) is exactly this PHP-type nullability.
+            nullable: $type?->allowsNull() ?? false,
             rawArguments: $args,
         );
     }

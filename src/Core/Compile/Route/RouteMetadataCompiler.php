@@ -7,10 +7,16 @@ namespace SpsFW\Core\Compile\Route;
 use ReflectionAttribute;
 use ReflectionClass;
 use ReflectionMethod;
+use ReflectionNamedType;
+use ReflectionParameter;
+use ReflectionType;
+use ReflectionUnionType;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\OpenApi\Operation;
+use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 use SpsFW\Core\Attributes\PhpIni;
 use SpsFW\Core\Attributes\RateLimit;
 use SpsFW\Core\Attributes\Route;
@@ -20,8 +26,17 @@ use SpsFW\Core\Attributes\Validation\PostBody;
 use SpsFW\Core\Attributes\Validation\QueryParams;
 use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Compile\CompileDiagnostics;
+use SpsFW\Core\Compile\Introspection\AttributeReader;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
+use SpsFW\Core\Compile\Introspection\OperationIdResolver;
+use SpsFW\Core\Compile\Introspection\TypeMapper;
+use SpsFW\Core\Compile\Metadata\OperationMetadata;
+use SpsFW\Core\Compile\Metadata\ParameterMetadata;
+use SpsFW\Core\Compile\Metadata\RequestBodyMetadata;
+use SpsFW\Core\Compile\Metadata\ResponseMetadata;
 use SpsFW\Core\Compile\Metadata\RouteRuntimeMetadata;
+use SpsFW\Core\Compile\Metadata\SchemaMetadata;
+use SpsFW\Core\Compile\Metadata\SecurityMetadata;
 use SpsFW\Core\Compile\Metadata\ValidationRuleGraph;
 use SpsFW\Core\Middleware\RateLimitMiddleware;
 use SpsFW\Core\Router\ClassScanner;
@@ -45,10 +60,21 @@ use SpsFW\Core\Validation\Enum\ParamsIn;
  */
 final class RouteMetadataCompiler
 {
+    /** Built lazily so it shares the compiler's diagnostics (cycle/eligibility errors halt here). */
+    private readonly DtoSchemaBuilder $schemas;
+
+    private readonly OperationIdResolver $operationIds;
+
     public function __construct(
         private readonly CompileDiagnostics $diagnostics,
-        private readonly DtoSchemaBuilder $schemas = new DtoSchemaBuilder(),
+        ?DtoSchemaBuilder $schemas = null,
+        private readonly TypeMapper $typeMapper = new TypeMapper(),
+        private readonly AttributeReader $attributeReader = new AttributeReader(),
     ) {
+        // Share diagnostics so a cyclic/missing DTO surfaces on the SAME collector that halts the build,
+        // instead of the throwaway CompileDiagnostics a default-constructed builder would carry.
+        $this->schemas = $schemas ?? new DtoSchemaBuilder($this->diagnostics);
+        $this->operationIds = new OperationIdResolver($this->diagnostics);
     }
 
     /**
@@ -433,5 +459,474 @@ final class RouteMetadataCompiler
             return ['', []];
         }
         return ['#^' . $pattern . '$#', $params];
+    }
+
+    // =========================================================================
+    // OpenAPI projection (OperationMetadata) — the doc sibling of the route-IR walk.
+    // Same reflection pass, different output; runtime routing/validation are untouched.
+    // =========================================================================
+
+    /**
+     * Compile the OpenAPI documentation projection (OperationMetadata[]) for every #[Route]-bearing public
+     * method of a controller. operationId / path & query params / requestBody / responses / security / tags
+     * are derived from the signature + the new OpenApi attributes; the OpenApiEmitter (Step 4) consumes this.
+     *
+     * @return list<OperationMetadata>
+     */
+    public function compileOperations(ReflectionClass $reflection): array
+    {
+        $operations = [];
+        foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            $routeAttributes = $method->getAttributes(Route::class);
+            if ($routeAttributes === []) {
+                continue;
+            }
+            $methodRoute = $routeAttributes[0]->newInstance();
+
+            $operation = $this->attributeReader->firstInstance($method, Operation::class);
+            if ($operation?->exclude === true) {
+                continue; // #[Operation(exclude: true)] — reachable at runtime, hidden from the spec.
+            }
+
+            $httpMethods = $methodRoute->getHttpMethods();
+            if (empty($httpMethods)) {
+                $httpMethods = ['GET'];
+            }
+
+            foreach ($httpMethods as $httpMethod) {
+                $httpMethodString = is_string($httpMethod) ? $httpMethod : $httpMethod->value;
+                $operations[] = $this->buildOperation($reflection, $method, $httpMethodString, $methodRoute->getPath(), $operation);
+            }
+        }
+
+        return $operations;
+    }
+
+    /**
+     * Compile operations for an explicit controller set and assert global operationId uniqueness.
+     *
+     * @param list<class-string> $classes
+     * @return list<OperationMetadata>
+     */
+    public function compileOperationClasses(array $classes): array
+    {
+        $operations = [];
+        foreach ($classes as $class) {
+            if (!class_exists($class)) {
+                continue;
+            }
+            foreach ($this->compileOperations(new ReflectionClass($class)) as $operation) {
+                $operations[] = $operation;
+            }
+        }
+        $this->operationIds->assertUnique();
+        return $operations;
+    }
+
+    /**
+     * Discover controllers from dirs and compile their operations (mirrors {@see compile()}).
+     *
+     * @param list<string> $discoveryPaths
+     * @return list<OperationMetadata>
+     */
+    public function compileAllOperations(array $discoveryPaths): array
+    {
+        $classes = [];
+        foreach ($discoveryPaths as $dir) {
+            if (!is_dir($dir)) {
+                continue;
+            }
+            foreach ($this->discoverControllerClasses($dir) as $class) {
+                if ($class !== null) {
+                    $classes[] = $class;
+                }
+            }
+        }
+        return $this->compileOperationClasses($classes);
+    }
+
+    /**
+     * Assemble one OperationMetadata from the method reflection + the declared #[Operation] override.
+     */
+    private function buildOperation(
+        ReflectionClass $reflection,
+        ReflectionMethod $method,
+        string $httpMethod,
+        string $path,
+        ?Operation $operation,
+    ): OperationMetadata {
+        $controller = $reflection->getName();
+
+        $pathParams = $this->collectPathParams($reflection, $method, $path);
+        [$requestBody, $queryParams] = $this->collectRequestProjection($reflection, $method);
+        $responses = $this->collectResponses($reflection, $method);
+        $security = $this->collectSecurity($method);
+
+        $operationId = $this->operationIds->resolve($controller, $method->getName(), $operation?->id);
+        $tags = $operation !== null && $operation->tags !== []
+            ? $operation->tags
+            : [$this->operationIds->controllerShort($controller)];
+
+        return new OperationMetadata(
+            httpMethod: $httpMethod,
+            path: $path,
+            operationId: $operationId,
+            pathParams: $pathParams,
+            queryParams: $queryParams,
+            requestBody: $requestBody,
+            responses: $responses,
+            security: $security,
+            tags: $tags,
+            summary: $operation?->summary,
+            description: $operation?->description,
+            deprecated: $operation?->deprecated ?? false,
+            controller: $controller,
+            method: $method->getName(),
+        );
+    }
+
+    /**
+     * Path parameters: each {name} placeholder crossed with the method signature. The PHP type wins over the
+     * historical swagger-php `string` (plan §7). A placeholder with no name-matching parameter is a compile
+     * error — its type cannot be inferred and OpenAPI requires a schema for path params.
+     *
+     * @return list<ParameterMetadata>
+     */
+    private function collectPathParams(ReflectionClass $reflection, ReflectionMethod $method, string $path): array
+    {
+        $params = [];
+        preg_match_all('/{([a-zA-Z0-9_-]+)}/', $path, $matches);
+        $signature = [];
+        foreach ($method->getParameters() as $parameter) {
+            $signature[$parameter->getName()] = $parameter;
+        }
+        foreach ($matches[1] as $rawName) {
+            // Router converts the placeholder kebab→camel before binding; match against that.
+            $boundName = $this->convertKebabToCamelCase($rawName);
+            if (!isset($signature[$boundName])) {
+                $this->diagnostics->error(
+                    controller: $reflection->getName(),
+                    method: $method->getName(),
+                    dto: null,
+                    field: $rawName,
+                    cause: sprintf('path parameter {%s} has no matching method parameter $%s', $rawName, $boundName),
+                    fix: 'add a parameter whose name matches the placeholder (kebab-case is converted to camelCase), or fix the route path',
+                );
+                $params[] = new ParameterMetadata($rawName, ParameterMetadata::IN_PATH, required: true);
+                continue;
+            }
+            $mapped = $this->typeMapper->map($signature[$boundName]->getType());
+            $params[] = new ParameterMetadata(
+                name: $rawName,
+                in: ParameterMetadata::IN_PATH,
+                required: true,
+                type: $mapped['type'],
+                format: $mapped['format'],
+            );
+        }
+        return $params;
+    }
+
+    /**
+     * Request body + query params projected from the bound DTO markers: JsonBody/PostBody/FormDataBody →
+     * requestBody (contentType per marker); QueryParams → the DTO's properties projected to query params.
+     *
+     * @return array{0: ?RequestBodyMetadata, 1: list<ParameterMetadata>}
+     */
+    private function collectRequestProjection(ReflectionClass $reflection, ReflectionMethod $method): array
+    {
+        $requestBody = null;
+        $queryParams = [];
+        foreach ($method->getParameters() as $parameter) {
+            $validationAttributes = $parameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF);
+            if ($validationAttributes === []) {
+                continue;
+            }
+            $instance = $validationAttributes[0]->newInstance();
+            $dtoClass = $this->reflectionTypeName($parameter->getType());
+
+            if ($instance instanceof QueryParams) {
+                foreach ($this->queryParametersOf($dtoClass) as $queryParam) {
+                    $queryParams[] = $queryParam;
+                }
+                continue;
+            }
+
+            if ($instance instanceof JsonBody || $instance instanceof PostBody || $instance instanceof FormDataBody) {
+                $requestBody = $this->requestBodyOf($parameter, $instance, $dtoClass);
+            }
+        }
+        return [$requestBody, $queryParams];
+    }
+
+    /**
+     * Project a QueryParams DTO's properties to query parameters. Type from the PHP type; required when the
+     * property is non-nullable and has no default (the post-OA required source, plan §7).
+     *
+     * @return list<ParameterMetadata>
+     */
+    private function queryParametersOf(?string $dtoClass): array
+    {
+        if ($dtoClass === null || !class_exists($dtoClass)) {
+            return [];
+        }
+        $params = [];
+        foreach ($this->schemas->build($dtoClass)->properties as $property) {
+            $type = null;
+            $format = null;
+            if ($property->refClass !== null) {
+                $mapped = $this->typeMapper->mapClass($property->refClass, nullable: $property->nullable);
+                $type = $mapped['type'];
+                $format = $mapped['format'];
+            } else {
+                $type = $this->typeMapper->mapScalar($property->phpType ?? 'string');
+            }
+            $params[] = new ParameterMetadata(
+                name: $property->serialName(),
+                in: ParameterMetadata::IN_QUERY,
+                required: !$property->nullable && !$property->hasDefault,
+                type: $type,
+                format: $format,
+            );
+        }
+        return $params;
+    }
+
+    /**
+     * Build the requestBody from a body marker: contentType per marker, schema from DtoSchemaBuilder, required
+     * unless the parameter is optional/nullable.
+     *
+     * @param object $instance JsonBody|PostBody|FormDataBody
+     */
+    private function requestBodyOf(
+        ReflectionParameter $parameter,
+        object $instance,
+        ?string $dtoClass,
+    ): RequestBodyMetadata {
+        $contentType = match (true) {
+            $instance instanceof JsonBody => RequestBodyMetadata::CT_JSON,
+            $instance instanceof PostBody => RequestBodyMetadata::CT_FORM_URL,
+            $instance instanceof FormDataBody => RequestBodyMetadata::CT_MULTIPART,
+            default => RequestBodyMetadata::CT_JSON,
+        };
+        $schema = $dtoClass !== null && class_exists($dtoClass) ? $this->schemas->build($dtoClass) : null;
+        $type = $parameter->getType();
+        $required = !$parameter->isOptional() && ($type === null || !$type->allowsNull());
+        return new RequestBodyMetadata(schema: $schema, contentType: $contentType, required: $required);
+    }
+
+    /**
+     * Responses: declared #[Response] entries take over entirely; otherwise infer the 200 success response
+     * from the return type (DTO-eligible class / enum) — or surface a diagnostic when the return is opaque,
+     * a bare array, or a non-eligible class (plan §7).
+     *
+     * @return list<ResponseMetadata>
+     */
+    private function collectResponses(ReflectionClass $reflection, ReflectionMethod $method): array
+    {
+        $declared = $this->attributeReader->getInstances($method, ApiResponse::class);
+        if ($declared !== []) {
+            $responses = [];
+            foreach ($declared as $response) {
+                $responses[] = $this->responseFromAttribute($response);
+            }
+            return $responses;
+        }
+        return $this->inferSuccessResponse($reflection, $method);
+    }
+
+    private function responseFromAttribute(ApiResponse $response): ResponseMetadata
+    {
+        $schema = $response->schema !== null && class_exists($response->schema)
+            ? $this->schemas->build($response->schema)
+            : null;
+        return new ResponseMetadata(
+            status: $response->status,
+            schema: $schema,
+            contentType: $response->contentType,
+            description: $response->description ?? '',
+            headers: $response->headers,
+        );
+    }
+
+    /**
+     * Infer the success (200) response from the return type, emitting a diagnostic when it cannot be derived.
+     *
+     * @return list<ResponseMetadata>
+     */
+    private function inferSuccessResponse(ReflectionClass $reflection, ReflectionMethod $method): array
+    {
+        $returnType = $method->getReturnType();
+        [$inner] = $this->unwrapNullable($returnType);
+
+        if ($returnType === null || $this->isVoidType($inner)) {
+            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+        }
+
+        if ($this->isArrayType($inner)) {
+            $this->diagnostics->error(
+                controller: $reflection->getName(),
+                method: $method->getName(),
+                dto: null,
+                field: 'return',
+                cause: 'array return type has no derivable item type',
+                fix: 'declare the response explicitly with #[Response(schema: ItemDto::class)] (PHP arrays carry no element type)',
+            );
+            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+        }
+
+        $mapped = $this->typeMapper->map($inner);
+        if ($this->typeMapper->isUnsupported($mapped)) {
+            $this->diagnostics->error(
+                controller: $reflection->getName(),
+                method: $method->getName(),
+                dto: null,
+                field: 'return',
+                cause: 'return type ' . $this->typeLabel($inner) . ' is not auto-derivable: ' . ($mapped['reason'] ?? 'unsupported'),
+                fix: 'declare the response explicitly with #[Response(schema: …)] or simplify the return type',
+            );
+            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+        }
+
+        // A referenced class is auto-derived ONLY when it is DTO-eligible; entities/Response need #[Response].
+        if ($mapped['ref'] !== null && !$this->isDtoEligible($mapped['ref'])) {
+            $this->diagnostics->error(
+                controller: $reflection->getName(),
+                method: $method->getName(),
+                dto: $mapped['ref'],
+                field: 'return',
+                cause: sprintf('return type %s is not a DTO-eligible class (entity/framework type)', $mapped['ref']),
+                fix: 'declare the response explicitly with #[Response(schema: ' . $mapped['ref'] . '::class)] or return a *Dto',
+            );
+            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+        }
+
+        if ($mapped['ref'] !== null) {
+            $schema = class_exists($mapped['ref']) ? $this->schemas->build($mapped['ref']) : null;
+            return [new ResponseMetadata(200, schema: $schema)];
+        }
+
+        // Enum scalar fragment (backed/unit enum → {type, enum}); other scalars get no schema.
+        $schema = $mapped['enum'] !== null ? $this->enumSchema($mapped) : null;
+        return [new ResponseMetadata(200, schema: $schema)];
+    }
+
+    private function enumSchema(array $mapped): SchemaMetadata
+    {
+        return new SchemaMetadata(
+            name: '',
+            isEnum: true,
+            enumType: $mapped['type'],
+            enumCases: $mapped['enum'],
+        );
+    }
+
+    /**
+     * Security projection: anonymous when #[NoAuthAccess]; otherwise bearerAuth + the method-level
+     * required-rules (any/all) for the x-required-rules extension. Unlike the runtime access_rules IR, this
+     * projection keeps `any` and `all` INDEPENDENT — an AccessRulesAll-only action reports all=[…] here even
+     * though the runtime collapses it to [] (plan §3/§6C).
+     */
+    private function collectSecurity(ReflectionMethod $method): SecurityMetadata
+    {
+        if ($method->getAttributes(NoAuthAccess::class) !== []) {
+            return new SecurityMetadata(scheme: null);
+        }
+        $any = [];
+        $all = [];
+        foreach ($method->getAttributes(AccessRulesAny::class) as $attribute) {
+            $any = $attribute->newInstance()->getRequiredRules();
+        }
+        foreach ($method->getAttributes(AccessRulesAll::class) as $attribute) {
+            $all = $attribute->newInstance()->getRequiredRules();
+        }
+        return new SecurityMetadata(
+            scheme: 'bearerAuth',
+            requiredRules: ['any' => $any, 'all' => $all],
+        );
+    }
+
+    // --- small reflection/type helpers (TypeMapper covers the actual mapping) ---
+
+    private function convertKebabToCamelCase(string $str): string
+    {
+        return lcfirst(str_replace('-', '', ucwords($str, '-')));
+    }
+
+    /**
+     * First non-builtin class name of a (possibly union/nullable) type, mirroring DtoSchemaBuilder's
+     * reflectionClassName so a body/query marker resolves the same DTO the runtime Validator binds.
+     */
+    private function reflectionTypeName(?ReflectionType $type): ?string
+    {
+        if ($type instanceof ReflectionNamedType) {
+            return $type->isBuiltin() ? null : $type->getName();
+        }
+        if ($type instanceof ReflectionUnionType) {
+            foreach ($type->getTypes() as $nested) {
+                $name = $this->reflectionTypeName($nested);
+                if ($name !== null) {
+                    return $name;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Unwrap nullable: T|null (and ?T) collapse to T. Genuine unions/intersections are returned as-is and
+     * later flagged unsupported by TypeMapper.
+     *
+     * @return array{0: ?ReflectionType, 1: bool}
+     */
+    private function unwrapNullable(?ReflectionType $type): array
+    {
+        if ($type instanceof ReflectionNamedType) {
+            return [$type, $type->allowsNull()];
+        }
+        if ($type instanceof ReflectionUnionType) {
+            $nonNull = [];
+            foreach ($type->getTypes() as $nested) {
+                if ($nested instanceof ReflectionNamedType && $nested->getName() === 'null') {
+                    continue;
+                }
+                $nonNull[] = $nested;
+            }
+            if (count($nonNull) === 1 && $nonNull[0] instanceof ReflectionNamedType) {
+                return [$nonNull[0], true];
+            }
+        }
+        return [$type, false];
+    }
+
+    private function isVoidType(?ReflectionType $type): bool
+    {
+        return $type instanceof ReflectionNamedType
+            && in_array($type->getName(), ['void', 'never', 'null', 'mixed'], true);
+    }
+
+    private function isArrayType(?ReflectionType $type): bool
+    {
+        return $type instanceof ReflectionNamedType && in_array($type->getName(), ['array', 'iterable'], true);
+    }
+
+    /**
+     * Whether a class return type is auto-derivable as a schema: a *Dto (the framework convention — 325
+     * classes in `next`), an enum, or a date/time. Domain entities, {@see \SpsFW\Core\Http\Response} and
+     * other framework types are NOT eligible and require an explicit #[Response].
+     */
+    private function isDtoEligible(string $fqcn): bool
+    {
+        if (is_subclass_of($fqcn, \UnitEnum::class) || is_a($fqcn, \DateTimeInterface::class, true)) {
+            return true;
+        }
+        $pos = strrpos($fqcn, '\\');
+        $short = $pos === false ? $fqcn : substr($fqcn, $pos + 1);
+        return str_ends_with(strtolower($short), 'dto');
+    }
+
+    private function typeLabel(?ReflectionType $type): string
+    {
+        return $type === null ? '(none)' : (string) $type;
     }
 }

@@ -364,7 +364,8 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 - **Тесты:** parity-snapshot `ruleGraph()` == `Router::extractValidationRules()` для эталонных DTO (побайтно); `OperationIdResolver`.
 - **Критерии:** rule graph идентичен; resolver отдаёт lockfile/конвенцию; коллизия → halt.
 
-### Шаг 3. RouteMetadataCompiler + RouteCacheEmitter (F; depends 2)
+### Шаг 3. RouteMetadataCompiler + RouteCacheEmitter (F; depends 2) — ✅ ВЫПОЛНЕН
+- **Статус:** завершён. Route-IR byte-parity (`RouteMetadataCompilerTest`), `OperationMetadata`-проекция + 3 диагностики (`OperationProjectionTest`), контракты 4 атрибутов (`OpenApiAttributesTest`) — 25/25 тестов зелёные.
 - **Файлы (new):** `src/Core/Compile/Route/{RouteMetadataCompiler,RouteCacheEmitter}.php`; новые атрибуты `src/Core/Attributes/OpenApi/{Operation,Response,Items,Field}.php`.
 - **Поведение:** `RouteMetadataCompiler` репродуцирует discovery §2.1 (`*Controller.php` + `getPathToNamespace` + `#[Route]` + унаследованные) → `RouteRuntimeMetadata` (точный IR, вкл. access-quirks — фиксируется `FullRouteIrCharacterizationTest`) + `OperationMetadata`. `RouteCacheEmitter` → IR-массив. Диагностики: duplicate route key (scan-time), path-param mismatch, не-eligible return-type без `#[Response]`, массив без `#[Items]`.
 - **Обязательная characterization (не позднее Шага 3):**
@@ -373,6 +374,12 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 - **Совместимость:** за флагом; продакшен route cache пока `Router`.
 - **Тесты:** metadata для категорий §4; parity IR == Router IR; диагностики; inherited-route + filesystem-candidacy characterization.
 - **Критерии:** IR побайтно совпадает; все diagnostics работают; inherited + candidacy закреплены.
+- **Findings (реализовано, зафиксировано тестами):**
+  - **DTO-eligibility gate** = эвристика по имени класса: short-name, оканчивающийся на `Dto` (case-insensitive), либо enum / `DateTimeInterface`. В N — **325** `*Dto`-классов (конвенция строгая). Entity / `Http\Response` / framework-типы **не** eligible — требуют явного `#[Response]`.
+  - **Security-проекция хранит `any`/`all` независимо**, в отличие от runtime-IR (`collectAccessRules` коллапсирует All-only в `[]`, class-level игнорируется). `OperationMetadata.security` сохраняет `all=[…]` для AccessRulesAll-only — это и есть причина, по которой `SecurityMetadata` не заменяет `RouteRuntimeMetadata.access_rules` (§3/§6C).
+  - **Path-param binding — позиционный** (`...$args`, path-order, DTOs после), placeholder-имя конвертируется kebab→camel (`lcfirst(str_replace('-','',ucwords($s,'-')))`). Doc-mismatch = placeholder без name-matching параметра (тип не выводится).
+  - **`ReflectionUnionType` нормализует порядок членов** (`int|string` → `string|int`); диагностики/тесты не зависят от порядка.
+  - **OperationMetadata** несёт `controller`/`method` (traceability + diagnostics attribution); добавлены defaulted-полями в конец VO (BC для позиционных тестов).
 
 ### Шаг 4. OpenApiEmitter + StandardErrorPolicy + parity (F; depends 3) — M3
 - **Файлы (new):** `src/Core/Compile/OpenApi/{OpenApiEmitter,StandardErrorPolicy}.php`.

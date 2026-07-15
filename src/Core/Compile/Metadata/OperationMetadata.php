@@ -32,6 +32,8 @@ final readonly class OperationMetadata
         public ?string $description = null,
         public bool $deprecated = false,
         public bool $exclude = false,
+        public ?string $controller = null,
+        public ?string $method = null,
     ) {
     }
 
