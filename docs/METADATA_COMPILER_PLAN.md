@@ -239,6 +239,8 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 - **M5 Route graph producer переключается в compile-engine** — правило graph строит `Coordinator`/`RouteMetadataCompiler` и публикует в `compiled_routes.php` (а НЕ флаг внутри `Router::registerControllerRoutes()`); Router в managed выступает только runtime-consumer'ом кеша. `Validator` нетронут; parity-snapshot `dtos`新旧. В `legacy` Router продолжает строить graph сам.
 - **M6 Primary OpenAPI = graph + escape hatch merge (§13)** — emitter становится primary `openapi.yml`; до этого момента primary остаётся legacy, emitter пишет `openapi.generated.yml`.
 - **M7 Очистка контроллеров от OA** (operations/parameters/responses/security) — per repo.
+  **Precondition (§19.5):** `config/operation_id_map.lock.php` (39 non-null + 306 null + 22 add) уже
+  материализован — иначе при удалении OA-маркеров потеряется информация, какие legacy-операции оставить без id.
 - **M8 Очистка DTO от OA + lifecycle legacy `validateDto()`** (deprecate → gate `cachedRules!==null` → remove) + удаление OA-пути в `extractValidationRules`.
 - **M9 (отдельно, по согласию) Регенерация клиента** `public_next` (§21).
 
@@ -310,8 +312,26 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
    (19 коллизий), **не является** готовым lockfile-id; отделён от canonical_id именно поэтому.
 3. База join — `route_inventory.txt` + TSV (§4 AUDIT). Сопоставление по нормализованному `METHOD:normpath`
    (path-параметры схлопнуты в `{}` — swagger-php snake_case vs orval camelCase).
-4. `config/operation_id_map.lock.php` (или `#[Operation(id:)]`) — на M9, с учётом: (а) preserve 39 explicit;
-   (б) controller-qualified id для 306 deferred; (в) 22 route-only add по новой конвенции; (г) exclude/stale не входят.
+4. `config/operation_id_map.lock.php` (или `#[Operation(id:)]`) — **три-state map**
+   `array<string, string|null>` с ключом `"<controller>::<method>"` (все 377 сигнатур уникальны):
+   (а) **present = non-null** — сохранённый id (39 explicit + 22 route-only add по конвенции);
+   (б) **present = null** — legacy-op остаётся без id (306 deferred); проверка через `array_key_exists`,
+       **НЕ `??`** — иначе null провалится в convention;
+   (в) **absent** — новой операции присваивается convention `<ControllerShort><Method>` (только genuinely
+       new route-only ops, отсутствующие в inventory).
+   Non-null id участвует в uniqueness-check; null — нет. `OperationIdResolver` (Step 2) реализует именно
+   эту priority: explicit (всегда) > lockfile [`array_key_exists`] > convention. Ручной boolean `deferred`
+   **удалён** — он заставил бы будущий RouteMetadataCompiler самостоятельно угадывать legacy-операции, что
+   после M7 станет невозможно (см. п.5).
+
+5. **⚠️ Материализация lockfile ДО M7 (критично).** Карта (39 non-null + 306 null + 22 add) **должна быть
+   закоммичена как `config/operation_id_map.lock.php` до удаления OA с контроллеров в M7**. После очистки
+   контроллеров информация «какие legacy-операции оставить без id» исчезает (OA-маркеры, по которым сегодня
+   отличают explicit-id от method-fallback, будут удалены) — без материализованной карты восстановить
+   множество из 306 null-операций невозможно. **M9 не создаёт карту, а лишь заменяет 306 null на
+   согласованные controller-qualified id** (breaking client regen). Порядок: reconciliation (готово) →
+   materialize lockfile (до M7) → M7 clean controllers → M9 null→qualified. Статус: reconciliation выполнено
+   (TSV готов); материализация lockfile ожидает решения владельца по 4 pending-операциям.
 - ⚠️ **Drift (зафиксирован в AUDIT §4.7):** `public_next/openapi.yaml` — отдельный файл (3.0.0, 143 opId),
   не равен cache-спеки (3.1.0, 300 paths/347 ops/39 явных), которую читает Orval. Классифицировать отдельно
   (устаревший коммит/другой продукт → кандидат на удаление/архив в M9).

@@ -10,16 +10,22 @@ use SpsFW\Core\Compile\CompileDiagnostics;
  * Assigns each operation a stable OpenAPI operationId and asserts global uniqueness (plan §7, §19, Step 2).
  *
  * Resolution priority (highest first):
- *   1. explicit — the `id` of a future `#[Operation(id:)]` (Step 3); wins outright, verbatim.
- *   2. lockfile  — a provisionally-keyed "<controller>::<method>" => id map (the 39 preserved legacy ids);
- *                  the canonical keying is settled at M9 alongside the typed client regen.
+ *   1. explicit — the `id` of a future `#[Operation(id:)]` (Step 3); wins outright, verbatim, even when the
+ *                lockfile carries a null for that signature.
+ *   2. lockfile  — a tri-state "<controller>::<method>" => ?string map. `array_key_exists` is the test
+ *                  (NOT `??`): a key present with a non-null string is the preserved id (the 39 legacy ids);
+ *                  a key present with null means "this legacy op stays id-less" (the 306 deferred ops, so
+ *                  the typed client P is not perturbed). The map is the materialized operationId inventory.
  *   3. convention — "<ControllerShort><Method>" (ControllerShort = short class name minus a trailing
- *                  "Controller"); this is the collision-free form assigned to NEW route-only operations.
+ *                  "Controller"); the collision-free form assigned only when the signature is ABSENT from
+ *                  the lockfile — i.e. to NEW route-only operations.
  *
- * Pre-M9 operationId policy (plan §19, fixed): the 306 legacy operations without an explicit id keep
- * operationId = null (caller passes deferred = true) so the typed client (P) is not perturbed; the
- * controller-qualified convention for them is introduced only in the coordinated M9. Deferred operations
- * are NOT tracked for uniqueness (a null id is "not yet decided", not a real assignment).
+ * `controller::method` is a sound key: all 377 signatures in the current inventory are unique.
+ *
+ * Pre-M9 operationId policy (plan §19, fixed): the lockfile carries the materialized inventory — 39 non-null
+ * ids + 306 nulls (+ 22 new route-only ids once discovered). The 306 nulls are replaced by the controller-
+ * qualified convention only in the coordinated M9 (client regen). Only NON-NULL resolved ids participate in
+ * the uniqueness check; a null is "deliberately id-less", not an assignment.
  *
  * Collisions among resolved (non-null) ids — e.g. two controllers that collapse to the same short name
  * sharing a method — are collected and reported in bulk via {@see assertUnique()} into the shared
@@ -29,7 +35,7 @@ final class OperationIdResolver
 {
     private const CONTROLLER_SUFFIX = 'Controller';
 
-    /** @var array<string, string> "<controller>::<method>" => explicit operationId */
+    /** @var array<string, ?string> "<controller>::<method>" => operationId|null (tri-state: id / null / absent) */
     private readonly array $lockfile;
 
     /** @var array<string, list<string>> resolved id => list of "<controller>::<method>" sources */
@@ -66,29 +72,32 @@ final class OperationIdResolver
     /**
      * Resolve the operationId for a controller::method.
      *
+     * Priority: explicit > lockfile (array_key_exists, value may be null) > convention.
+     *
      * @param string $controller FQCN of the controller
      * @param string $method controller method name
      * @param ?string $explicit an explicit override (#[Operation(id:)] in Step 3); '' is treated as absent
-     * @param bool $deferred pre-M9 legacy op: keep null (canonical id deferred to M9); not uniqueness-tracked
+     * @return ?string the resolved id, or null when the lockfile carries a null for this signature (deferred op)
      */
     public function resolve(
         string $controller,
         string $method,
         ?string $explicit = null,
-        bool $deferred = false,
     ): ?string {
-        if ($deferred) {
-            return null;
-        }
-
         if ($explicit !== null && $explicit !== '') {
             $id = $explicit;
         } else {
             $signature = $controller . '::' . $method;
-            $id = $this->lockfile[$signature] ?? $this->convention($controller, $method);
+            // array_key_exists (NOT ??): a present-but-null entry means "keep id-less" and must NOT fall
+            // through to convention; only an ABSENT key is new and gets the controller-qualified id.
+            $id = array_key_exists($signature, $this->lockfile)
+                ? $this->lockfile[$signature]
+                : $this->convention($controller, $method);
         }
 
-        $this->assignments[$id][] = $controller . '::' . $method;
+        if ($id !== null) {
+            $this->assignments[$id][] = $controller . '::' . $method;
+        }
         return $id;
     }
 

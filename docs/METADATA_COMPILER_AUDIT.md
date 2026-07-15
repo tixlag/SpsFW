@@ -249,6 +249,35 @@ route-key, `resolution` ∈ {add, pending, exclude, stale}).
 - Reconciliation исходит из **cache-спеки** (§4.1) как источника истины для клиента; `P/openapi.yaml`
   классифицируется отдельно (устаревший коммит / другой продукт → кандидат на удаление/архив в M9).
 
+### 4.8 DtoSchemaBuilder rule-graph parity (M2, dev-only probe)
+
+**Генератор:** `docs/metadata_compiler_audit/gen_dto_rulegraph_parity.php` — dev-only (НЕ тест чистого
+checkout'а F; запускается вручную против живого consumer N). Bootstrap: полный deps-сет N (`next/vendor`)
++ **local SpsFW working-tree src** (prepend поверх vendored копии) + `next/src` для `SpsNext\\`. Источник
+DTO — `N/.cache/compiled_routes.php` (182 DTO-bindings, 156 unique FQCN).
+
+**Утверждение:** `DtoSchemaBuilder::ruleGraph(build($dto))->rules === Router::extractValidationRules($dto)`
+(strict `===`) для каждого уникального DTO из route-cache.
+
+**Результат прогона (snapshot 2026-07, local SpsFW @ Step 2):**
+
+| Метрика | Значение |
+|---|---|
+| DTO-bindings в `compiled_routes` (с дублями) | **182** |
+| Unique DTO FQCN | **156** |
+| Loadable | **156** |
+| Unloadable | **0** |
+| **Расхождений (divergences)** | **0** |
+
+Вывод: `DtoSchemaBuilder::ruleGraph()` воспроизводит `Router::extractValidationRules()` **побайтно на всём
+множестве реальных production-DTO** consumer'а (156 классов, все `SpsNext\\*\\Dto\\*`, вкл. nested/nullable/
+array+ref/items/promoted-params/defaults). Паритет доказан не только на синтетических фикстурах
+(`tests/Compile/Introspection/DtoSchemaBuilderTest.php`), но и на полном инвентаре N — M5 (switch route
+cache producer `dtos`←graph) опирается на этот факт. Тесты F от N **не зависят** — числа выше зафиксированы
+артефактом аудита, runtime-зависимости нет.
+
+---
+
 ---
 
 ## 5. Deploy / Docker / cache-volume audit

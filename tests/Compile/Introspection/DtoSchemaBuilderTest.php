@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use OpenApi\Attributes as OA;
+use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
 use SpsFW\Core\Router\Router;
 
@@ -107,6 +108,23 @@ final class DsbEmptyDto
     public string $nothing;
 }
 
+// --- cyclic validation graphs (must surface a compile diagnostic, never recurse forever) ---
+final class DsbCycleA
+{
+    #[OA\Property(ref: DsbCycleB::class)]
+    public DsbCycleB $b;
+}
+final class DsbCycleB
+{
+    #[OA\Property(ref: DsbCycleA::class)]
+    public DsbCycleA $a;
+}
+final class DsbCycleSelf
+{
+    #[OA\Property(ref: DsbCycleSelf::class)]
+    public DsbCycleSelf $next;
+}
+
 $router = (new ReflectionClass(Router::class))->newInstanceWithoutConstructor();
 $extract = new ReflectionMethod(Router::class, 'extractValidationRules');
 $builder = new DtoSchemaBuilder();
@@ -187,5 +205,31 @@ assert_same(
     $builder->build(DsbFixtureDto::class),
     'build() is memoized — repeated FQCN returns the same SchemaMetadata instance',
 );
+
+// ============================================================================
+// Cycle guard (plan §17): a cyclic validation graph is reported as a compile
+// diagnostic and halts via throwOnErrors() — it is NEVER silently collapsed to
+// empty nested_rules (Router::extractValidationRules would recurse forever).
+// ============================================================================
+
+// mutual cycle A↔B
+$cycleDiag = new CompileDiagnostics();
+$cycleBuilder = new DtoSchemaBuilder($cycleDiag);
+$cycleBuilder->ruleGraph($cycleBuilder->build(DsbCycleA::class));
+assert_true($cycleDiag->hasErrors(), 'cyclic validation graph (A↔B) is reported as a compile diagnostic');
+assert_same(DsbCycleA::class, $cycleDiag->errors()[0]['dto'], 'cycle diagnostic names the cyclic DTO');
+assert_true(str_contains($cycleDiag->errors()[0]['cause'], 'cyclic'), 'cycle diagnostic describes the cycle');
+
+// self-cycle
+$selfDiag = new CompileDiagnostics();
+$selfBuilder = new DtoSchemaBuilder($selfDiag);
+$selfBuilder->ruleGraph($selfBuilder->build(DsbCycleSelf::class));
+assert_true($selfDiag->hasErrors(), 'a self-referential validation graph is reported as a cycle');
+
+// a DAG (shared leaf, no back-edge) must NOT trip the guard
+$dagDiag = new CompileDiagnostics();
+$dagBuilder = new DtoSchemaBuilder($dagDiag);
+$dagBuilder->ruleGraph($dagBuilder->build(DsbFixtureDto::class));
+assert_true(!$dagDiag->hasErrors(), 'a DAG (shared leaf, no back-edge) does not trip the cycle guard');
 
 echo "DtoSchemaBuilder parity + projection passed\n";

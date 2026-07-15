@@ -13,6 +13,7 @@ use ReflectionParameter;
 use ReflectionProperty;
 use ReflectionType;
 use ReflectionUnionType;
+use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\Metadata\PropertyMetadata;
 use SpsFW\Core\Compile\Metadata\SchemaMetadata;
 use SpsFW\Core\Compile\Metadata\ValidationRuleGraph;
@@ -33,7 +34,10 @@ use SpsFW\Core\Validation\Validator;
  * rule graph yet — that avoids any drift between two interpretations of the same data. Once the OA source
  * is removed (M8), rawArguments is dropped and the typed fields take over.
  *
- * Memoized per FQCN (plan §17); a cycle guard reserves the slot before recursing into nested DTOs.
+ * Memoized per FQCN (plan §17). The rule graph is computed through {@see ruleGraphForClass()}, which carries
+ * an explicit cycle guard: a nested-DTO cycle (direct or transitive self-reference) is reported as a compile
+ * diagnostic and halts via {@see CompileDiagnostics::throwOnErrors()} — it is NEVER silently collapsed to an
+ * empty placeholder (Router::extractValidationRules would recurse forever on the same input).
  *
  * Step 2 (M2): build() + ruleGraph(); the schema projection is enriched in Step 4.
  */
@@ -42,8 +46,21 @@ final class DtoSchemaBuilder
     /** @var array<class-string, SchemaMetadata> */
     private array $memo = [];
 
+    /** @var array<class-string, array<string, array<string, mixed>>> rule graph per FQCN (deterministic) */
+    private array $ruleMemo = [];
+
+    /** @var array<class-string, true> DTOs currently on the ruleGraph expansion stack (cycle detection) */
+    private array $ruleStack = [];
+
+    public function __construct(
+        private readonly CompileDiagnostics $diagnostics = new CompileDiagnostics(),
+    ) {
+    }
+
     /**
-     * Build (and memoize) the schema for a DTO class.
+     * Build (and memoize) the schema for a DTO class. Non-recursive: it captures nested-class references as
+     * strings (refClass), so a cyclic DTO does not loop here — the cycle surfaces (and is reported) only when
+     * the rule graph is expanded.
      *
      * @param class-string $class
      */
@@ -52,10 +69,6 @@ final class DtoSchemaBuilder
         if (isset($this->memo[$class])) {
             return $this->memo[$class];
         }
-
-        // Reserve the slot before recursing so a (hypothetical) cyclic DTO cannot loop forever; the
-        // placeholder is replaced by the fully-built schema at the end of this method.
-        $this->memo[$class] = new SchemaMetadata(className: $class, name: $this->shortName($class));
 
         $reflection = new ReflectionClass($class);
         $constructor = $reflection->getConstructor();
@@ -116,7 +129,41 @@ final class DtoSchemaBuilder
      */
     public function ruleGraph(SchemaMetadata $schema): ValidationRuleGraph
     {
-        return new ValidationRuleGraph($this->ruleGraphArray($schema));
+        return new ValidationRuleGraph($this->ruleGraphForClass($schema->className ?? ''));
+    }
+
+    /**
+     * Expand the rule graph for a class with memoization and an explicit cycle guard.
+     *
+     * A class already on the expansion stack means the validation graph is cyclic; it is reported as a
+     * compile diagnostic and returns [] (so the caller does not recurse forever). The Coordinator's
+     * {@see CompileDiagnostics::throwOnErrors()} then halts the build.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function ruleGraphForClass(string $class): array
+    {
+        if (isset($this->ruleMemo[$class])) {
+            return $this->ruleMemo[$class];
+        }
+        if (isset($this->ruleStack[$class])) {
+            $this->diagnostics->error(
+                controller: null,
+                method: null,
+                dto: $class,
+                field: null,
+                cause: sprintf(
+                    'cyclic validation graph: %s participates in a nested-DTO cycle (direct or transitive self-reference)',
+                    $class,
+                ),
+                fix: 'break the cycle (describe the leaf with #[Items]/#[Field], or exclude the property from nested-rule extraction)',
+            );
+            return [];
+        }
+        $this->ruleStack[$class] = true;
+        $rules = $this->ruleGraphArray($this->build($class));
+        unset($this->ruleStack[$class]);
+        return $this->ruleMemo[$class] = $rules;
     }
 
     /**
@@ -152,10 +199,10 @@ final class DtoSchemaBuilder
                     if ($attributeKey === 'items' || (isset($args['type']) && $args['type'] == 'array')) {
                         $propertyRules['ref'] = $attributeValue;
                         $propertyRules['type'] = 'array';
-                        $propertyRules['nested_rules'] = $this->ruleGraphArray($this->build($attributeValue));
+                        $propertyRules['nested_rules'] = $this->ruleGraphForClass($attributeValue);
                     } else {
                         $propertyRules['ref'] = $attributeValue;
-                        $propertyRules['nested_rules'] = $this->ruleGraphArray($this->build($attributeValue));
+                        $propertyRules['nested_rules'] = $this->ruleGraphForClass($attributeValue);
                     }
                     break;
                 }

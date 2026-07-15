@@ -26,26 +26,33 @@ assert_same('AuthMe', $resolver->convention('App\\AuthController', 'me'), 'conve
 assert_same('ExamGetExam', $resolver->convention('App\\ExamController', 'getExam'), 'convention keeps already-capitalized segments');
 
 // ============================================================================
-// resolve: precedence — explicit > lockfile > convention.
+// resolve: precedence — explicit > lockfile > convention. Lockfile is tri-state
+// (string id / null / absent): array_key_exists is the test, never ??.
 // ============================================================================
 
-// convention when nothing explicit
+// ABSENT key + no explicit => convention
 $plain = new OperationIdResolver(new CompileDiagnostics());
-assert_same('AuthLogin', $plain->resolve('App\\AuthController', 'login'), 'no explicit/lockfile => convention id');
+assert_same('AuthLogin', $plain->resolve('App\\AuthController', 'login'), 'absent lockfile key + no explicit => convention id');
 
-// explicit wins over convention (and over a lockfile entry)
+// non-null lockfile entry honoured
 $withLockfile = new OperationIdResolver(new CompileDiagnostics(), [
     'App\\AuthController::login' => 'loginUser',
+    'App\\LegacyController::old' => null, // tri-state: present-but-null = "keep id-less"
 ]);
-assert_same('loginUser', $withLockfile->resolve('App\\AuthController', 'login'), 'lockfile entry honoured when no explicit id');
-assert_same('customId', $withLockfile->resolve('App\\AuthController', 'login', explicit: 'customId'), 'explicit id beats lockfile');
-assert_same('AuthMe', $withLockfile->resolve('App\\AuthController', 'me'), 'convention when neither lockfile nor explicit');
-assert_same('AuthLogin', $plain->resolve('App\\AuthController', 'login', explicit: ''), 'empty-string explicit is treated as absent (falls back to convention)');
+assert_same('loginUser', $withLockfile->resolve('App\\AuthController', 'login'), 'non-null lockfile entry honoured when no explicit id');
+assert_same('customId', $withLockfile->resolve('App\\AuthController', 'login', explicit: 'customId'), 'explicit id beats a non-null lockfile entry');
+assert_same('AuthMe', $withLockfile->resolve('App\\AuthController', 'me'), 'absent key + no explicit => convention');
+assert_same('AuthLogin', $plain->resolve('App\\AuthController', 'login', explicit: ''), 'empty-string explicit is treated as absent (falls back)');
 
 // ============================================================================
-// Pre-M9 policy (§19): deferred legacy operations keep operationId = null and are not tracked.
+// Tri-state null lockfile entry (§19 pre-M9): a present-but-null value keeps the
+// op id-less — NOT a fall-through to convention. This is how the 306 legacy ops
+// stay null so client P is untouched; the controller-qualified id arrives only in M9.
 // ============================================================================
-assert_same(null, $plain->resolve('App\\LegacyController', 'old', deferred: true), 'deferred op keeps null (pre-M9, client P untouched)');
+assert_same(null, $withLockfile->resolve('App\\LegacyController', 'old'), 'present-but-null lockfile entry keeps operationId = null (no convention fall-through)');
+
+// explicit ALWAYS wins, even over a null lockfile entry
+assert_same('forcedId', $withLockfile->resolve('App\\LegacyController', 'old', explicit: 'forcedId'), 'explicit id wins over a null lockfile entry');
 
 // ============================================================================
 // assertUnique: a clean set reports no errors.
@@ -78,13 +85,17 @@ assert_same('App\\UserController', $firstError['controller'], 'collision attribu
 assert_true($firstError['fix'] !== null, 'collision error carries a remediation hint');
 
 // ============================================================================
-// Deferred (null) ids do not participate in uniqueness, so they never collide.
+// Null (id-less) results do not participate in uniqueness, so they never collide.
+// Two ops that would collide under convention both stay null via the lockfile.
 // ============================================================================
-$deferDiag = new CompileDiagnostics();
-$deferResolver = new OperationIdResolver($deferDiag);
-$deferResolver->resolve('App\\OldController', 'index', deferred: true); // null
-$deferResolver->resolve('Api\\OldController', 'index', deferred: true); // null
-$deferResolver->assertUnique();
-assert_true(!$deferDiag->hasErrors(), 'deferred null ids are not tracked for uniqueness');
+$nullDiag = new CompileDiagnostics();
+$nullResolver = new OperationIdResolver($nullDiag, [
+    'App\\OldController::index' => null,
+    'Api\\OldController::index' => null,
+]);
+assert_same(null, $nullResolver->resolve('App\\OldController', 'index'), 'null lockfile entry => null');
+assert_same(null, $nullResolver->resolve('Api\\OldController', 'index'), 'null lockfile entry => null');
+$nullResolver->assertUnique();
+assert_true(!$nullDiag->hasErrors(), 'null (id-less) results are not tracked for uniqueness');
 
 echo "OperationIdResolver passed\n";
