@@ -67,4 +67,26 @@ assert_same(
 );
 assert_same([], $rules('none'), 'no access attributes -> []');
 
+// --- class-level access attributes are SYNTACTICALLY allowed (TARGET_CLASS) but
+//     SILENTLY IGNORED: collectAccessRules is only ever called with a ReflectionMethod
+//     (Router::registerControllerRoutes line 241). Contrast with #[Middleware], which
+//     IS collected at class level and merged. A developer placing #[AccessRulesAny] on a
+//     controller class gets NO enforcement — the future compiler must NOT silently "fix" this
+//     without an explicit decision (it is the current contract). ---
+#[AccessRulesAny(['admin'])]
+#[NoAuthAccess]
+final class ClassLevelAccessFixtureController
+{
+    public function noMethodLevelAccess(): void
+    {
+    }
+}
+
+$plainMethod = new ReflectionMethod(ClassLevelAccessFixtureController::class, 'noMethodLevelAccess');
+assert_same(
+    [],
+    $collect->invoke($router, $plainMethod),
+    'class-level #[AccessRulesAny]/#[NoAuthAccess] are IGNORED by collectAccessRules (method-only; class-level access is a no-op today)'
+);
+
 echo "Access rules characterization passed\n";
