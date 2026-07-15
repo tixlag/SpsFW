@@ -36,11 +36,11 @@
 ### 2.2 DI cache + job registry — discovery через ВСЕ классы
 - `DICacheBuilder::compileDI()` (DICacheBuilder.php:203) → `ClassScanner::getClassesFromDir()` (**все классы**) → `compile($classList)`.
 - `compile($classList)` (35, **public**): `analyze()` (`new ReflectionClass`, `#[Inject]`, тип) → `compiled_di.php` + `job_registry.php` (из `#[QueueJob]/#[JobHandler]`) через `writeToFile()` в `$this->cachePath`; **побочный эффект** `$this->container->setCompiledMap(...)` (49) — именно его compile-only API обязан избегать на prod-контейнере.
-- **Фактический shape (authoritative, AUDIT):** `compiled_di.php` = `[ FQCN => [ 'class'=>string, 'args'=>string[], 'constructor_params'=>[{name,class,position}], 'has_constructor'=>bool ] ]` (857 записей в `next`); `job_registry.php` = `[ job-name => [ 'jobClass'=>string, 'handlerClass'=>string ] ]` (9 job'ов). Файлы `*Test.php` пропускаются (DICacheBuilder.php:40).
+- **Фактический shape (authoritative, AUDIT):** `compiled_di.php` = `[ FQCN => [ 'class'=>string, 'args'=>string[], 'constructor_params'=>[{name,class,position}], 'has_constructor'=>bool ] ]` (857 записей в `next`); `job_registry.php` = `[ job-name => [ 'jobClass'=>string, 'handlerClass'=>string ] ]` (9 job'ов). ⚠️ **Quirk:** заявленный фильтр `*Test.php` (`str_ends_with($class,'Test.php')`, DICacheBuilder.php:40) **фактически не работает** — `$class` это FQCN (не имя файла), FQCN не содержит `.php`, поэтому тестовые классы НЕ отфильтровываются и попадают в кеш. Coordinator обязан исключать test-классы по корректному признаку (см. AUDIT §3).
 - Runtime: `DIContainer::__construct(cachePath)` → `require compiled_di.php` в `$compiledMap`; `getInstance(cachePath)`; `get()`. Fallback при промахе map → runtime Reflection `createInstanceWithDependencies` (Router.php:934, `newInstanceArgs`).
 
 ### 2.3 OpenAPI
-- `DocsUtil::updateDocs()` (DocsUtil.php:19): scan `[getSrcPath(), getLibraryRoot()]` swagger-php → `.cache/swagger/openapi.yml` (3.1.0, 172 paths). **Warning'и подавлены** (createCustomGenerator, DefaultLogger-наследник глушит `warning`). operationId: явный в OA либо fallback на **имя PHP-метода** (`SetOperationIdFromMethodNameProcessor`) — фактически явных operationId только 40, остальные ~337 получают method-name-fallback (AUDIT). ⚠️ В `public_next` лежит **отдельная** `openapi.yaml` (3.0.0, hash-ID) — это ДРУГОЙ файл, не тот, что читает Orval (`../next/.cache/swagger/openapi.yml`, 3.1.0); drift зафиксирован в AUDIT.
+- `DocsUtil::updateDocs()` (DocsUtil.php:19): scan `[getSrcPath(), getLibraryRoot()]` swagger-php → `.cache/swagger/openapi.yml` (3.1.0, **300 paths / 347 operations** — ранее ошибочно «172 paths», это grep-артефакт: swagger-php кавычит параметризованные пути). **Warning'и подавлены** (createCustomGenerator, DefaultLogger-наследник глушит `warning`). operationId: **явных только 40**; `SetOperationIdFromMethodNameProcessor` **НЕ активен** ⇒ остальные **306 operations operationId не имеют вовсе** (а не method-name-fallback в spec — fallback нужен только как canonical-id при миграции). ⚠️ В `public_next` лежит **отдельная** `openapi.yaml` (3.0.0, hash-ID) — это ДРУГОЙ файл, не тот, что читает Orval (`../next/.cache/swagger/openapi.yml`, 3.1.0); drift зафиксирован в AUDIT §4.
 
 ### 2.4 Шесть entrypoint-ов compilation flow (мигрируются в §11)
 | # | Entrypoint | Файл:строка | Что запускает |
@@ -107,8 +107,10 @@ Namespace `SpsFW\Core\Compile\` (compile-time only). Разделены **три
 
 **DTO eligibility contract (конкретный, фиксируемый):** класс считается источником API-schema **тогда и только тогда**, выполнено хотя бы одно:
 1. FQCN содержит namespace-сегмент `\Dto\` ИЛИ заканчивается на `Dto` (например `RegisterUserDto`, `SpsNext\Users\Dto\LoginUserDto`);
-2. класс имеет хотя бы один `#[Field]`/`#[Response]` (явно тегирован как API-схема);
+2. класс **явно поименован в method-level `#[Response(schema: Class::class)]`** какого-либо контроллера (т.е. потребитель-метод объявляет этот класс схемой ответа; сам DTO-класс при этом ничем не декорирован — `#[Response]` живёт на методе контроллера, не на DTO);
 3. класс перечислен в `config/dto_whitelist.php`.
+
+(`#[Field]` на свойствах класса — это уточнение полей уже eligible-схемы, а **не** самостоятельный признак eligibility: класс без `#[Field]`, не подходящий под (1)/(2)/(3), eligible не становится.)
 **Не-eligible** FQCN в return-type (`UserAbstract`, `FullUser`, доменные entity, `Response`, `array` без item-типа) **НЕ** отражаются как схема автоматически — требуется явный `#[Response(schema:…)]` либо exclusion; иначе halt. **Граница inventory (AUDIT):** зафиксировать, какие текущие return-type'ы `next` не покрываются правилом (1) и потребуют whitelist/`#[Response]` (подозрение: `FullUser`, `UserAbstract` и подобные).
 
 **Serialization contract:** response-тело = `json_encode` возврата (`Response::json`, Response.php:302). Ключи JSON = **PHP property name** (или `JsonSerializable::jsonSerialize()`), НЕ `#[OA\Property(property:)]` (которое может врать). ⇒ `#[Field(name:)]` обязан совпадать с реальным json-ключом; компилятор выводит serial-name из json-поведения, `#[Field(name)]` — только документация/override существующего ключа. `private(set)`/`protected(set)` (PHP 8.4) = public read ⇒ сериализуется; `private`/`protected` — нет. **Custom `JsonSerializable` НЕ анализируется автоматически** (его json-форма динамическая и не выводится из свойств) — для такого класса требуется явный schema contract: либо `#[Response(schema: ConcreteDto::class)]` с hand-written схемой-заменой, либо OA escape hatch (§13). Request vs response — одна `SchemaMetadata`, проекция по направлению; `readOnly/writeOnly` через `#[Field]` если нужно.
@@ -241,9 +243,9 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 - **M9 (отдельно, по согласию) Регенерация клиента** `public_next` (§21).
 
 ## 16. Тестирование
-- **Runner:** `composer test` → `php tests/run.php` (plain PHP, glob `tests/*/*Test.php`, `assert_same/assert_true` из `tests/bootstrap.php`). **`vendor/bin/phpunit` отсутствует**, phpunit нет в `composer.json`.
-- ⚠️ **Правило размещения тестов (фиксировано):** **все новые тесты фреймворка лежат под `tests/Compile/*Test.php`** (двухуровневый glob `tests/run.php` находит только `tests/<Dir>/<File>Test.php`). Трёхуровневые пути (`tests/Compile/Characterization/X.php`) auto-discovery **не найдёт**. Если нужна иная структура — runner (`tests/run.php`) должен быть **явно расширен** (трёхуровневый glob/явный список); не рассчитывать на авто-обнаружение вложенных директорий. Если нужна PHPUnit — отдельное решение о `require-dev` (не предполагать по умолчанию).
-- **Characterization-тесты (M0):** `ValidationMatrixCharacterizationTest` (§14 matrix + consumer default/nested/collection/enum-ref), `RuleGraphExtractionCharacterizationTest` (продюсер `extractValidationRules` + promoted/non-promoted/default-precedence), `RoutePatternCharacterizationTest` (`compileRoutePattern`), `AccessRulesCharacterizationTest` (`collectAccessRules` quirks + class-level ignored), `FullRouteIrCharacterizationTest` (полная IR-проекция `registerControllerRoutes`: middleware merge, class-level access ignored, dtos, php_ini, pattern, params).
+- **Runner:** `composer test` → `php tests/run.php` (plain PHP, **рекурсивный** поиск `tests/**/*. *Test.php` с детерминированной сортировкой; `assert_same/assert_true` из `tests/bootstrap.php`). **`vendor/bin/phpunit` отсутствует**, phpunit нет в `composer.json`. Рекурсивный discovery сделан заранее (Шаг 1), т.к. план предполагает подкаталоги (`tests/Compile/Metadata/`, `tests/Compile/Introspection/`, …).
+- **Правило размещения тестов:** новые тесты кладутся под `tests/Compile/...` (любая глубина теперь обнаруживается). Базовое место characterization-тестов — `tests/Compile/*Test.php`; unit-тесты конкретных классов — `tests/Compile/<Area>/<Name>Test.php` (напр. `tests/Compile/Introspection/TypeMapperTest.php`).
+- **Characterization-тесты (M0):** `ValidationMatrixCharacterizationTest` (§14 matrix + consumer default/nested/collection/enum-ref), `RuleGraphExtractionCharacterizationTest` (продюсер `extractValidationRules` + promoted/non-promoted/default-precedence), `RoutePatternCharacterizationTest` (`compileRoutePattern`), `AccessRulesCharacterizationTest` (`collectAccessRules` quirks + class-level ignored), `FullRouteIrCharacterizationTest` (полная IR-проекция `registerControllerRoutes`: middleware merge, class-level access ignored, dtos, php_ini, pattern, params). **До Шага 3 добавляются:** inherited-route characterization и filesystem-candidacy characterization (Шаг 3).
 - **Inventory/IR-shape/operationId/deploy** — НЕ unit-тесты, а зафиксированные артефакты в `docs/METADATA_COMPILER_AUDIT.md` + `docs/metadata_compiler_audit/route_inventory.txt` (regenerable, не зависят от соседних репо при clean checkout SpsFW).
 - **Unit:** `TypeMapper`, `DtoSchemaBuilder` (schema+ruleGraph) на реальных DTO, `OperationIdResolver` (конвенция/override/коллизия/lockfile), `AttributeReader`.
 - **Snapshot/parity:** OpenAPI golden + diff vs swagger-php (M3, параллельный `openapi.generated.yml`); `RuleGraph` новый==старый (M2, M5).
@@ -272,13 +274,32 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 - job_registry — явно в Coordinator.
 
 ## 19. operationId inventory ПЕРЕД первым новым snapshot (артефакты — в AUDIT)
-**Порядок:** сначала reconciliation, потом snapshot/lockfile.
-1. Извлечь все `operationId:` из текущего `lk.sps38.pro/next/.cache/swagger/openapi.yml` (3.1.0; **40 явных**, см. AUDIT).
-2. Извлечь имена функций/query-key из `public_next/src/lk-openapi/react-query` (AUDIT).
-3. Построить **reconciliation table**: `controller::method | path | legacy spec operationId | current generated function | current query key | canonical ID`. (База — `docs/metadata_compiler_audit/route_inventory.txt`: controller::method↔path для 377 маршрутов.)
-4. `canonical ID` = legacy spec operationId (явный) если есть; иначе (для ops без явного ID) — текущий method-name-fallback; **не** path-derived.
-5. Только после этого — `config/operation_id_map.lock.php` (или материализация как `#[Operation(id:)]`). Новые операции — конвенция `<ControllerShort><Method>` + uniqueness; существующие — из lockfile. Смена любого canonical ID — только в M9 (согласованный шаг с регенерацией клиента).
-- ⚠️ **Drift (зафиксирован в AUDIT):** `public_next/openapi.yaml` — отдельный файл (3.0.0, hash-ID), не равен `next/.cache/swagger/openapi.yml` (3.1.0), который читает Orval. Reconciliation должен исходить из **cache-спеки** (источник истины для клиента), а `public_next/openapi.yaml` — отдельно классифицировать (устаревший коммит/другой продукт).
+**Статус reconciliation: ВЫПОЛНЕНО** (M0 closure). Полная таблица —
+`docs/metadata_compiler_audit/operation_id_reconciliation.tsv` (генератор `gen_operation_id_reconciliation.php`);
+итоги и findings — AUDIT §4. **Lockfile пока НЕ создаётся** (требовалось: сначала таблица — теперь она есть;
+создание отложено на M9 из-за дрейфа 306 операций, см. ниже).
+
+Итоги reconciliation (R=377 routes, S=300 paths/347 ops, P=347 generated funcs):
+- **R∩S = 345** (документированных маршрутов); **R\S = 32** (недокументированных — нет в spec/клиенте,
+  напр. `GET /api/test`); **S\R = 2** (orphan spec-операций без backend-route).
+- **explicit = 40** (operationId в spec); **method-fallback = 306** (в spec **без** operationId — processor
+  не активен); S∩P = 347 (клиент 1:1 со spec).
+- **Главный finding (§4.3 AUDIT):** для 306 fallback-операций `generated_function` path-derived
+  (`deleteApiAchievementsDeleteLevelUuid`) ≠ предлагаемый `canonical_id` (method name `deleteAchievementLevel`),
+  причём `generated_query_key == generated_function` всегда. ⇒ назначение canonical=method-name **переименует
+  функцию и query-key в клиенте** для 306 операций → breaking change, только в M9 с регенерацией P.
+  Для 40 explicit: `generated_function == operationId == canonical` (дрейфа нет).
+
+Правила canonical ID (после reconciliation):
+1. `canonical ID` = явный operationId (для 40 explicit).
+2. Для 306 fallback — **предлагается** method-name (но меняет клиент → только M9).
+3. База join — `route_inventory.txt` + TSV (§4 AUDIT). Сопоставление по нормализованному `METHOD:normpath`
+   (path-параметры схлопнуты в `{}` — swagger-php snake_case vs orval camelCase).
+4. `config/operation_id_map.lock.php` (или `#[Operation(id:)]`) — на M9, с учётом дрейфа 306 операций.
+   Новые операции — конвенция `<ControllerShort><Method>` + uniqueness; существующие — из lockfile.
+- ⚠️ **Drift (зафиксирован в AUDIT §4.6):** `public_next/openapi.yaml` — отдельный файл (3.0.0, 143 opId),
+  не равен cache-спеки (3.1.0, 300 paths/347 ops/40 явных), которую читает Orval. Классифицировать отдельно
+  (устаревший коммит/другой продукт → кандидат на удаление/архив в M9).
 
 ## 20. Пошаговый план реализации (характеризация-first, per-repo)
 > Репозитории: **(F)** SpsFW framework; **(N)** `lk.sps38.pro/next` consumer; **(P)** `public_next` client. Без правок production-кода на этапе планирования. TDD-разбивка — на фазе исполнения каждого шага.
@@ -311,9 +332,12 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 ### Шаг 3. RouteMetadataCompiler + RouteCacheEmitter (F; depends 2)
 - **Файлы (new):** `src/Core/Compile/Route/{RouteMetadataCompiler,RouteCacheEmitter}.php`; новые атрибуты `src/Core/Attributes/OpenApi/{Operation,Response,Items,Field}.php`.
 - **Поведение:** `RouteMetadataCompiler` репродуцирует discovery §2.1 (`*Controller.php` + `getPathToNamespace` + `#[Route]` + унаследованные) → `RouteRuntimeMetadata` (точный IR, вкл. access-quirks — фиксируется `FullRouteIrCharacterizationTest`) + `OperationMetadata`. `RouteCacheEmitter` → IR-массив. Диагностики: duplicate route key (scan-time), path-param mismatch, не-eligible return-type без `#[Response]`, массив без `#[Items]`.
+- **Обязательная characterization (не позднее Шага 3):**
+  - **inherited-route** — `ReflectionMethod` по `getMethods(IS_PUBLIC)` **включает унаследованные** методы; закрепить тест, что `#[Route]` на методе базового класса публикуется (и участвует в duplicate-key детекте), с фикстурой `class ChildController extends Base { }` где `#[Route]` только на `Base::method`.
+  - **filesystem candidacy** — закрепить, что discovery = filename-фильтр `*Controller.php` (RecursiveDirectoryIterator + `preg_match('/Controller\.php$/')`), а не FQCN/namespace: фикстура с классом, FQCN которого не оканчивается на `Controller`, но файл назван `*Controller.php` → попадает; и наоборот — класс с FQCN `…Controller`, но файл `Foo.php` → НЕ попадает. Это кодирует §2.1 для побайтной репродукции.
 - **Совместимость:** за флагом; продакшен route cache пока `Router`.
-- **Тесты:** metadata для категорий §4; parity IR == Router IR; диагностики.
-- **Критерии:** IR побайтно совпадает; все diagnostics работают.
+- **Тесты:** metadata для категорий §4; parity IR == Router IR; диагностики; inherited-route + filesystem-candidacy characterization.
+- **Критерии:** IR побайтно совпадает; все diagnostics работают; inherited + candidacy закреплены.
 
 ### Шаг 4. OpenApiEmitter + StandardErrorPolicy + parity (F; depends 3) — M3
 - **Файлы (new):** `src/Core/Compile/OpenApi/{OpenApiEmitter,StandardErrorPolicy}.php`.
@@ -338,8 +362,16 @@ A (расширить OpenAPI-gen) — не убирает дублирован�
 - **Modify (клиентский preload, репо N):** реализовать целевую последовательность §11.2: autoload+env → `cacheDynamicConfigs()` → `Config::init()`+`Config::setDIBindings()` → `Coordinator` с явным ApplicationContext (project root, cache path, discovery paths, config inputs) → staging build → validate → publish artifacts → manifest last → `opcache_compile_file()` route/DI. **Удалить** предварительные `unlink(compiled_di.php)`/`unlink(compiled_routes.php)`. При ошибке компиляции — завершить preload с ненулевым кодом и не запускать API.
 - **Handoff F→N:** тег релиза F → `composer update tixlag/php-framework` в N.
 - **Проверка entrypoint (§11.3, Приложение C):** preload подключён как `opcache.preload` ⇒ fail старта FPM = не ready.
-- **Тесты:** restart с пустой/существующей `.cache`; инжект ошибки компиляции → старые артефакты целы, контейнер не ready.
-- **Критерии:** acceptance §11.6 выполнены (включая «API не принимает трафик до preload» и «ошибка не даёт readiness»).
+- **Readiness-gate в CI/deploy (обязательно):** после `restart`/deploy — **явное ожидание healthy**
+  (`docker compose up --wait` / `docker wait` / polling `php-fpm-healthcheck` до success с deadline), а **не**
+  `sleep 5` + вывод логов. **CI/deploy обязан fail**, если контейнер не стал healthy за deadline — это ловит
+  crash-loop preload (FPM рестартит в цикле из-за `restart: always` при падающей компиляции, и без
+  healthcheck-wait это выглядит как «успех»). Критерий red: `healthcheck` в `starting`/`unhealthy` после
+  deadline ⇒ ненулевой exit деплоя, откат.
+- **Тесты:** restart с пустой/существующей `.cache`; инжект ошибки компиляции → старые артефакты целы,
+  контейнер **не ready** и **deploy fails** (healthcheck-wait ловит crash-loop).
+- **Критерии:** acceptance §11.6 выполнены (включая «API не принимает трафик до preload», «ошибка не даёт
+  readiness» и «deploy fails при crash-loop preload»).
 
 ### Шаг 7. Switch route graph producer to compile-engine (F; depends 5,6a) — M5
 - **Modify:** rule graph для managed-flow строит **`Coordinator`/`RouteMetadataCompiler`** и публикуется в `compiled_routes.php` (`RouteCacheEmitter`); Router в `managed` — только runtime-consumer (`require` кеша, без вызова `extractValidationRules`). В `legacy` Router продолжает строить graph сам. Переключение — на уровне producer'а (engine), **не** флаг внутри `Router::registerControllerRoutes()`.
@@ -469,6 +501,13 @@ docker/local/etc/php/php_next.dev.ini:18:    opcache.preload=/var/www/next.sps38
 
 **6. Рестарт-политика:** `restart: always` → при crash-loop (напр. preload падает) контейнер крутится в цикле рестартов; но single-container, значит конкурентов нет.
 
+**⚠️ 6a. Crash-loop — дыра в текущем деплое (требует закрытия в Шаге 6b).** Текущий CI делает
+`docker compose restart --no-deps php_next` и дальше без **явного ожидания healthy**: если preload падает,
+`restart: always` уводит контейнер в crash-loop, но `restart`-команда формально «успешна». `sleep 5` + вывод
+логов этого **не ловят**. ⇒ **Шаг 6b обязан**: (1) после restart — `docker compose up --wait` (или polling
+`php-fpm-healthcheck` до success с deadline); (2) **CI/deploy fail** если контейнер не healthy за deadline
+(ловит crash-loop preload). Это readiness-gate уровня деплоя, дополняющий runtime-гейт «preload в master-стартапе».
+
 **Ответы (authoritative):**
-- **(A) Preload до трафика?** ДА. preload = синхронный шаг master-стартапа FPM (`opcache.preload`); воркеры поднимаются после; исключение в preload = FPM не стартует = healthcheck не проходит = not ready.
+- **(A) Preload до трафика?** ДА. preload = синхронный шаг master-стартапа FPM (`opcache.preload`); воркеры поднимаются после; исключение в preload = FPM не стартует = healthcheck не проходит = not ready. **НО** это требует, чтобы деплой действительно дожидался healthcheck (§6a) — иначе crash-loop маскируется.
 - **(B) Concurrent old+new на общем `.cache`?** При текущем stop/start deploy — **НЕТ** (старый остановлен до старта нового). НО `.cache` — общий bind mount ⇒ **при переходе на rolling/replicas** гонка неизбежна. **Требование (§11.3):** до включения rolling обязателен **versioned cache directory + `current` pointer** (публикация нового каталога, atomic switch указателя последним) **ЛИБО container-local cache** (не-shared volume). При сохранении stop/start текущий per-file atomic rename + lifecycle достаточен.

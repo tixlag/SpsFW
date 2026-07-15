@@ -44,12 +44,15 @@ Cache-level дубли отсутствуют **только потому, чт�
 унаследованные методы) и `halt` с диагностикой (`controller::method`, оба претендента). Это единственный
 способ поймать дубли — post-hoc по cache их уже не видно.
 
-### 1.3 Метод генерации (regenerable, не зависит от SpsFW-runtime)
+### 1.3 Метод генерации (regenerable, read-only из N)
+Запуск **из корня SpsFW** (использует собственный autoload SpsFW; читает cache репо N по абсолютному пути;
+результат пишется во временный файл и затем копируется в SpsFW — чтобы не плодить cross-repo путей в команде):
 ```bash
-# Из корня репо N (lk.sps38.pro/next):
+cd /home/tixlag/PhpstormProjects/SpsFW
+NEXT=/home/tixlag/PhpstormProjects/lk.sps38.pro/next
 php -r '
-  require "vendor/autoload.php";                       // cache содержит enum-инстансы ParamsIn
-  $routes = require ".cache/compiled_routes.php";      // без autoload — Class-not-found
+  require "vendor/autoload.php";                         // autoload SpsFW (cache содержит enum-инстансы ParamsIn)
+  $routes = require $argv[1] . "/.cache/compiled_routes.php";  // без autoload — Class-not-found
   foreach ($routes as $key => $r) {
       [$method,$path] = explode(":", $key, 2);
       $dto = !empty($r["dtos"]) ? "Y" : "-";
@@ -58,9 +61,11 @@ php -r '
       $ini = !empty($r["php_ini_settings"]) ? "Y" : "-";
       echo implode("\t", [$method,$path,$r["controller"]."::".$r["method"],$dto,$acc,$mw,$ini])."\n";
   }
-' | sort > SpsFW/docs/metadata_compiler_audit/route_inventory.txt
+' "$NEXT" | sort > /tmp/route_inventory.txt
+cp /tmp/route_inventory.txt docs/metadata_compiler_audit/route_inventory.txt
 ```
-Снимок сделан read-only из N (production-код N не менялся).
+Снимок сделан read-only из N (production-код N не менялся). Полный OpenAPI-reconciliation
+(spec + routes + generated client) генерируется отдельным скриптом — см. §4.2.
 
 ---
 
@@ -109,8 +114,15 @@ php_ini_settings`.
 - `compiled_di.php` = `[ FQCN => <analyze-shape выше> ]`
 - `job_registry.php` = `[ jobName => ['jobClass'=>string,'handlerClass'=>string] ]` (из `#[QueueJob]`/`#[JobHandler]`)
 
-**Файлы `*Test.php` пропускаются** (DICacheBuilder.php:40). `compile()` имеет побочный эффект
-`setCompiledMap()` (строка 49) — именно его compile-only API (Шаг 5) обязан избегать на prod-контейнере.
+**⚠️ Quirk: фильтр `*Test.php` фактически не работает.** В `compile()` (DICacheBuilder.php:40) стоит
+`if (str_ends_with($class, 'Test.php')) continue;`, но `$class` здесь — **FQCN** (из
+`ClassScanner::getClassesFromDir()`, далее передаётся в `new ReflectionClass($class)`), а не имя файла.
+FQCN не содержит `.php`, поэтому `str_ends_with($class, 'Test.php')` **почти всегда ложно** — тестовые
+классы НЕ отфильтровываются и попадают в `compiled_di.php`. Это **current quirk**, а не рабочий фильтр:
+новый Coordinator обязан явно исключать test-классы по корректному признаку (напр. FQCN namespace
+`*\Test\*` / суффикс `Test`, либо фильтрация на этапе ClassScanner по пути файла).
+`compile()` имеет побочный эффект `setCompiledMap()` (строка 49) — именно его compile-only API (Шаг 5)
+обязан избегать на prod-контейнере.
 
 ### 3.1 Снимок объёма (источник: N `.cache/compiled_di.php` + `.cache/job_registry.php`)
 | Артефакт | Записей |
@@ -121,54 +133,81 @@ php_ini_settings`.
 
 ---
 
-## 4. operationId reconciliation (источники: N spec + P generated client)
+## 4. operationId reconciliation (источники: R routes + S spec + P generated client)
+
+**Полная таблица:** `docs/metadata_compiler_audit/operation_id_reconciliation.tsv` (379 строк +
+заголовок-counts). Генератор: `docs/metadata_compiler_audit/gen_operation_id_reconciliation.php`
+(читает `route_inventory.txt` + N spec + P endpoints, read-only; пути к N/P — параметры со значениями
+по умолчанию для этого хоста).
+
+Колонки TSV: `METHOD | path | controller::method | present_in_legacy_spec | legacy_operation_id |
+id_source(explicit|method-fallback|spec-only|missing) | generated_function | generated_query_key |
+canonical_id`. Сопоставление R↔S↔P идёт по **нормализованному** ключу `METHOD:normpath`, где path-параметры
+схлопнуты в `{}` — это необходимо, т.к. swagger-php эмиттит snake_case path-params (`{code_1c}`), а orval
+переписывает url camelCase TS-варами (`${code1c}`); структура (позиции параметров) сохраняется.
 
 ### 4.1 N: спецификация, которую читает Orval
-- Файл: `N/.cache/swagger/openapi.yml` (672 КБ), `openapi: 3.1.0`, `paths:` блок, генерируется
-  `DocsUtil::updateDocs()` (swagger-php).
-- **Явных `operationId:` — 40** (остальные ~337 операций получают **method-name-fallback** через
-  swagger-php `SetOperationIdFromMethodNameProcessor`).
+- Файл: `N/.cache/swagger/openapi.yml` (672 КБ), `openapi: 3.1.0`, генерируется `DocsUtil::updateDocs()`.
+- **300 path-ключей / 347 operations** (⚠️ ранее в этом аудите и в плане ошибочно фигурировало «172 paths»
+  — это артефакт `grep '^  /'`: swagger-php **кавычит** параметризованные пути как `'/api/.../{x}'`, и grep
+  по 2-space-indent+`/` ловил только 172 пути без параметров; Symfony YAML-парсер даёт корректные 300).
+- **Явных `operationId:` — 40.** Остальные **306 operations operationId НЕ имеют** — `SetOperationIdFromMethodNameProcessor`
+  у swagger-php **НЕ активен** (иначе все 347 имели бы operationId). ⇒ для 306 operations canonical id
+  сегодня не задан вовсе, а клиент получает path-derived имена.
 
-**40 явных operationId (verbatim, отсортированы) — база canonical ID:**
-```
-addAccessRules                 getRoadSheetsByVehicleCode         registerUser
-addAdminEmployeeAccessRole     getRegistrationTokenByChatUUID     resetPassword
-createDayReportsPdfLists       getScannedRoadSheetPdf             resetPasswordByEmail
-createPasswordResetLink        getUserAccessRules                 revokeDevice
-createResetCode                getUserDevices                     revokeOtherDevices
-createWorksheetReportPdf       getWorksheetReportScans            runAdminEmployeeExchangeByHireDate
-deleteAdminEmployeeAccessRole  loginByCode1c                      setAccessRules
-downloadTicketFile             loginUser                          setUserAccessRules
-generateRoadSheetsPdf          logoutUser                         submitResetLink
-getAccessRulesClasses          parseIdBirthday                    syncRulesFrom1c
-getAdminEmployeeAccessRoles    previewAdminEmployeeExchangeByHireDate  uploadWorksheetReportScans
-getDayReportPdfPath            refreshTokens                      verifyResetCode
-getFullEmployeeByCode1c        registerByChatUUID                 verifyRestoreCode
-```
+### 4.2 Итоги reconciliation (счётчики)
+| Метрика | Значение |
+|---|---|
+| R∩S (routes в spec) | **345** |
+| R\S (routes **отсутствуют** в spec — недокументированы) | **32** |
+| S\R (spec operations без route — orphan) | **2** |
+| explicit (operationId в spec) | **40** |
+| method-fallback (в spec, без operationId, route известен) | **306** |
+| spec-only (в spec, без route, без operationId) | **1** |
+| missing (route есть, в spec отсутствует) | **32** (= R\S) |
+| S∩P (spec ↔ generated client) | **347** (1:1) |
+| S\P / P\S | **0 / 0** (generated client точно соответствует spec) |
+| explicit ops: generated_function == operationId | **40/40** |
 
-### 4.2 Правило canonical ID (§19)
-1. `canonical ID` = явный operationId из §4.1, если операция его имеет.
-2. Иначе — текущий **method-name-fallback** (имя PHP-метода контроллера). **Не** path-derived.
-3. База для reconciliation (controller::method ↔ path для всех 377) — `route_inventory.txt` (§1).
-4. Lockfile `config/operation_id_map.lock.php` (или материализация `#[Operation(id:)]`) формируется
-   **после** reconciliation; новые операции — конвенция `<ControllerShort><Method>` + uniqueness.
-   Любая смена canonical ID — только в M9 (согласованный шаг с регенерацией клиента P).
+**Объяснение разрыва 377 routes / 300 spec paths / 40 operationId:**
+- 377 routes → 345 из них документированы в spec (имеют OA), **32 routes без OA в spec не попадают**
+  (напр. `DELETE /api/achievements/{uuid}`, `GET /api/auth/reset`, `GET /api/test` — test-endpoint в prod);
+  ⇒ 32 routes невидимы для фронтенда.
+- 300 spec paths → 347 operations (несколько методов на path).
+- 347 operations → лишь **40 с явным operationId**; **306 без operationId вообще** (processor не активен).
 
-### 4.3 P: сгенерированный клиент
-- `orval.config.ts`: `input: ../next/.cache/swagger/openapi.yml` (3.1.0 из §4.1), `client: react-query`,
-  `useOperationIdAsQueryKey: true` ⇒ **query-key = operationId** (поэтому стабильность operationId критична).
-- Сгенерировано в `P/src/lk-openapi/react-query`: **1448** экспортов (react-query хуки + TS-типы).
-- **Имя функции path-derived** (напр. `getApiAuthMe`, `deleteApiAchievementsDeleteLevelUuid`) — это
-  orval-конвенция имён функций; **query-key при этом = operationId**. ⇒ имя функции и operationId
-  расходятся по схеме наименования — это известный дефект pipeline, **не основание** делать canonical
-  operationId path-derived (§19 явно: canonical = opId/method-name).
+### 4.3 Ключевой finding: drift canonical↔generated для 306 operations
+- Для **40 explicit** operations: `generated_function == operationId == canonical_id` (orval использует
+  operationId и для имени функции, и для query-key). **Выровнено, дрейфа нет.**
+- Для **306 method-fallback** operations: operationId в spec **нет** ⇒ orval генерирует **path-derived**
+  имя функции (напр. `deleteApiAchievementsDeleteLevelUuid`) и **query-key == имени функции** (т.к.
+  `useOperationIdAsQueryKey: true`, но operationId отсутствует — orval берёт сгенерированное имя).
+  При этом `canonical_id` (предлагаемый = PHP method name, напр. `deleteAchievementLevel`) **≠** текущему
+  `generated_function` (`deleteApiAchievementsDeleteLevelUuid`).
+  ⇒ **назначение canonical = method-name для этих 306 операций переименует и функцию, и query-key в
+  клиенте** → breaking change, требует координированной регенерации P (M9). Это главный риск operationId-миграции.
+- `generated_query_key == generated_function` **во всех случаях** (finding): query-key жёстко привязан к
+  имени функции, поэтому любое изменение operationId для explicit-op меняет оба сразу.
 
-### 4.4 ⚠️ Drift: отдельный `P/openapi.yaml`
+### 4.4 Правило canonical ID (§19) — обновлено по итогам reconciliation
+1. `canonical ID` = явный operationId (для 40 explicit).
+2. Для 306 fallback — **предлагается** method-name (но это меняет клиент → только в M9).
+3. База reconciliation (controller::method ↔ path, 377) — `route_inventory.txt` (§1); полный join — TSV (§4).
+4. **Lockfile пока НЕ создаётся** (по требованию: сначала таблица — теперь она есть). Создание lockfile
+   откладывается на M9 и должно явно учитывать дрейф 306 операций (§4.3): lockfile фиксирует canonical_id,
+   после чего регенерация P меняет имена функций/query-key. Новые операции — конвенция
+   `<ControllerShort><Method>` + uniqueness.
+
+### 4.5 Orphan spec operations (S\R, 2 шт)
+- `POST /api/auth/add-access-rules` (operationId `addAccessRules`) — в spec + клиенте, но **без backend-route**.
+- `GET /api/employees/documents/important/{code_1c}` — в spec + клиенте, но **без route**.
+Оба — кандидаты на удаление из spec/клиента либо на добавление backend-маршрута (решение в M7).
+
+### 4.6 ⚠️ Drift: отдельный `P/openapi.yaml`
 - `P/openapi.yaml` (270 КБ, `openapi: 3.0.0`, **143** `operationId`) — **другой файл**, не равный
-  `N/.cache/swagger/openapi.yml` (3.1.0, 40 явных), который реально читает Orval.
-- Это либо устаревший коммит спецификации, либо спецификация другого продукта. **Reconciliation обязан
-  исходить из cache-спеки (§4.1) как источника истины для клиента**; `P/openapi.yaml` классифицируется
-  отдельно (вероятно — удалить/архивировать в M9).
+  `N/.cache/swagger/openapi.yml` (3.1.0, 300 paths / 347 ops / 40 явных opId), который реально читает Orval.
+- Reconciliation исходит из **cache-спеки** (§4.1) как источника истины для клиента; `P/openapi.yaml`
+  классифицируется отдельно (устаревший коммит / другой продукт → кандидат на удаление/архив в M9).
 
 ---
 
@@ -199,9 +238,9 @@ container-local cache) **до** включения rolling. Зафиксиров
 | Маршруты (cache) | `N/.cache/compiled_routes.php` | 377 | §1, фикс-снимок `07a98801a` |
 | DI-карта (cache) | `N/.cache/compiled_di.php` | 857 | §3.1 |
 | Job-registry (cache) | `N/.cache/job_registry.php` | 9 | §3.1 |
-| OpenAPI spec (Orval input) | `N/.cache/swagger/openapi.yml` | 3.1.0, 172 paths, 40 явных opId | §4.1 |
-| Устаревший spec (drift) | `P/openapi.yaml` | 3.0.0, 143 opId | §4.4 — отдельный файл |
-| Сгенерированный клиент | `P/src/lk-openapi/react-query` | 1448 экспортов | §4.3, react-query, `useOperationIdAsQueryKey:true` |
+| OpenAPI spec (Orval input) | `N/.cache/swagger/openapi.yml` | 3.1.0, **300 paths / 347 ops**, 40 явных opId | §4.1 (ранее ошибочно «172 paths» — grep-артефакт) |
+| Устаревший spec (drift) | `P/openapi.yaml` | 3.0.0, 143 opId | §4.6 — отдельный файл |
+| Сгенерированный клиент | `P/src/lk-openapi/react-query` | 347 endpoint-функций (1:1 со spec) | §4.2/4.3, react-query, `useOperationIdAsQueryKey:true` |
 | Клиентский preload | `N/preload.php` | — | Приложение B плана (последовательность 11 шагов) |
 | Контроллеры (F discovery) | `*Controller.php` в `getControllersDirs()` | 70 (N) | §2.1 плана |
 | Characterization-тесты (F) | `tests/Compile/*Test.php` | 5 | §2 этого аудита |
