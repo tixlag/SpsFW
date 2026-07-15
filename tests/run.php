@@ -5,8 +5,8 @@ declare(strict_types=1);
 /**
  * Test runner: `composer test` → `php tests/run.php`.
  *
- * Discovery is RECURSIVE: every file matching *Test.php anywhere under tests/, sorted
- * deterministically. Replaces the previous two-level glob (tests/*/*Test.php) so that
+ * Discovery is RECURSIVE: every file matching the *Test.php suffix anywhere under tests/, sorted
+ * deterministically. Replaces the previous two-level glob so that
  * nested suites such as tests/Compile/Metadata/..., tests/Compile/Introspection/...
  * are auto-discovered without extending the runner each time.
  *
