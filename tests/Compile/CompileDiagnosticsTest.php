@@ -17,8 +17,9 @@ assert_true(!$diag->hasErrors(), 'fresh collector has no errors');
 assert_same(0, $diag->count(), 'fresh collector count is zero');
 assert_same([], $diag->errors(), 'fresh collector errors list is empty');
 
-// full-form error carries every optional location field
-$diag->error('boom', controller: 'App\\Ctl', method: 'show', dto: 'App\\Dto', field: 'id', fix: 'do x');
+// full-form error carries every optional location field — positional plan contract
+// error(controller, method, dto, field, cause, fix)
+$diag->error('App\\Ctl', 'show', 'App\\Dto', 'id', 'boom', 'do x');
 assert_true($diag->hasErrors(), 'error recorded');
 assert_same(1, $diag->count(), 'count reflects the single error');
 
@@ -30,8 +31,8 @@ assert_same('id', $error['field'], 'field stored');
 assert_same('boom', $error['cause'], 'cause stored');
 assert_same('do x', $error['fix'], 'fix stored');
 
-// cause-only call leaves the optional fields null
-$diag->error('just cause');
+// cause-only call leaves the optional location fields null
+$diag->error(null, null, null, null, 'just cause');
 $second = $diag->errors()[1];
 assert_same(null, $second['controller'], 'optional controller defaults null');
 assert_same(null, $second['dto'], 'optional dto defaults null');

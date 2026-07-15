@@ -52,7 +52,9 @@ class TmHolder
     public TmMoment $moment;
     public TmDto $dto;
     public array $items;
-    public int|string $union;
+    public int|string $union;            // genuine union (2 non-null members) -> unsupported
+    public ?TmDto $maybeDto;             // T|null nullable union -> supported, ref, nullable
+    public \Countable&\IteratorAggregate $inter; // intersection -> unsupported
 }
 
 $mapper = new TypeMapper();
@@ -75,10 +77,11 @@ assert_same('boolean', $map('active')['type'], 'bool property -> boolean');
 assert_same('number', $map('score')['type'], 'float property -> number');
 assert_true(!$map('age')['nullable'], 'non-nullable property is not nullable');
 
-// nullable shorthand ?T
+// nullable shorthand ?T is the only union that maps cleanly (T|null collapses to T nullable)
 $nickname = $map('nickname');
 assert_same('string', $nickname['type'], '?string collapses to string');
 assert_true($nickname['nullable'], '?string is nullable');
+assert_true(!$mapper->isUnsupported($nickname), '?string is supported');
 
 // backed string enum
 $color = $map('color');
@@ -119,11 +122,21 @@ assert_true(!$dto['nullable'], 'plain class is not nullable');
 assert_same('array', $map('items')['type'], 'array -> array type');
 assert_same(null, $map('items')['items'], 'item resolution is deferred (Step 2/3)');
 
-// genuine union: PHP normalizes member order canonically (string before int regardless of declaration),
-// so only assert the representative is one of the declared members and that it is not nullable.
+// nullable class union ?T|null -> ref, nullable, supported (same T|null rule)
+$maybeDto = $map('maybeDto');
+assert_same('TmDto', $maybeDto['ref'], '?TmDto collapses to ref TmDto');
+assert_true($maybeDto['nullable'], '?TmDto is nullable');
+assert_true(!$mapper->isUnsupported($maybeDto), '?TmDto is supported');
+
+// genuine union (two non-null members) is NOT auto-derived -> explicit unsupported result
 $union = $map('union');
-assert_true(in_array($union['type'], ['integer', 'string'], true), 'int|string union maps to one of its members');
-assert_true(!$union['nullable'], 'int|string union is not nullable');
+assert_true($mapper->isUnsupported($union), 'int|string genuine union is unsupported');
+assert_true(str_contains((string) $union['reason'], 'union'), 'unsupported union carries a reason');
+
+// intersection is NOT auto-derived -> explicit unsupported result
+$inter = $map('inter');
+assert_true($mapper->isUnsupported($inter), 'intersection type is unsupported');
+assert_true(str_contains((string) $inter['reason'], 'intersection'), 'unsupported intersection carries a reason');
 
 // null / absent type
 assert_true($mapper->map(null)['nullable'], 'null type maps to nullable');

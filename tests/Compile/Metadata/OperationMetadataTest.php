@@ -36,8 +36,19 @@ $operation = new OperationMetadata(
 assert_true($operation->hasOperationId(), 'hasOperationId true when id set');
 assert_same('loginUser', $operation->operationId, 'operationId preserved');
 assert_true($operation->requestBody instanceof RequestBodyMetadata, 'request body carried');
-assert_same('application/json', $operation->requestBody->contentType, 'request body content type preserved');
+assert_same(RequestBodyMetadata::CT_JSON, $operation->requestBody->contentType, 'json request body content type');
+assert_true($operation->requestBody->isJson(), 'json body detected');
 assert_true(!$operation->requestBody->isMultipart(), 'json body is not multipart');
+assert_true(!$operation->requestBody->isFormUrlEncoded(), 'json body is not form-urlencoded');
+
+// content-type contract per request-body marker attribute:
+//   JsonBody -> application/json, PostBody -> application/x-www-form-urlencoded, FormDataBody -> multipart/form-data
+$json = new RequestBodyMetadata(contentType: RequestBodyMetadata::CT_JSON);
+$post = new RequestBodyMetadata(contentType: RequestBodyMetadata::CT_FORM_URL);
+$form = new RequestBodyMetadata(contentType: RequestBodyMetadata::CT_MULTIPART);
+assert_true($json->isJson() && !$json->isFormUrlEncoded() && !$json->isMultipart(), 'JsonBody -> application/json');
+assert_true($post->isFormUrlEncoded() && !$post->isJson() && !$post->isMultipart(), 'PostBody -> application/x-www-form-urlencoded');
+assert_true($form->isMultipart() && !$form->isJson() && !$form->isFormUrlEncoded(), 'FormDataBody -> multipart/form-data');
 assert_same(2, count($operation->responses), 'responses count preserved');
 assert_true($operation->responses[0]->isSuccess(), '200 response is a success response');
 assert_true(!$operation->responses[1]->isSuccess(), '401 response is not a success response');

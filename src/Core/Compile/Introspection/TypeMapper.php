@@ -22,7 +22,14 @@ use UnitEnum;
  *  - DateTimeInterface: string / format date-time
  *  - *Uuid class      : string / format uuid (no framework Uuid type exists, so class-name heuristic)
  *  - other class      : a $ref (caller decides DTO eligibility); format only via explicit override
- *  - nullable / union : `?T` and `T|null` collapse to T nullable; genuine unions take the first member
+ *  - nullable union   : the ONLY union that maps cleanly — `T|null` (and `?T`) collapse to T nullable
+ *
+ * Boundaries (plan §7) — returned as an explicit *unsupported* result so the builder can surface a
+ * CompileDiagnostics error / halt instead of silently losing information:
+ *  - genuine union    : two or more non-null members (int|string) — not auto-derived
+ *  - intersection     : (A&B) — not auto-derived
+ * A mapping with `unsupported === true` carries a human-readable `reason`; callers should check
+ * {@see isUnsupported()} before trusting `type`/`ref`/`enum`.
  *
  * Format/date/email/uuid may be forced via $formatOverride (from #[Field(format)]).
  *
@@ -56,53 +63,51 @@ final class TypeMapper
     /**
      * Map a reflected PHP type to an OpenAPI schema fragment.
      *
-     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array}
+     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array, unsupported: bool, reason: ?string}
      */
     public function map(?ReflectionType $type, ?string $formatOverride = null): array
     {
         if ($type === null) {
-            return $this->empty(nullable: true);
+            return $this->pack(nullable: true);
         }
         if ($type instanceof ReflectionUnionType) {
             return $this->mapUnion($type, $formatOverride);
         }
         if ($type instanceof ReflectionIntersectionType) {
-            // Intersection types are exotic in DTOs; represent via the first member as a ref/object.
-            $members = $type->getTypes();
-            return $this->mapNamed($members[0] ?? null, $formatOverride);
+            return $this->unsupported('intersection types are not auto-derived; use #[Field]/#[Items] or the OA escape hatch');
         }
         if ($type instanceof ReflectionNamedType) {
             return $this->mapNamed($type, $formatOverride);
         }
-        return $this->empty(nullable: true);
+        return $this->pack(nullable: true);
     }
 
     /**
      * Map a known class FQCN (not a reflection type) to a schema fragment.
      *
      * @param ?class-string $fqcn
-     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array}
+     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array, unsupported: bool, reason: ?string}
      */
     public function mapClass(string $fqcn, bool $nullable = false, ?string $formatOverride = null): array
     {
         if (is_subclass_of($fqcn, BackedEnum::class)) {
             $values = array_map(static fn(BackedEnum $case) => $case->value, $fqcn::cases());
             $type = is_int($values[0] ?? null) ? 'integer' : 'string';
-            return ['type' => $type, 'format' => $formatOverride, 'nullable' => $nullable, 'ref' => null, 'items' => null, 'enum' => $values];
+            return $this->pack(type: $type, format: $formatOverride, nullable: $nullable, enum: $values);
         }
         if (is_subclass_of($fqcn, UnitEnum::class)) {
             $values = array_map(static fn(UnitEnum $case) => $case->name, $fqcn::cases());
-            return ['type' => 'string', 'format' => $formatOverride, 'nullable' => $nullable, 'ref' => null, 'items' => null, 'enum' => $values];
+            return $this->pack(type: 'string', format: $formatOverride, nullable: $nullable, enum: $values);
         }
         if (is_a($fqcn, \DateTimeInterface::class, true)) {
-            return ['type' => 'string', 'format' => $formatOverride ?? 'date-time', 'nullable' => $nullable, 'ref' => null, 'items' => null, 'enum' => null];
+            return $this->pack(type: 'string', format: $formatOverride ?? 'date-time', nullable: $nullable);
         }
         if (str_ends_with($fqcn, 'Uuid')) {
-            return ['type' => 'string', 'format' => $formatOverride ?? 'uuid', 'nullable' => $nullable, 'ref' => null, 'items' => null, 'enum' => null];
+            return $this->pack(type: 'string', format: $formatOverride ?? 'uuid', nullable: $nullable);
         }
 
         // Anything else is a referenced schema (DTO/entity); the caller decides eligibility.
-        return ['type' => null, 'format' => $formatOverride, 'nullable' => $nullable, 'ref' => $fqcn, 'items' => null, 'enum' => null];
+        return $this->pack(ref: $fqcn, format: $formatOverride, nullable: $nullable);
     }
 
     /**
@@ -114,22 +119,32 @@ final class TypeMapper
     }
 
     /**
-     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array}
+     * Whether a mapping returned by map()/mapClass() is an explicit unsupported result.
+     *
+     * @param array{unsupported?: bool} $mapping
+     */
+    public function isUnsupported(array $mapping): bool
+    {
+        return !empty($mapping['unsupported']);
+    }
+
+    /**
+     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array, unsupported: bool, reason: ?string}
      */
     private function mapNamed(?ReflectionNamedType $type, ?string $formatOverride): array
     {
         if ($type === null) {
-            return $this->empty(nullable: true);
+            return $this->pack(nullable: true);
         }
         $phpName = $type->getName();
         $nullable = $type->allowsNull();
 
         if (array_key_exists($phpName, self::SCALARS)) {
-            return ['type' => self::SCALARS[$phpName], 'format' => $formatOverride, 'nullable' => $nullable, 'ref' => null, 'items' => null, 'enum' => null];
+            return $this->pack(type: self::SCALARS[$phpName], format: $formatOverride, nullable: $nullable);
         }
         if (in_array($phpName, ['self', 'static', 'parent'], true)) {
             // Treated as object; the enclosing-class ref is resolved by the caller.
-            return ['type' => 'object', 'format' => $formatOverride, 'nullable' => $nullable, 'ref' => null, 'items' => null, 'enum' => null];
+            return $this->pack(type: 'object', format: $formatOverride, nullable: $nullable);
         }
 
         return $this->mapClass($phpName, $nullable, $formatOverride);
@@ -147,20 +162,69 @@ final class TypeMapper
             }
         }
         if ($nonNull === []) {
-            return $this->empty(nullable: true);
+            // null-only union.
+            return $this->pack(nullable: true);
         }
-        // Genuine unions are not auto-derived (plan §7 boundary); take the first member in reflection's
-        // canonical order (PHP reorders union members, so this is NOT declaration order) and keep nullable.
-        $mapped = $this->mapNamed($nonNull[0], $formatOverride);
-        $mapped['nullable'] = $nullable || $mapped['nullable'];
-        return $mapped;
+        if (count($nonNull) === 1) {
+            // T|null (the only union that maps cleanly): collapse to the single member, nullable.
+            $mapped = $this->mapNamed($nonNull[0], $formatOverride);
+            $mapped['nullable'] = true;
+            return $mapped;
+        }
+
+        // Genuine union (two or more non-null members) is not auto-derived (plan §7 boundary).
+        $names = array_map(
+            static function (ReflectionType $t): string {
+                return $t instanceof ReflectionNamedType ? $t->getName() : (string) $t;
+            },
+            $nonNull,
+        );
+        return $this->unsupported('union ' . implode('|', $names) . ' is not auto-derived; use #[Field]/#[Items] or the OA escape hatch');
     }
 
     /**
-     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array}
+     * Build a supported mapping fragment.
+     *
+     * @param ?class-string $ref
+     * @param ?list<mixed> $enum
+     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array, unsupported: bool, reason: ?string}
      */
-    private function empty(bool $nullable): array
+    private function pack(
+        ?string $type = null,
+        ?string $format = null,
+        bool $nullable = false,
+        ?string $ref = null,
+        ?array $items = null,
+        ?array $enum = null,
+    ): array {
+        return [
+            'type' => $type,
+            'format' => $format,
+            'nullable' => $nullable,
+            'ref' => $ref,
+            'items' => $items,
+            'enum' => $enum,
+            'unsupported' => false,
+            'reason' => null,
+        ];
+    }
+
+    /**
+     * Build an explicit unsupported mapping with a human-readable reason.
+     *
+     * @return array{type: ?string, format: ?string, nullable: bool, ref: ?class-string, items: ?array, enum: ?array, unsupported: bool, reason: ?string}
+     */
+    private function unsupported(string $reason, bool $nullable = false): array
     {
-        return ['type' => null, 'format' => null, 'nullable' => $nullable, 'ref' => null, 'items' => null, 'enum' => null];
+        return [
+            'type' => null,
+            'format' => null,
+            'nullable' => $nullable,
+            'ref' => null,
+            'items' => null,
+            'enum' => null,
+            'unsupported' => true,
+            'reason' => $reason,
+        ];
     }
 }

@@ -1,18 +1,27 @@
 <?php
 
 /**
- * M0 closure — operationId reconciliation generator (cross-repo DEV tool).
+ * M0 closure — operationId reconciliation generator (cross-repo DEV tool, rev. 2).
  *
  * Produces docs/metadata_compiler_audit/operation_id_reconciliation.tsv by cross-referencing:
- *   (R) the 377 route keys from docs/metadata_compiler_audit/route_inventory.txt (local snapshot of N)
+ *   (R) the 377 route keys from route_inventory.txt (local snapshot of N: .cache/compiled_routes.php)
  *   (S) ALL HTTP operations parsed from next/.cache/swagger/openapi.yml (Symfony YAML; read-only)
- *   (P) generated react-query functions from public_next/src/lk-openapi/react-query/endpoints (read-only)
+ *   (P) generated react-query client from public_next/.../react-query/endpoints (read-only)
+ *
+ * rev. 2 changes vs rev. 1 (driven by review):
+ *   - query/mutation keys are EXTRACTED from P (the get{Fn}QueryKey getter's returned array), never
+ *     fabricated as qk=fn. Operations without a key getter (mutations) get '-'.
+ *   - normalized-key collisions inside R / S / P are DETECTED and reported, not silently overwritten.
+ *   - route-only (R\S) and spec-only (S\R) operations are itemized for MANUAL classification
+ *     (exclude|add|stale); classification is applied from operation_id_classification.php.
+ *   - route-only ops are NOT fixed as bare method-name: the candidate id is the new convention
+ *     <ControllerShort><Method> with a uniqueness check; excluded ops are kept OUT of the lockfile.
+ *   - spec-only/stale ops are NOT auto-carried into the operationId lockfile.
  *
  * This script REFERENCES the sibling repos (N, P) by path; SpsFW's clean checkout does NOT depend on
  * them at runtime — only the committed TSV output is the artifact. Re-run after spec/client changes.
  *
  * Usage: php gen_operation_id_reconciliation.php [spec.yml] [route_inventory.txt] [P_endpoints_dir] [out.tsv]
- * Defaults point at the sibling repos on this host.
  */
 
 declare(strict_types=1);
@@ -21,16 +30,18 @@ require dirname(__DIR__, 2) . '/vendor/autoload.php';
 
 use Symfony\Component\Yaml\Yaml;
 
-$specPath = $argv[1] ?? '/home/tixlag/PhpstormProjects/lk.sps38.pro/next/.cache/swagger/openapi.yml';
+$specPath   = $argv[1] ?? '/home/tixlag/PhpstormProjects/lk.sps38.pro/next/.cache/swagger/openapi.yml';
 $routesPath = $argv[2] ?? __DIR__ . '/route_inventory.txt';
-$pDir = $argv[3] ?? '/home/tixlag/PhpstormProjects/lk.sps38.pro/public_next/src/lk-openapi/react-query/endpoints';
-$outPath = $argv[4] ?? __DIR__ . '/operation_id_reconciliation.tsv';
+$pDir       = $argv[3] ?? '/home/tixlag/PhpstormProjects/lk.sps38.pro/public_next/src/lk-openapi/react-query/endpoints';
+$outPath    = $argv[4] ?? __DIR__ . '/operation_id_reconciliation.tsv';
+$classPath  = __DIR__ . '/operation_id_classification.php';
+
+$HTTP = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
 
 /**
- * Normalize a path for cross-source matching: collapse path params to {} so that
- * param-NAME differences do not break the join. Required because swagger-php emits
- * snake_case path params ({code_1c}) while orval rewrites the generated url with
- * camelCase TS vars (${code1c}). Structure (param positions) is preserved.
+ * Normalize a path for cross-source matching: collapse path params to {} so param-NAME differences
+ * do not break the join. Required because swagger-php emits snake_case params ({code_1c}) while orval
+ * rewrites the generated url with camelCase TS vars (${code1c}). Param POSITIONS are preserved.
  */
 function normPath(string $p): string
 {
@@ -39,64 +50,121 @@ function normPath(string $p): string
     return $p;
 }
 
-/* ---------- (R) routes: METHOD:normpath -> [controller::method, origPath] ---------- */
-$routes = [];  // key -> ['ctrl'=>, 'path'=>]
+/** Controller short name for the <ControllerShort><Method> convention: strip namespace + 'Controller'. */
+function controllerShort(string $controllerMethod): string
+{
+    [$class] = explode('::', $controllerMethod, 2) + [1 => ''];
+    $short = substr($class, (strrpos($class, '\\') ?: -1) + 1);
+    if (str_ends_with($short, 'Controller')) {
+        $short = substr($short, 0, -strlen('Controller'));
+    }
+    return $short;
+}
+
+function methodName(string $controllerMethod): string
+{
+    $parts = explode('::', $controllerMethod, 2);
+    return $parts[1] ?? ($parts[0] ?? '-');
+}
+
+/**
+ * Load a key=>record map with collision detection.
+ * Returns [map, collisions] where collisions is a list of [key, firstOriginal, duplicateOriginal].
+ */
+function loadKeyed(array $entries, string $source): array
+{
+    $map = [];
+    $collisions = [];
+    foreach ($entries as [$key, $original, $record]) {
+        if (isset($map[$key])) {
+            $collisions[] = ['source' => $source, 'key' => $key, 'first' => $map[$key]['original'], 'dup' => $original];
+        } else {
+            $map[$key] = ['original' => $original, 'record' => $record];
+        }
+    }
+    return [$map, $collisions];
+}
+
+/* ---------- (R) routes: METHOD:normpath -> controller::method ---------- */
+$routeEntries = [];
 foreach (file($routesPath, FILE_IGNORE_NEW_LINES) as $line) {
     if ($line === '' || str_starts_with($line, '#')) {
         continue;
     }
     $c = explode("\t", $line);
-    if (count($c) >= 3 && in_array($c[0], ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'], true)) {
+    if (count($c) >= 3 && in_array($c[0], $HTTP, true)) {
         $key = $c[0] . ':' . normPath($c[1]);
-        $routes[$key] = ['ctrl' => $c[2], 'path' => $c[1]];
+        $routeEntries[] = [$key, $c[0] . ' ' . $c[1], ['ctrl' => $c[2], 'path' => $c[1]]];
     }
 }
+[$routes, $routeCollisions] = loadKeyed($routeEntries, 'R');
 
 /* ---------- (S) spec: parse ALL operations ---------- */
-$specOps = []; // METHOD:normpath -> ['opId'=>|null, 'path'=>orig]
 $spec = Yaml::parseFile($specPath);
+$specEntries = [];
 foreach ($spec['paths'] ?? [] as $path => $methods) {
     if (!is_array($methods)) {
         continue;
     }
     foreach ($methods as $method => $op) {
         $method = strtoupper($method);
-        if (!in_array($method, ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'], true)) {
+        if (!in_array($method, $HTTP, true)) {
             continue; // skip `parameters`, `summary`, etc.
         }
         $key = $method . ':' . normPath($path);
-        $specOps[$key] = [
-            'opId' => is_array($op) && array_key_exists('operationId', $op) ? $op['operationId'] : null,
-            'path' => $path,
-        ];
+        $opId = is_array($op) && array_key_exists('operationId', $op) ? $op['operationId'] : null;
+        $specEntries[] = [$key, $method . ' ' . $path, ['opId' => $opId, 'path' => $path]];
     }
 }
+[$specOps, $specCollisions] = loadKeyed($specEntries, 'S');
 
-/* ---------- (P) generated client: METHOD:normpath -> function name ---------- */
-$pFuncs = []; // key -> ['fn'=>, 'url'=>orig]
+/* ---------- (P) generated client: fn + REAL query key ---------- */
+$pEntries = [];
 foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($pDir)) as $f) {
-    if ($f->isFile() && $f->getExtension() === 'ts') {
-        $src = file_get_contents($f->getPathname());
-        // Split into export blocks; keep blocks that contain a mutatorInstance call.
-        $parts = preg_split('/^export const /m', $src);
-        foreach ($parts as $block) {
-            if (!str_contains($block, 'mutatorInstance')) {
-                continue;
-            }
-            if (!preg_match('/^(\w+)\s*=/', $block, $m)) {
-                continue;
-            }
-            $fn = $m[1];
-            if (!preg_match('/url:\s*`([^`]+)`/', $block, $u)) {
-                continue;
-            }
-            if (!preg_match("/method:\s*'([A-Z]+)'/", $block, $meth)) {
-                continue;
-            }
-            $key = $meth[1] . ':' . normPath($u[1]);
-            $pFuncs[$key] = ['fn' => $fn, 'url' => $u[1]];
+    if (!$f->isFile() || $f->getExtension() !== 'ts') {
+        continue;
+    }
+    $src = file_get_contents($f->getPathname());
+
+    // operation functions: blocks calling mutatorInstance -> fn, url, method
+    $blocks = preg_split('/^export const /m', $src);
+    $fnUrl = []; // fn -> [url, method]
+    foreach ($blocks as $block) {
+        if (!str_contains($block, 'mutatorInstance')) {
+            continue;
+        }
+        if (!preg_match('/^(\w+)\s*=/', $block, $m)) {
+            continue;
+        }
+        $fn = $m[1];
+        if (preg_match('/url:\s*`([^`]+)`/', $block, $u) && preg_match("/method:\s*'([A-Z]+)'/", $block, $meth)) {
+            $fnUrl[$fn] = [$u[1], $meth[1]];
         }
     }
+
+    // query key getters: get{X}QueryKey = ... => { return [ "keyName", ... ] as const; }
+    // The key name is the first string literal of the returned array.
+    $keyByName = []; // getterName -> key content
+    if (preg_match_all('/export const (get\w+QueryKey)\b.*?return\s*\[\s*"([^"]+)"/s', $src, $gm, PREG_SET_ORDER)) {
+        foreach ($gm as $g) {
+            $keyByName[$g[1]] = $g[2];
+        }
+    }
+
+    foreach ($fnUrl as $fn => [$url, $method]) {
+        $key = $method . ':' . normPath($url);
+        $getter = 'get' . ucfirst($fn) . 'QueryKey';
+        $qk = $keyByName[$getter] ?? null; // null => no key getter (mutation)
+        $pEntries[] = [$key, $method . ' ' . $url, ['fn' => $fn, 'url' => $url, 'qk' => $qk]];
+    }
+}
+[$pFuncs, $pCollisions] = loadKeyed($pEntries, 'P');
+
+/* ---------- manual classification for the 32 route-only + 2 spec-only gaps ---------- */
+/** @var array<string, array{resolution: string, reason: string}> $classification */
+$classification = [];
+if (is_file($classPath)) {
+    $classification = require $classPath;
 }
 
 /* ---------- union + per-row classification ---------- */
@@ -108,96 +176,151 @@ $counts = [
     'routes_total' => count($routes),
     'spec_paths' => count($spec['paths'] ?? []),
     'spec_ops' => count($specOps),
-    'routes_in_spec' => 0,        // R ∩ S
-    'routes_absent_in_spec' => 0, // R \ S
-    'spec_absent_in_routes' => 0, // S \ R
+    'routes_in_spec' => 0,
+    'route_only' => 0,
+    'spec_only' => 0,
     'explicit' => 0,
     'method_fallback' => 0,
-    'spec_only' => 0,
-    'missing' => 0,
     'in_p_client' => 0,
-    'spec_in_p' => 0,             // S ∩ P
-    'spec_not_in_p' => 0,         // S \ P
-    'p_not_in_spec' => 0,         // P \ S
+    'has_query_key' => 0,
+    'qk_equals_fn' => 0,
+    'qk_differs_fn' => 0,
+    'spec_in_p' => 0,
+    'spec_not_in_p' => 0,
+    'p_not_in_spec' => 0,
     'explicit_fn_matches_opid' => 0,
     'explicit_fn_mismatch' => 0,
+    'lockfile_in' => 0,
+    'lockfile_out' => 0,
+    'route_only_add' => 0,
+    'route_only_exclude' => 0,
+    'route_only_stale' => 0,
 ];
+
+// new-convention uniqueness check across route-only ADD candidates
+$proposedIds = [];
+$proposedCollisions = [];
 
 foreach ($allKeys as $key) {
     [$method] = explode(':', $key, 2);
-    $inSpec = array_key_exists($key, $specOps);
-    $inRoute = array_key_exists($key, $routes);
-    $inP = array_key_exists($key, $pFuncs);
+    $inSpec = isset($specOps[$key]);
+    $inRoute = isset($routes[$key]);
+    $inP = isset($pFuncs[$key]);
 
-    // Display path: prefer route (source of truth), then spec, then P url (originals, not normalized).
-    $path = $inRoute ? $routes[$key]['path'] : ($inSpec ? $specOps[$key]['path'] : ($inP ? $pFuncs[$key]['url'] : '-'));
-    $ctrl = $inRoute ? $routes[$key]['ctrl'] : '-';
-    $opId = ($inSpec && $specOps[$key]['opId'] !== null) ? $specOps[$key]['opId'] : '-';
-    $hasOpId = $inSpec && $specOps[$key]['opId'] !== null;
-    $fn = $inP ? $pFuncs[$key]['fn'] : '-';
-    $qk = $fn; // generated_query_key == generated_function under useOperationIdAsQueryKey (see finding)
+    $path  = $inRoute ? $routes[$key]['record']['path'] : ($inSpec ? $specOps[$key]['record']['path'] : ($inP ? $pFuncs[$key]['record']['url'] : '-'));
+    $ctrl  = $inRoute ? $routes[$key]['record']['ctrl'] : '-';
+    $opId  = ($inSpec && $specOps[$key]['record']['opId'] !== null) ? $specOps[$key]['record']['opId'] : '-';
+    $hasOpId = $inSpec && $specOps[$key]['record']['opId'] !== null;
+    $fn    = $inP ? $pFuncs[$key]['record']['fn'] : '-';
+    $qk    = ($inP && $pFuncs[$key]['record']['qk'] !== null) ? $pFuncs[$key]['record']['qk'] : '-';
+    $mName = $inRoute ? methodName($ctrl) : '-';
 
-    if ($inSpec && $inRoute) {
-        $counts['routes_in_spec']++;
+    if ($inSpec && $inRoute) { $counts['routes_in_spec']++; }
+    if ($inRoute && !$inSpec) { $counts['route_only']++; }
+    if ($inSpec && !$inRoute) { $counts['spec_only']++; }
+    if ($inP) { $counts['in_p_client']++; }
+    if ($inP && $pFuncs[$key]['record']['qk'] !== null) {
+        $counts['has_query_key']++;
+        if ($pFuncs[$key]['record']['qk'] === $fn) { $counts['qk_equals_fn']++; } else { $counts['qk_differs_fn']++; }
     }
-    if ($inRoute && !$inSpec) {
-        $counts['routes_absent_in_spec']++;
-    }
-    if ($inSpec && !$inRoute) {
-        $counts['spec_absent_in_routes']++;
-    }
+    if ($inSpec && $inP) { $counts['spec_in_p']++; }
+    if ($inSpec && !$inP) { $counts['spec_not_in_p']++; }
+    if (!$inSpec && $inP) { $counts['p_not_in_spec']++; }
 
-    // id_source + canonical
-    $methodName = $inRoute ? (strpos($routes[$key]['ctrl'], '::') !== false ? explode('::', $routes[$key]['ctrl'])[1] : $routes[$key]['ctrl']) : '-';
-    if ($hasOpId) {
-        $idSource = 'explicit';
-        $canonical = $specOps[$key]['opId'];
-        $counts['explicit']++;
-        if ($inP) {
-            if ($fn === $specOps[$key]['opId']) {
-                $counts['explicit_fn_matches_opid']++;
-            } else {
-                $counts['explicit_fn_mismatch']++;
+    // id_source / canonical / lockfile / proposed_new_id / classification
+    // Membership-first: a spec-only op is an orphan even when it carries an explicit operationId,
+    // so it is classified spec-only (not carried into the lockfile) rather than hidden as 'explicit'.
+    $idSource = '-';
+    $canonical = '-';
+    $proposedNew = '-';
+    $lockfile = 'out';
+    $classificationLabel = $classification[$key] ?? null;
+
+    if ($inRoute && $inSpec) {
+        // documented route
+        if ($hasOpId) {
+            $idSource = 'explicit';
+            $canonical = $specOps[$key]['record']['opId'];
+            $counts['explicit']++;
+            if ($inP) {
+                if ($fn === $canonical) { $counts['explicit_fn_matches_opid']++; } else { $counts['explicit_fn_mismatch']++; }
             }
+        } else {
+            $idSource = 'method-fallback';
+            $canonical = $mName; // plan §19: existing op without explicit id keeps method-name fallback
+            $counts['method_fallback']++;
         }
-    } elseif ($inSpec && $inRoute) {
-        $idSource = 'method-fallback';
-        $canonical = $methodName;
-        $counts['method_fallback']++;
-    } elseif ($inSpec) { // in spec, no route
+        $lockfile = 'in';
+    } elseif ($inRoute && !$inSpec) {
+        // route-only: candidate id is the NEW convention <ControllerShort><Method>, not bare method-name
+        $idSource = 'route-only';
+        $proposedNew = controllerShort($ctrl) . ucfirst($mName);
+        $res = $classificationLabel['resolution'] ?? 'exclude';
+        $lockfile = $res === 'add' ? 'in' : 'out';
+        $canonical = $res === 'add' ? $proposedNew : '-';
+        if ($res === 'add') {
+            $counts['route_only_add']++;
+            if (isset($proposedIds[$proposedNew])) {
+                $proposedCollisions[] = ['id' => $proposedNew, 'first' => $proposedIds[$proposedNew], 'dup' => $key];
+            } else {
+                $proposedIds[$proposedNew] = $key;
+            }
+        } elseif ($res === 'stale') {
+            $counts['route_only_stale']++;
+        } else {
+            $counts['route_only_exclude']++;
+        }
+    } else {
+        // in spec / client but NOT in routes -> orphan/stale; an explicit opId here is still an orphan
+        // and must NOT be carried into the operationId lockfile.
         $idSource = 'spec-only';
         $canonical = '-';
-        $counts['spec_only']++;
-    } else { // in route, not in spec (no operation to derive an id from)
-        $idSource = 'missing';
-        $canonical = $methodName; // proposed M9 fallback to method name
-        $counts['missing']++;
+        $lockfile = 'out';
     }
 
-    if ($inP) {
-        $counts['in_p_client']++;
-    }
-    if ($inSpec && $inP) {
-        $counts['spec_in_p']++;
-    }
-    if ($inSpec && !$inP) {
-        $counts['spec_not_in_p']++;
-    }
-    if (!$inSpec && $inP) {
-        $counts['p_not_in_spec']++;
-    }
+    if ($lockfile === 'in') { $counts['lockfile_in']++; } else { $counts['lockfile_out']++; }
+    $cls = $classificationLabel ? ($classificationLabel['resolution'] . ': ' . $classificationLabel['reason']) : '-';
 
-    $rows[] = [$method, $path, $ctrl, $inSpec ? 'Y' : 'N', $opId, $idSource, $fn, $qk, $canonical];
+    $rows[] = [$method, $path, $ctrl, $inSpec ? 'Y' : 'N', $opId, $idSource, $fn, $qk, $proposedNew, $canonical, $lockfile, $cls];
+}
+
+/* ---------- global canonical-id uniqueness (these become M9 client names) ---------- */
+$canonicalSeen = [];
+$canonicalCollisions = [];
+foreach ($rows as $r) {
+    if ($r[10] !== 'in' || $r[9] === '-' || $r[9] === '') {
+        continue;
+    }
+    $cid = $r[9];
+    if (isset($canonicalSeen[$cid])) {
+        $canonicalCollisions[] = ['id' => $cid, 'first' => $canonicalSeen[$cid], 'dup' => $r[0] . ' ' . $r[1]];
+    } else {
+        $canonicalSeen[$cid] = $r[0] . ' ' . $r[1];
+    }
 }
 
 /* ---------- write TSV ---------- */
+$allCollisions = array_merge($routeCollisions, $specCollisions, $pCollisions);
 $fp = fopen($outPath, 'w');
-fwrite($fp, "# operationId reconciliation — generated by gen_operation_id_reconciliation.php\n");
-fwrite($fp, "# sources: R=route_inventory.txt (local snapshot of N)  S=next/.cache/swagger/openapi.yml  P=public_next/.../endpoints\n");
+fwrite($fp, "# operationId reconciliation (rev. 2) — generated by gen_operation_id_reconciliation.php\n");
+fwrite($fp, "# sources: R=route_inventory.txt  S=next/.cache/swagger/openapi.yml  P=public_next/.../endpoints\n");
+fwrite($fp, "# query_key is EXTRACTED from P's get{Fn}QueryKey getter (mutations have none -> -)\n");
 foreach ($counts as $k => $v) {
     fwrite($fp, "# count.$k=$v\n");
 }
-fwrite($fp, "METHOD\tpath\tcontroller::method\tpresent_in_legacy_spec\tlegacy_operation_id\tid_source\tgenerated_function\tgenerated_query_key\tcanonical_id\n");
+fwrite($fp, "# collisions_detected=" . count($allCollisions) . "\n");
+foreach ($allCollisions as $c) {
+    fwrite($fp, "# collision {$c['source']} {$c['key']} :: first={$c['first']} dup={$c['dup']}\n");
+}
+fwrite($fp, "# proposed_id_collisions=" . count($proposedCollisions) . "\n");
+foreach ($proposedCollisions as $c) {
+    fwrite($fp, "# proposed-collision {$c['id']} :: first={$c['first']} dup={$c['dup']}\n");
+}
+fwrite($fp, "# canonical_collisions=" . count($canonicalCollisions) . "\n");
+foreach ($canonicalCollisions as $c) {
+    fwrite($fp, "# canonical-collision {$c['id']} :: first={$c['first']} dup={$c['dup']}\n");
+}
+fwrite($fp, "METHOD\tpath\tcontroller::method\tin_spec\tlegacy_op_id\tid_source\tgenerated_function\tquery_key\tproposed_new_id\tcanonical_id\tlockfile\tclassification\n");
 foreach ($rows as $r) {
     fwrite($fp, implode("\t", $r) . "\n");
 }
@@ -205,8 +328,25 @@ fclose($fp);
 
 /* ---------- stdout summary ---------- */
 echo "routes_total={$counts['routes_total']} spec_paths={$counts['spec_paths']} spec_ops={$counts['spec_ops']}\n";
-echo "R∩S={$counts['routes_in_spec']}  R\\S={$counts['routes_absent_in_spec']}  S\\R={$counts['spec_absent_in_routes']}\n";
-echo "explicit={$counts['explicit']} method-fallback={$counts['method_fallback']} spec-only={$counts['spec_only']} missing={$counts['missing']}\n";
-echo "S∩P={$counts['spec_in_p']} S\\P={$counts['spec_not_in_p']} P\\S={$counts['p_not_in_spec']} (generated functions={$counts['in_p_client']})\n";
+echo "R∩S={$counts['routes_in_spec']}  route-only(R\\S)={$counts['route_only']}  spec-only(S\\R)={$counts['spec_only']}\n";
+echo "explicit={$counts['explicit']} method-fallback={$counts['method_fallback']} route-only={$counts['route_only']} spec-only={$counts['spec_only']}\n";
+echo "P: total={$counts['in_p_client']} with_query_key={$counts['has_query_key']} (qk==fn={$counts['qk_equals_fn']}, qk!=fn={$counts['qk_differs_fn']})\n";
+echo "S∩P={$counts['spec_in_p']} S\\P={$counts['spec_not_in_p']} P\\S={$counts['p_not_in_spec']}\n";
 echo "explicit-id ops: fn==opId={$counts['explicit_fn_matches_opid']} fn!=opId={$counts['explicit_fn_mismatch']}\n";
+echo "lockfile: in={$counts['lockfile_in']} out={$counts['lockfile_out']} (route-only add={$counts['route_only_add']} exclude={$counts['route_only_exclude']} stale={$counts['route_only_stale']})\n";
+echo "collisions: R=" . count($routeCollisions) . " S=" . count($specCollisions) . " P=" . count($pCollisions) . " proposed_id=" . count($proposedCollisions) . " canonical=" . count($canonicalCollisions) . "\n";
 echo "rows=" . count($rows) . " written to $outPath\n";
+
+/* ---------- gap detail (for manual classification) ---------- */
+echo "\n=== ROUTE-ONLY (R\\S) — " . $counts['route_only'] . " ops ===\n";
+foreach ($rows as $r) {
+    if ($r[5] === 'route-only') {
+        echo "  {$r[0]} {$r[1]}  |  {$r[2]}  |  proposed={$r[8]}\n";
+    }
+}
+echo "\n=== SPEC-ONLY (S\\R) — " . $counts['spec_only'] . " ops ===\n";
+foreach ($rows as $r) {
+    if ($r[5] === 'spec-only') {
+        echo "  {$r[0]} {$r[1]}  |  opId={$r[4]}  |  fn={$r[6]} qk={$r[7]}\n";
+    }
+}

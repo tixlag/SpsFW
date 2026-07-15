@@ -30,7 +30,7 @@ final readonly class ApplicationContext
      * @param string $cachePath
      * @param list<string> $discoveryPaths
      * @param array<string, mixed> $configInputs
-     * @param string $mode one of ApplicationContext::MODE_*
+     * @param string $mode one of ApplicationContext::MODE_* (legacy|managed)
      */
     public function __construct(
         public string $projectRoot,
@@ -39,5 +39,13 @@ final readonly class ApplicationContext
         public array $configInputs = [],
         public string $mode = self::MODE_LEGACY,
     ) {
+        if ($mode !== self::MODE_LEGACY && $mode !== self::MODE_MANAGED) {
+            throw new \InvalidArgumentException(sprintf(
+                'Unknown ApplicationContext mode %s; allowed values: "%s", "%s".',
+                $mode,
+                self::MODE_LEGACY,
+                self::MODE_MANAGED,
+            ));
+        }
     }
 }

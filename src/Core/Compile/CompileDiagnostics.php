@@ -24,15 +24,15 @@ final class CompileDiagnostics
     private array $errors = [];
 
     /**
-     * Record a compile error. Argument order follows the canonical signature
-     * (controller, method, dto, field, cause, fix); all but `cause` are optional.
+     * Record a compile error. Argument order is the fixed plan contract
+     * error(controller, method, dto, field, cause, fix); only `cause` is required.
      */
     public function error(
+        ?string $controller,
+        ?string $method,
+        ?string $dto,
+        ?string $field,
         string $cause,
-        ?string $controller = null,
-        ?string $method = null,
-        ?string $dto = null,
-        ?string $field = null,
         ?string $fix = null,
     ): void {
         $this->errors[] = [
