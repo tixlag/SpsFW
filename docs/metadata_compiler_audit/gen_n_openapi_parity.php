@@ -41,6 +41,7 @@ use SpsFW\Core\Compile\OpenApi\OpenApiValidator;
 use SpsFW\Core\Compile\OpenApi\ParityReport;
 use SpsFW\Core\Compile\Route\RouteMetadataCompiler;
 use SpsFW\Core\Router\PathManager;
+use Symfony\Component\Yaml\Yaml;
 
 $spsfwRoot = dirname(__DIR__, 2);
 $nextRoot = dirname($spsfwRoot) . '/lk.sps38.pro/next';
@@ -123,11 +124,13 @@ $validDiag = new CompileDiagnostics();
 (new OpenApiValidator($validDiag))->validate($doc);
 
 // Publication gate (plan Шаг 4 severity contract): the secondary file is published ONLY when there are no
-// structural errors. throwOnErrors() enforces that in strict/managed (it throws). In parity-probe mode we honor
-// the SAME gate — errors block the artifact — but still print the in-memory preview (section D), so we gate on
-// hasErrors() rather than letting throwOnErrors() terminate the measurement.
+// structural errors, aggregated across EVERY stage that can produce them — operation projection (opDiag),
+// emission (emitDiag) AND structural validation (validDiag). throwOnErrors() enforces that in strict/managed
+// (it throws). In parity-probe mode we honor the SAME gate — errors block the artifact — but still print the
+// in-memory preview (section D), so we gate on hasErrors() rather than letting throwOnErrors() terminate the
+// measurement.
 $generatedPath = $nextRoot . '/.cache/swagger/openapi.generated.yml';
-$publishable = !$emitDiag->hasErrors() && !$validDiag->hasErrors();
+$publishable = !$opDiag->hasErrors() && !$emitDiag->hasErrors() && !$validDiag->hasErrors();
 
 echo "=== C. Secondary OpenAPI emission (PARITY mode) ===\n";
 echo "Discovery dirs: " . implode(', ', $dirs) . "\n";
@@ -174,9 +177,13 @@ echo "Operation-projection structural errors:         $opErrors\n";
 echo "=> strict/managed would call throwOnErrorsAndWarnings() and HALT on $opWarnings warning(s) + $opErrors error(s)\n";
 
 // ============================================================================
-// D. Normalized parity vs legacy swagger-php openapi.yml (in-memory — always produced, even when unpublished).
+// D. Normalized parity vs legacy swagger-php openapi.yml. Parity is measured AFTER a dump→parse round-trip
+//    (Yaml::parse($emitter->dump($doc))), NOT against the in-memory array: what we compare is exactly what
+//    would be PUBLISHED — any value that survives in memory but not through YAML serialization surfaces here.
+//    The comparison is always produced, even when publication is blocked.
 // ============================================================================
-$result = $report->compare($doc, $legacy);
+$roundTripped = Yaml::parse($emitter->dump($doc));
+$result = $report->compare($roundTripped, $legacy);
 
 echo "\n=== D. Normalized parity (generated vs legacy swagger-php openapi.yml) ===\n";
 echo "Generated — paths:{$result['generated']['paths']} schemas:{$result['generated']['schemas']} operations:{$result['generated']['operations']}\n";

@@ -385,6 +385,13 @@ lockfile), preserved/convention-распределение честное. Вс�
 
 ### 4.11 Secondary OpenAPI emitter + normalized parity на реальном N (Step 4 / M3, dev-only probe)
 
+> **Rev. 3 (Step 5 doc-fix).** Два методологических уточнения измерения baseline (двигают числа, но не
+> структурное состояние N): (а) **parity сравнивается после round-trip `dump → parse`**, а не напрямую с
+> in-memory массивом — т.е. ровно с тем, что было бы опубликовано (значения, выживающие только в памяти,
+> теперь видны); (б) **publication gate агрегирует opDiag + emitDiag + validatorDiag** (раньше probe проверял
+> только последние два). Повторные прогоны детерминированы. Прежние числа (rev. 2: 4986 divergences) **не
+> сохранены искусственно** — см. ниже.
+>
 > **Rev. 2 (Step 4 correctness fix-pass).** Пересчитано после focused-фикспасса: убран повторный `emit()` из
 > публикации (array-first `dump()`/`writeFile(array)`), введён `SchemaNameResolver` (FQCN⇒name registry
 > внутренняя — `x-fqcn` больше НЕ публикуется), nullability канонизируется в 3.1-union (а не удаляется),
@@ -405,20 +412,20 @@ normalization: рекурсивный ksort, strip `x-fqcn`, **CANONICALIZE `nul
 любого пустого контейнера внутри security-поддерева (`bearerAuth: []` scopes); сравнение массив-к-массиву,
 НИКОГДА по сырой текст/whitespace.
 
-**C. Secondary emission (PARITY-режим):** `OpenApiEmitter::emit(385 ops)` → array; затем структурная
+**C. Secondary emission (PARITY-режим):** `OpenApiEmitter::emit(387 ops)` → array; затем структурная
 валидация массива `OpenApiValidator::validate($doc)` (refs resolve / каждая op имеет responses / валидные
 HTTP-methods / security-schemes существуют — YAML round-trip сам по себе недостаточен). Эмиттер и валидатор
 пишут диагностики, но НЕ бросают; публикация gated `throwOnErrors()`-семантикой вызывающего.
 
 | Метрика | Значение |
 |---|---|
-| Raw operations (из §4.10) | 385 |
-| Effective paths emitted | **331** (378 METHOD:path-операций, collapse last-wins) |
-| Component schemas emitted | **149** |
+| Raw operations (из §4.10) | 387 |
+| Effective paths emitted | **333** (METHOD:path-операции, collapse last-wins) |
+| Component schemas emitted | **151** |
 | Emission — fatal (ERROR) | **15**: 14 duplicate METHOD:path (last-wins, зеркалит Router) + **1 schema-name collision** |
 | Emission — warning | 1 |
 | Structural validation findings (`OpenApiValidator`) | **0** (все `$ref` резолвятся, каждая op имеет responses) |
-| Operation-projection migration gaps (WARNING) | **391** (374 из §4.10 реклассифицированы error→warning + collection-without-schema) |
+| Operation-projection migration gaps (WARNING) | **393** |
 | Operation-projection structural errors | **0** |
 | **Secondary-файл опубликован?** | **НЕТ** — blocked 15 структурными error(s) (in-memory preview только для отчёта) |
 
@@ -443,24 +450,26 @@ shadowed-роуты (Router молча перетирал); emitter делает
 **Bug найден и исправлен на N (Phase 1):** swagger-php `Generator::UNDEFINED` sentinel протекал через
 OA items-fallback → `ReflectionException`; закрыт `DtoSchemaBuilder::isOaDefault()` + regression-тест.
 
-**D. Normalized parity vs legacy swagger-php `openapi.yml`:**
+**D. Normalized parity vs legacy swagger-php `openapi.yml`** (generated прогнан через round-trip
+`Yaml::parse($emitter->dump($doc))` — сравнивается ровно то, что было бы опубликовано; in-memory preview —
+только для отчёта, в сравнение не идёт):
 
 | Метрика | Generated | Legacy |
 |---|---|---|
-| Paths | 331 | 300 |
-| Schemas | 149 | 338 |
-| Operations | 378 | 347 |
-| Paths only-in-generated / only-in-legacy | 33 / 2 | |
-| Schemas only-in-generated / only-in-legacy | 4 / **193** | |
-| **Total normalized divergences** | **4986** | |
+| Paths | 333 | 300 |
+| Schemas | 151 | 338 |
+| Operations | 380 | 347 |
+| Paths only-in-generated / only-in-legacy | 35 / 2 | |
+| Schemas only-in-generated / only-in-legacy | 6 / **193** | |
+| **Total normalized divergences** | **5002** | |
 
-По категориям: **2569** missing-in-generated, **955** value-mismatch, **1462** extra-in-generated.
+По категориям: **2568** missing-in-generated, **956** value-mismatch, **1478** extra-in-generated.
 
-Рост 4737 → 4986 (+249) относительно rev. 1 — **ожидаемый и корректный**: nullability теперь
-канонилизируется в 3.1-union на обеих сторонах вместо удаления, поэтому реальные контрактные разницы
-nullability (nullable на одной стороне, не на другой; `type:["array","null"]` (gen) vs `type:"array"` (legacy))
-теперь видны как divergences — прежде они скрывались drop'ом `nullable` (дефект fixpass-а). preservation
-`security: []` / scopes тоже точнее. 4986 — **актуальный baseline M3** (цель zero-divergence — M7/M8/M9).
+**Baseline M3 = 5002 divergences / 15 structural fatals / secondary-публикация blocked** (цель
+zero-divergence — M7/M8/M9; 15 ERROR устраняются перед Step 6b). Дрейф относительно rev. 2 (4986) — **чисто
+методологический**, без изменения структурного состояния N: (а) round-trip `dump → parse` теперь честно ловит
+значения, выживающие только в памяти; (б) N — живое рабочее дерево, в котором за это время прибавились
+операции (385 → 387 ops, 331 → 333 paths, 149 → 151 schemas). Повторные прогоны детерминированы.
 Доминирующие root-causes (сэмпл + анализ):
 
 | Root-cause | Доля / пример | Когда закрывается |
@@ -479,15 +488,63 @@ nullability (nullable на одной стороне, не на другой; `t
 `Router::extractValidationRules` (Router.php:421–481) — **фактически мёртвый код на N**. Schema-projection
 корректно их исключает (они не `json_serialize`'ются); расхождений этого класса нет.
 
-**Вывод §4.11:** secondary emitter работает на полном инвентаре N (385 ops → 331 paths / 149 schemas);
+**Вывод §4.11:** secondary emitter работает на полном инвентаре N (387 ops → 333 paths / 151 schemas);
 array-first контракт (`emit()` один раз → `dump()`/`writeFile()` + структурная `OpenApiValidator`) даёт
 идемпотентные/дедуплицированные диагностики и gate публикации (`throwOnErrors()`-семантика: 15 структурных
 error блокируют запись secondary-файла, in-memory preview разрешён). `x-fqcn` не публикуется (registry
 внутренняя), nullability — 3.1-union, `security: []` сохранена, 403 — по эффективному runtime-access.
-parity-report (4986 normalized divergences) — **актуальный baseline/фронт миграции M7–M9**, разложенный по
-root-causes. Режимная семантика (parity tolerate warnings / strict-managed halt / structural-error blocks
-publish) подтверждена на реальных числах. `composer test` зелёный (27/27); чистый checkout F от N не зависит
-(probe — dev-only артефакт, числа зафиксированы в §4.11).
+**baseline M3 = 5002 normalized divergences** (после round-trip `dump → parse`), **15 структурных fatals**,
+secondary-публикация **blocked** — актуальный фронт миграции M7–M9, разложенный по root-causes. Режимная
+семантика (parity tolerate warnings / strict-managed halt / structural-error blocks publish) подтверждена на
+реальных числах. `composer test` зелёный (27/27); чистый checkout F от N не зависит (probe — dev-only
+артефакт, числа зафиксированы в §4.11).
+
+### 4.12 Coordinator dry-run на реальном N (Step 5 / M4, dev-only probe)
+
+**Probe:** `docs/metadata_compiler_audit/gen_n_coordinator_dryrun.php`. Драйвит production-`Coordinator`
+end-to-end на реальном дереве контроллеров N в **read-only / dry-run** (managed + parity), с DI-привязками,
+засеянными из `next/config/di_config.php` (как `preload.php:67-68`, минус DB-сторону `Config::init()` —
+`getDIBinding()` читает статический map напрямую). Классовый classmap N оптимизирован и указывает на vendored
+копию, поэтому probe переопределяет classmap для каждого локального `src`-класса (`addClassMap`), иначе stale
+vendored `DICacheBuilder` выигрывал бы у рабочей ветки.
+
+**Контракт probe — подтверждён (PASS):** `published=false`, `reason='dry-run'`, текущие N `.cache`-артефакты
+(`compiled_routes.php`, `compiled_di.php`, `job_registry.php`, `swagger/openapi.yml`, secondary
+`openapi.generated.yml`) **не изменены** (md5 до === после). Публикация **заблокирована** структурными ERROR'ами;
+ни один ERROR не понижен до warning ради прохождения.
+
+**Счётчик:** Coordinator агрегирует диагностики route-compiler + OpenAPI-emitter + operationId-resolver, и каждая
+сталкивающаяся операция даёт свою запись → **37 сырых ERROR-записей**. §4.11 baseline «15» (14 записей
+duplicate-route-key + 1 collision) — это **подмножество** этих 37 (route-compiler duplicate-key + CreateNewsDto);
+Coordinator дополнительно поднимает 14 emitter duplicate-operation записей и 8 operationId-collision записей.
+Surface строго шире; блокировка публикации — та же и подтверждена сильнее.
+
+**Точный список структурных проблем → обязательное устранение перед Step 6b** (12 distinct):
+
+*Duplicate `METHOD:path` route keys (7)* — сегодня молча перетираются в route-cache:
+1. `POST:/api/auth/refresh-tokens` — `SpsFW\Core\Auth\AuthController::refreshTokens` ↔ `SpsNext\Auth\AuthController::refreshTokens`
+2. `POST:/api/auth/register` — Core `AuthController::register` ↔ Next `AuthController::register`
+3. `POST:/api/auth/login` — Core ↔ Next `AuthController::login`
+4. `POST:/api/auth/logout` — Core ↔ Next `AuthController::logout`
+5. `PATCH:/api/auth/add-access-rules` — `SpsFW\Core\Auth\AccessRule\AccessRuleController::addAccessRules` ↔ `SpsNext\Auth\AuthController::addAccessRules`
+6. `POST:/api/auth/set-access-rules` — Core `AccessRuleController::setAccessRules` ↔ Next `AuthController::setAccessRules`
+7. `GET:/api/employees/documents/code-1c/{code_1c}` — **внутри одного контроллера**: `EmployeeDocumentsController::getDocumentsByUserCode1C` ↔ `::getImportantDocumentsByUserCode1C` (два метода, один path)
+
+> Пункты 1-6 — паттерн Core↔Next override (Next-контроллер должен ЗАМЕЩАТЬ Core, но оба discovered). Пункт 7 —
+> подлинный дефект N (два метода на одном GET-path). Оба класса конфликтов сегодня теряются в lazy route-cache.
+
+*operationId collisions (4)* — следствие пунктов 1-4 (Core и Next `AuthController` дают одинаковый short-name
+operationId): `AuthLogin`, `AuthLogout`, `AuthRegister`, `AuthRefreshTokens`. Пункты 5-6 operationId-коллизии не
+дают (разные short-name контроллеров: `AccessRuleController` vs `AuthController`).
+
+*Schema-name collision (1):* `components.schemas.CreateNewsDto` ← `SpsNext\LK\News\DTOs\CreateNewsDto` и
+`SpsNext\News\Dto\CreateNewsDto` (два DTO-класса маппятся в одно component-имя по short name).
+
+**Вывод §4.12:** Coordinator на реальном N ведёт себя точно по Step-5-контракту — единый flow, агрегированные
+диагностики, ERROR блокирует публикацию во ВСЕХ режимах, dry-run не трогает prod-кеш. **Текущий N нельзя
+переводить в managed production, пока существуют 12 distinct структурных проблем (37 записей) выше** — это
+worklist для Step 6b (переопределение/исключение Core↔Next auth overrides, починка intra-controller path-коллизии
+`EmployeeDocumentsController`, разрешение `CreateNewsDto` schema-name collision). Шаг 6 не начат.
 ---
 
 ## 5. Deploy / Docker / cache-volume audit
