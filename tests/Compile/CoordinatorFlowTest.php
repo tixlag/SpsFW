@@ -71,7 +71,8 @@ assert_same(0, $result->warningCount, 'clean build: no warnings');
 assert_true(is_file($cache . '/compiled_routes.php'), 'clean build: route cache published');
 assert_true(is_file($cache . '/compiled_di.php'), 'clean build: DI map published');
 assert_true(is_file($cache . '/job_registry.php'), 'clean build: job registry published');
-assert_true(is_file($cache . '/swagger/openapi.generated.yml'), 'clean build: secondary openapi published');
+assert_true(is_file($cache . '/swagger/openapi.yml'), 'clean build: PRIMARY openapi (legacy parity) published — the spec Orval reads');
+assert_true(is_file($cache . '/swagger/openapi.generated.yml'), 'clean build: SECONDARY openapi (graph emitter) published');
 assert_true(is_file($cache . '/.compile_manifest.php'), 'clean build: manifest published');
 assert_same($cache . '/.compile_manifest.php', $result->manifestPath, 'clean build: manifest path reported');
 assert_true(!is_dir($cache . '/.staging-compile'), 'clean build: staging dir cleaned up');
@@ -88,7 +89,7 @@ $manifest = require($cache . '/.compile_manifest.php');
 assert_same(Fingerprinter::COMPILER_VERSION, $manifest['compiler_version'], 'clean build: compiler version recorded');
 assert_same($result->fingerprint, $manifest['fingerprint'], 'clean build: manifest fingerprint matches the result');
 assert_true(array_key_exists('built_at', $manifest), 'clean build: built_at recorded in manifest');
-foreach (['compiled_routes.php', 'compiled_di.php', 'job_registry.php', 'swagger/openapi.generated.yml'] as $rel) {
+foreach (['compiled_routes.php', 'compiled_di.php', 'job_registry.php', 'swagger/openapi.yml', 'swagger/openapi.generated.yml'] as $rel) {
     assert_true(array_key_exists($rel, $manifest['artifact_hashes']), "clean build: manifest hashes $rel");
     assert_same(md5_file($cache . '/' . $rel), $manifest['artifact_hashes'][$rel], "clean build: manifest hash of $rel matches the published file");
 }

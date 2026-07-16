@@ -11,6 +11,7 @@ use SpsFW\Core\Compile\Publication\Fingerprinter;
 use SpsFW\Core\Compile\Publication\StagingPublisher;
 use SpsFW\Core\Compile\Route\RouteCacheEmitter;
 use SpsFW\Core\Compile\Route\RouteMetadataCompiler;
+use SpsFW\Core\DocsUtil;
 use SpsFW\Core\Router\ClassScanner;
 use SpsFW\Core\Router\DICacheBuilder;
 
@@ -111,6 +112,14 @@ final class Coordinator
                 $ctx->routeOverrideMap,
             );
 
+            // ---- PRIMARY OpenAPI parity producer (plan §11.2, Step 6b #5). Until M6 the spec Orval reads is the
+            //      legacy swagger-php .cache/swagger/openapi.yml, NOT the new emitter's openapi.generated.yml. So the
+            //      Coordinator keeps the PRIMARY spec fresh by building the SAME legacy document here (DocsUtil's
+            //      generator + scan set), staged for publication alongside the secondary emitter output. It does NOT
+            //      call DocsUtil::updateDocs() (gated in managed, and it writes the live cache directly, bypassing
+            //      staging); the PRIMARY spec must never be left stale.
+            $legacyOpenApiYaml = DocsUtil::produceLegacyOpenApiYaml($ctx->discoveryPaths);
+
             // ---- Publication gate: ERROR always blocks; a WARNING blocks only under the strict policy.
             $errors = $this->diagnostics->hasErrors();
             $warnings = $this->diagnostics->hasWarnings();
@@ -125,7 +134,7 @@ final class Coordinator
                 return CompileResult::notPublished(false, $this->diagnostics->errorCount(), $this->diagnostics->warningCount(), $fingerprint, $reason, $overrides);
             }
 
-            return $this->stageAndPublish($ctx, $fingerprinter, $fingerprint, $emitter, $document, $di, $routes, $overrides, $publishFaultHook);
+            return $this->stageAndPublish($ctx, $fingerprinter, $fingerprint, $emitter, $document, $di, $routes, $overrides, $legacyOpenApiYaml, $publishFaultHook);
         };
 
         // Dry-run: read-only, lock-free, write-free.
@@ -163,6 +172,7 @@ final class Coordinator
         array $di,
         array $routes,
         array $overrides,
+        string $legacyOpenApiYaml,
         ?\Closure $publishFaultHook = null,
     ): CompileResult {
         $publisher = new StagingPublisher($ctx->cachePath);
@@ -175,6 +185,9 @@ final class Coordinator
             'compiled_routes.php' => (new RouteCacheEmitter())->emitSource($routes),
             'compiled_di.php' => $this->varExportSource($di['compiled']),
             'job_registry.php' => $this->varExportSource($di['jobs']),
+            // PRIMARY openapi.yml (legacy swagger-php parity — what Orval reads) comes BEFORE the SECONDARY
+            // openapi.generated.yml (new graph emitter). Both are staged + published per-file atomically.
+            'swagger/openapi.yml' => $legacyOpenApiYaml,
             'swagger/openapi.generated.yml' => $emitter->dump($document),
         ];
 

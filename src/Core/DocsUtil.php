@@ -25,12 +25,6 @@ class DocsUtil
     {
         RuntimeCompileGate::assertAllowed('OpenAPI documentation');
 
-        // Пути для сканирования аннотаций
-        $scanPaths = [
-            PathManager::getSrcPath() ,
-            PathManager::getLibraryRoot(),
-        ];
-
         // Путь для сохранения YAML-файла
         $outputPath = PathManager::getProjectRoot() . '/.cache/swagger/openapi.yml';
 
@@ -39,15 +33,25 @@ class DocsUtil
         if (!is_dir(dirname($outputPath))) {
             mkdir(dirname($outputPath), 0777, true);
         }
-        $openapi = self::createCustomGenerator();
 
-        // Запускаем генерацию из найденных путей
-        $generatedOpenApi = $openapi->generate($scanPaths);
+        // Тот же legacy swagger-php продюсер, что использует Coordinator как parity-compatibility producer (см.
+        // {@see produceLegacyOpenApiYaml()}): единый генератор/конфиг → побайтово тот же документ.
+        file_put_contents($outputPath, self::produceLegacyOpenApiYaml([PathManager::getSrcPath(), PathManager::getLibraryRoot()]));
+    }
 
-
-
-        // Сохраняем результат
-        file_put_contents($outputPath, $generatedOpenApi->toYaml());
+    /**
+     * Build the legacy swagger-php OpenAPI document as a YAML string — the SAME output {@see updateDocs()} writes —
+     * WITHOUT the managed-mode gate, the unlink, or the file write. This is the parity-compatibility producer
+     * (plan §11.2, Step 6b #5): until M6 the Coordinator keeps the PRIMARY .cache/swagger/openapi.yml (the spec Orval
+     * reads) byte-identical with the historic swagger-php build, while the new graph emitter ships the SECONDARY
+     * openapi.generated.yml. It does NOT go through {@see updateDocs()} (which is gated in managed) and leaves nothing
+     * stale. The scan set ([src, libraryRoot]) is supplied by the caller; in production it matches legacy exactly.
+     *
+     * @param list<string> $scanPaths directories/files swagger-php scans (dirs only in production)
+     */
+    public static function produceLegacyOpenApiYaml(array $scanPaths): string
+    {
+        return self::createCustomGenerator()->generate($scanPaths)->toYaml();
     }
 
     /**
