@@ -278,24 +278,50 @@ cache producer `dtos`←graph) опирается на этот факт. Тес
 
 ### 4.9 OperationMetadata projection + Step-3 diagnostics (M3)
 
-**Реализовано (F, Step 3):** `RouteMetadataCompiler::compileOperations()` / `compileOperationClasses()` /
-`compileAllOperations()` строят `OperationMetadata[]` из того же reflection-прохода, что и route-IR:
-operationId (через `OperationIdResolver`), pathParams (PHP-тип, не legacy OA `string`), queryParams (из
-`#[QueryParams]`-DTO, required из PHP-nullable/default), requestBody (из body-маркера + contentType),
-responses (вывод 200 из return-type либо `#[Response]`), security (`bearerAuth` / anonymous + `x-required-rules`),
-tags. Четыре новых атрибута `src/Core/Attributes/OpenApi/{Operation,Response,Items,Field}.php`.
+**Реализовано (F, Step 3 + fix-pass):** `RouteMetadataCompiler::compileOperations()` /
+`compileOperationClasses()` / `compileAllOperations()` строят `OperationMetadata[]` из того же
+reflection-прохода, что и route-IR: operationId (через `OperationIdResolver` с tri-state lockfile, §4.10),
+pathParams (PHP-тип, не legacy OA `string`), queryParams (из `#[QueryParams]`-DTO), requestBody (из
+body-маркера + contentType), responses (вывод 200 из return-type либо `#[Response]`), security
+(`bearerAuth` / anonymous + `x-required-rules`), tags. Пять новых атрибутов
+`src/Core/Attributes/OpenApi/{Operation,Response,Items,Field}.php` (+ `Response::collection`).
 
-**Тесты:** `tests/Compile/Route/OperationProjectionTest.php` (полная проекция + 3 диагностики),
-`tests/Compile/OpenApi/OpenApiAttributesTest.php` (контракты атрибутов). 25/25 зелёных.
+**Fix-pass (после ревью operation projection):**
+- **operationId lockfile (§4.10):** в `RouteMetadataCompiler` инъектируется tri-state map
+  (`array $operationIdMap = []`); пустой map (бывший баг) назначал бы convention всем 306 deferred-операциям.
+- **DtoSchemaBuilder split:** schema-проекция (`build()`) строится по **всем** public-сериализуемым свойствам
+  (serialName = `#[Field(name)]` ?? PHP-name, **НЕ** OA `property`-arg) и обогащается из `#[Field]/#[Items]`;
+  rule-graph (`ruleGraphFor()`/`oaTaggedProperties()`) читает **только** OA (parity). Два множества свойств
+  расходятся до M8. Route-IR путь использует `ruleGraphFor()` — schema-диагностики не текут в route-cache.
+- **required source-mode:** `PropertyMetadata::isRequired(RequiredSource)` — `Oa` (legacy `required:[true]`,
+  parity, **по умолчанию**) vs `PhpType` (non-nullable без default, post-OA). Источники **не смешиваются**.
+- **response projection:** missing return-type ⇒ diagnostic (не пустой 200); `mixed` ⇒ diagnostic;
+  `void/null/never` ⇒ пустой body; scalar/enum/DateTime/Uuid ⇒ inline-фрагмент `{type, format}` (раньше
+  терялись); array ⇒ diagnostic (item-тип); `#[Response(collection: true)]` ⇒ item-форма в `arrayItem`;
+  несуществующий schema-class ⇒ diagnostic; `JsonSerializable` без явного контракта ⇒ diagnostic.
+- **eligibility (§6):** `DtoEligibility` — `\Dto\` namespace-сегмент OR `*Dto`-суффикс (case-insensitive)
+  OR enum / `DateTimeInterface` OR app-whitelist (инъектируемый). Раньше был захардкожен только суффикс.
+- **collectDtoBindings reorder:** проверка `ValidateAttr` **до** извлечения типа — обычный untyped/union
+  параметр больше не создаёт ложной compile-ошибки.
 
-**Три doc-диагностики (halt в managed mode, plan §7):**
-1. **path-param mismatch** — `{name}` без name-matching параметра в сигнатуре (`field=<name>`);
-2. **non-eligible return-type без `#[Response]`** — entity/framework-тип/`Http\Response`/genuine-union (`field=return`);
-3. **array return без item-типа** — `array`/`iterable` без `#[Response]` (`field=return`).
+**Тесты:** `tests/Compile/Route/OperationProjectionTest.php` (проекция + required-mode divergence + 3
+response-диагностики + tri-state lockfile), `tests/Compile/OpenApi/OpenApiAttributesTest.php` (контракты
+атрибутов вкл. `collection`), `tests/Compile/Introspection/DtoSchemaBuilderTest.php` (Field/Items проекция
++ required source-mode + parity). 25/25 зелёных.
 
-**Eligibility gate (§6), подтверждён инвентарём N:** short-name оканчивается на `Dto` (case-insensitive)
-либо enum / `DateTimeInterface`. В N — **325** `*Dto`-классов (конвенция строгая, единичные outliers типа
-`allTicketsFiltersDTO`). Non-eligible требуют явного `#[Response(schema: …)]`.
+**Doc-диагностики (halt в managed mode, plan §7), теперь по категориям (см. §4.10 — реальные счётчики N):**
+1. **path-param mismatch** — `{name}` без name-matching параметра (`field=<param-name>`);
+2. **non-eligible return-type без `#[Response]`** — entity/framework/`Http\Response`/`UserAbstract` (`field=return`);
+3. **array return без item-типа** — `array`/`iterable` без `#[Response(collection: true)]` (`field=return`);
+4. **missing return type** / **mixed return** — opaque, не выводится (`field=return`);
+5. **unsupported return** — genuine union/intersection (`field=return`);
+6. **JsonSerializable return** — custom JSON-форма, не выводится без `#[Response]` (`field=return`);
+7. **`#[Items]` misuse** — не ровно одно из `class|type` (`field=<prop>`).
+
+**Eligibility gate (§6), подтверждён инвентарём N:** `\Dto\` namespace-сегмент OR `*Dto`-суффикс
+(case-insensitive) OR enum / `DateTimeInterface` OR app-whitelist. В N — **325** `*Dto`-классов (конвенция
+строгая). Non-eligible (opaque `Response`, base-class `UserAbstract`, domain-entity) требуют явного
+`#[Response(schema: …)]` — это и есть фронт работ M7 (см. §4.10: 292 `Response` + 5 `UserAbstract`).
 
 **Ключевое расхождение проекций (фиксируется тестом, не баг):** `SecurityMetadata.requiredRules` хранит
 `any`/`all` **независимо** (AccessRulesAll-only → `all=[…]` здесь), тогда как runtime-IR
@@ -305,7 +331,57 @@ tags. Четыре новых атрибута `src/Core/Attributes/OpenApi/{Ope
 **Quirk для emitter/тестов:** `ReflectionUnionType` нормализует порядок членов (`int|string` → `string|int`);
 диагностические сообщения и parity-сравнения не зависят от порядка.
 
----
+### 4.10 Route-IR + operation-projection parity на реальном N (M3, dev-only probe)
+
+**Генератор:** `docs/metadata_compiler_audit/gen_n_route_and_operation_parity.php` — dev-only (НЕ тест
+чистого checkout'а F; вручную против живого N). Тот же bootstrap, что §4.8 (`next/vendor` + local SpsFW
+working-tree src prepend + `next/src`), `SPSFW_PROJECT_ROOT=next`, discovery-dirs = `PathManager::getControllersDirs()`
+(= `[framework src/Core, next/src]` — ровно те, что сканировал N Router). Compile-слой грузится из local
+working-tree (в vendored копии `Compile/` отсутствует).
+
+**A. Route-IR parity** — `RouteCacheEmitter::emit(RouteMetadataCompiler::compile($dirs))` **строго `===`**
+`N/.cache/compiled_routes.php` (побайтно, вкл. middlewares/access-asymmetry/dtos-ruleGraph/params/pattern/
+php_ini, last-wins дублей). `DtoSchemaBuilder::ruleGraphFor()` (новый, OA-only) рулит `dtos[].rules`.
+
+| Метрика | Значение |
+|---|---|
+| Golden keys (`compiled_routes.php`) | **377** |
+| Emitted keys (local compiler+emitter) | **377** |
+| Missing (golden only) | **0** |
+| Extra (emitted only) | **0** |
+| **Per-key divergences (`!==`)** | **0** |
+| Route-IR diagnostics (дубли METHOD:path / untyped DTO-param / missing DTO) | **14** (структурные finding'и N, не parity-fail) |
+
+Вывод: **route-IR и rule-graph воспроизводятся побайтно на полном инвентаре N (377 routes + 156 DTO из §4.8).**
+M5 (switch `dtos`←graph) и emitter опираются на этот факт.
+
+**B. Operation projection** — `compileAllOperations($dirs)` с tri-state lockfile из reconciliation TSV
+(`in`=canonical_id / `deferred`=null / `out`=absent→convention).
+
+| Метрика | Значение |
+|---|---|
+| Lockfile signatures (`in`+`deferred`) | 367 (61 `in` + 306 `deferred`; 12 `out` ⇒ convention) |
+| Operations compiled | **384** |
+| operationId non-null (preserved + convention) | **78** (61 preserved + 17 convention) |
+| **operationId null (deferred, id-less)** | **306** (точно совпадает с `deferred` TSV) |
+| Diagnostics total | **374** |
+
+**Диагностики по категориям (cause buckets) — это фронт миграции M7, не баги компилятора:**
+
+| Категория | Кол-во | Что значит |
+|---|---|---|
+| `non-eligible-entity` | **297** (292 `Response` + 5 `UserAbstract`) | opaque/framework/base return без `#[Response]` — нужен `#[Response(schema: …)]` |
+| `itemless-array` | 39 | `array` return без item-типа — нужен `#[Response(collection: true, schema: …)]` |
+| `path-param-mismatch` | 28 | `{name}` без name-matching параметра (field = `code_1c` ×18, `uuid` ×3, `ticket_uuid` ×3, `role_id` ×2, `user_uuid` ×2) |
+| `missing-return-type` | 5 | метод без return-type — нужен тип или `#[Response]` |
+| `unsupported-return-type` | 3 | genuine union/intersection return |
+| `jsonserializable-response` | 2 | DTO с custom `jsonSerialize()` без `#[Response]` |
+
+**Вывод B:** operation-projection корректна — 306 deferred-операций остаются id-less (точное совпадение с
+lockfile), preserved/convention-распределение честное. Все 374 диагностики — реальный фронт M7: N-контроллеры
+ещё не декларируют `#[Response]`/return-типы (292 opaque `Response`-возврата — основная масса). Ни одна
+`*Dto` не классифицирована ошибочно как non-eligible (подтверждено сэмплом: 292 `Response` + 5 `UserAbstract`,
+0 misclassified DTO). `composer test` зелёный (25/25); чистый checkout F от N не зависит.
 
 ---
 

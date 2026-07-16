@@ -27,8 +27,10 @@ use SpsFW\Core\Attributes\Validation\QueryParams;
 use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\Introspection\AttributeReader;
+use SpsFW\Core\Compile\Introspection\DtoEligibility;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
 use SpsFW\Core\Compile\Introspection\OperationIdResolver;
+use SpsFW\Core\Compile\Introspection\RequiredSource;
 use SpsFW\Core\Compile\Introspection\TypeMapper;
 use SpsFW\Core\Compile\Metadata\OperationMetadata;
 use SpsFW\Core\Compile\Metadata\ParameterMetadata;
@@ -70,11 +72,18 @@ final class RouteMetadataCompiler
         ?DtoSchemaBuilder $schemas = null,
         private readonly TypeMapper $typeMapper = new TypeMapper(),
         private readonly AttributeReader $attributeReader = new AttributeReader(),
+        private readonly DtoEligibility $eligibility = new DtoEligibility(),
+        private readonly RequiredSource $requiredSource = RequiredSource::Oa,
+        array $operationIdMap = [],
     ) {
         // Share diagnostics so a cyclic/missing DTO surfaces on the SAME collector that halts the build,
         // instead of the throwaway CompileDiagnostics a default-constructed builder would carry.
         $this->schemas = $schemas ?? new DtoSchemaBuilder($this->diagnostics);
-        $this->operationIds = new OperationIdResolver($this->diagnostics);
+        // The tri-state operationId lockfile (plan §19): the materialized inventory — 39 preserved ids + 306
+        // nulls — so legacy ops keep their id (or stay id-less) and only NEW route-only ops get the convention.
+        // An empty map (default) assigns the convention to everything — correct for unit tests / a fresh app,
+        // wrong for the real `next` inventory, which must pass the resolved map.
+        $this->operationIds = new OperationIdResolver($this->diagnostics, $operationIdMap);
     }
 
     /**
@@ -227,31 +236,32 @@ final class RouteMetadataCompiler
      * each param carrying a ValidateAttr-subclass (JsonBody/QueryParams/PostBody/FormDataBody) becomes a
      * binding with its ParamsIn, the DTO FQCN, and the rule graph from DtoSchemaBuilder.
      *
+     * The ValidateAttr check runs FIRST, so an ordinary untyped/union parameter that is NOT a validated input
+     * never triggers a false "no type" diagnostic — only a validated parameter that lacks a DTO class type-hint
+     * does.
+     *
      * @return list<array{in: ?ParamsIn, dto: string, rules: ValidationRuleGraph}>
      */
     private function collectDtoBindings(ReflectionClass $reflection, ReflectionMethod $method): array
     {
         $bindings = [];
         foreach ($method->getParameters() as $parameter) {
-            $type = $parameter->getType();
-            try {
-                /** @var class-string $dtoClass */
-                $dtoClass = $type->getName();
-            } catch (\Throwable) {
+            $validationAttributes = $parameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF);
+            if ($validationAttributes === []) {
+                continue;
+            }
+
+            $dtoClass = $this->reflectionTypeName($parameter->getType());
+            if ($dtoClass === null) {
                 $this->diagnostics->error(
                     controller: $reflection->getName(),
                     method: $method->getName(),
                     dto: null,
                     field: $parameter->getName(),
-                    cause: 'validated parameter has no type',
-                    fix: 'add a DTO class type-hint to the parameter',
+                    cause: 'validated parameter has no DTO class type-hint',
+                    fix: 'add a single DTO class type-hint to the parameter',
                 );
                 $dtoClass = 'string';
-            }
-
-            $validationAttributes = $parameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF);
-            if ($validationAttributes === []) {
-                continue;
             }
 
             $instance = $validationAttributes[0]->newInstance();
@@ -284,7 +294,9 @@ final class RouteMetadataCompiler
             );
             return ValidationRuleGraph::empty();
         }
-        return $this->schemas->ruleGraph($this->schemas->build($dtoClass));
+        // ruleGraphFor (not build()) — the route-cache path wants ONLY the rule graph; a DTO's schema
+        // projection (and any future schema-only diagnostics) must not leak into route-cache compilation.
+        return $this->schemas->ruleGraphFor($dtoClass);
     }
 
     private function collectPhpIni(ReflectionMethod $method): ?array
@@ -660,8 +672,10 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Project a QueryParams DTO's properties to query parameters. Type from the PHP type; required when the
-     * property is non-nullable and has no default (the post-OA required source, plan §7).
+     * Project a QueryParams DTO's properties to query parameters. Type from the PHP type; required is resolved
+     * through the active {@see RequiredSource} — {@see RequiredSource::Oa} (the parity default) reads the
+     * legacy OA `required:[true]` flag; {@see RequiredSource::PhpType} derives it from non-nullability + no
+     * default. The two sources are never blended (plan §7).
      *
      * @return list<ParameterMetadata>
      */
@@ -684,7 +698,7 @@ final class RouteMetadataCompiler
             $params[] = new ParameterMetadata(
                 name: $property->serialName(),
                 in: ParameterMetadata::IN_QUERY,
-                required: !$property->nullable && !$property->hasDefault,
+                required: $property->isRequired($this->requiredSource),
                 type: $type,
                 format: $format,
             );
@@ -728,21 +742,47 @@ final class RouteMetadataCompiler
         if ($declared !== []) {
             $responses = [];
             foreach ($declared as $response) {
-                $responses[] = $this->responseFromAttribute($response);
+                $responses[] = $this->responseFromAttribute($method, $response);
             }
             return $responses;
         }
         return $this->inferSuccessResponse($reflection, $method);
     }
 
-    private function responseFromAttribute(ApiResponse $response): ResponseMetadata
-    {
-        $schema = $response->schema !== null && class_exists($response->schema)
-            ? $this->schemas->build($response->schema)
-            : null;
+    private function responseFromAttribute(
+        ReflectionMethod $method,
+        ApiResponse $response,
+    ): ResponseMetadata {
+        $itemSchema = null;
+        if ($response->schema !== null) {
+            if (!class_exists($response->schema)) {
+                $this->diagnostics->error(
+                    controller: $method->getDeclaringClass()->getName(),
+                    method: $method->getName(),
+                    dto: $response->schema,
+                    field: 'return',
+                    cause: sprintf('#[Response] schema class %s does not exist / is not autoloadable', $response->schema),
+                    fix: 'point #[Response(schema:)] at a loadable class',
+                );
+            } else {
+                $itemSchema = $this->schemas->build($response->schema);
+            }
+        }
+        // #[Response(collection: true)] disambiguates an array body: the schema is the per-ITEM shape and the
+        // response projects type:array, items:{schema}. Without it the schema is a single object body.
+        if ($response->collection) {
+            return new ResponseMetadata(
+                status: $response->status,
+                schema: null,
+                arrayItem: $itemSchema,
+                contentType: $response->contentType,
+                description: $response->description ?? '',
+                headers: $response->headers,
+            );
+        }
         return new ResponseMetadata(
             status: $response->status,
-            schema: $schema,
+            schema: $itemSchema,
             contentType: $response->contentType,
             description: $response->description ?? '',
             headers: $response->headers,
@@ -752,14 +792,49 @@ final class RouteMetadataCompiler
     /**
      * Infer the success (200) response from the return type, emitting a diagnostic when it cannot be derived.
      *
+     *  - void/null/never              : empty body (no schema) — intentional, no diagnostic.
+     *  - missing return type / mixed  : opaque — diagnostic (cannot infer a schema).
+     *  - bare array                   : no derivable item type — diagnostic (use #[Response(collection: true, schema: …)]).
+     *  - union / intersection         : unsupported — diagnostic.
+     *  - non-eligible class           : entity/framework type — diagnostic (needs explicit #[Response]).
+     *  - JsonSerializable class       : custom serialization shape — diagnostic (needs explicit #[Response] contract).
+     *  - DTO-eligible class           : object schema (inferred).
+     *  - enum                         : enum schema fragment.
+     *  - scalar / DateTime / Uuid     : inline schema fragment {type, format}.
+     *
      * @return list<ResponseMetadata>
      */
     private function inferSuccessResponse(ReflectionClass $reflection, ReflectionMethod $method): array
     {
         $returnType = $method->getReturnType();
+
+        if ($returnType === null) {
+            $this->diagnostics->error(
+                controller: $reflection->getName(),
+                method: $method->getName(),
+                dto: null,
+                field: 'return',
+                cause: 'method declares no return type; the success response schema cannot be inferred',
+                fix: 'add a return type (a *Dto, an enum, a scalar), or declare the response explicitly with #[Response(schema: …)]',
+            );
+            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+        }
+
         [$inner] = $this->unwrapNullable($returnType);
 
-        if ($returnType === null || $this->isVoidType($inner)) {
+        if ($this->isVoidType($inner)) {
+            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+        }
+
+        if ($this->isMixedType($inner)) {
+            $this->diagnostics->error(
+                controller: $reflection->getName(),
+                method: $method->getName(),
+                dto: null,
+                field: 'return',
+                cause: 'mixed return type is not auto-derivable',
+                fix: 'narrow the return type, or declare the response explicitly with #[Response(schema: …)]',
+            );
             return [new ResponseMetadata(200, schema: null, description: 'OK')];
         }
 
@@ -770,7 +845,7 @@ final class RouteMetadataCompiler
                 dto: null,
                 field: 'return',
                 cause: 'array return type has no derivable item type',
-                fix: 'declare the response explicitly with #[Response(schema: ItemDto::class)] (PHP arrays carry no element type)',
+                fix: 'declare the response explicitly with #[Response(schema: ItemDto::class, collection: true)] (PHP arrays carry no element type)',
             );
             return [new ResponseMetadata(200, schema: null, description: 'OK')];
         }
@@ -788,36 +863,59 @@ final class RouteMetadataCompiler
             return [new ResponseMetadata(200, schema: null, description: 'OK')];
         }
 
-        // A referenced class is auto-derived ONLY when it is DTO-eligible; entities/Response need #[Response].
-        if ($mapped['ref'] !== null && !$this->isDtoEligible($mapped['ref'])) {
-            $this->diagnostics->error(
-                controller: $reflection->getName(),
-                method: $method->getName(),
-                dto: $mapped['ref'],
-                field: 'return',
-                cause: sprintf('return type %s is not a DTO-eligible class (entity/framework type)', $mapped['ref']),
-                fix: 'declare the response explicitly with #[Response(schema: ' . $mapped['ref'] . '::class)] or return a *Dto',
-            );
-            return [new ResponseMetadata(200, schema: null, description: 'OK')];
-        }
-
+        // A referenced class is auto-derived ONLY when it is DTO-eligible (plan §6); entities/Response need
+        // an explicit #[Response]. A class that customizes JSON via JsonSerializable likewise needs an explicit
+        // contract — its public properties are not its real JSON shape.
         if ($mapped['ref'] !== null) {
+            if (!$this->eligibility->isEligible($mapped['ref'])) {
+                $this->diagnostics->error(
+                    controller: $reflection->getName(),
+                    method: $method->getName(),
+                    dto: $mapped['ref'],
+                    field: 'return',
+                    cause: sprintf('return type %s is not a DTO-eligible class (entity/framework type)', $mapped['ref']),
+                    fix: 'declare the response explicitly with #[Response(schema: ' . $mapped['ref'] . '::class)] or return a *Dto',
+                );
+                return [new ResponseMetadata(200, schema: null, description: 'OK')];
+            }
+            if ($this->declaresJsonSerializable($mapped['ref'])) {
+                $this->diagnostics->error(
+                    controller: $reflection->getName(),
+                    method: $method->getName(),
+                    dto: $mapped['ref'],
+                    field: 'return',
+                    cause: sprintf('return type %s implements JsonSerializable; its JSON shape is custom and not derivable from public properties', $mapped['ref']),
+                    fix: 'declare the response explicitly with #[Response(schema: ' . $mapped['ref'] . '::class)] (the explicit contract), or drop JsonSerializable',
+                );
+                return [new ResponseMetadata(200, schema: null, description: 'OK')];
+            }
             $schema = class_exists($mapped['ref']) ? $this->schemas->build($mapped['ref']) : null;
             return [new ResponseMetadata(200, schema: $schema)];
         }
 
-        // Enum scalar fragment (backed/unit enum → {type, enum}); other scalars get no schema.
-        $schema = $mapped['enum'] !== null ? $this->enumSchema($mapped) : null;
-        return [new ResponseMetadata(200, schema: $schema)];
+        // Scalar / enum / DateTime / Uuid → inline schema fragment {type, format, enum?}.
+        return [new ResponseMetadata(200, schema: $this->inlineSchema($mapped))];
     }
 
-    private function enumSchema(array $mapped): SchemaMetadata
+    /**
+     * An inline (non-object) schema fragment: an enum ({type, enum}) or a scalar/DateTime ({type, format}).
+     *
+     * @param array{type: ?string, format: ?string, enum: ?array} $mapped
+     */
+    private function inlineSchema(array $mapped): SchemaMetadata
     {
+        if ($mapped['enum'] !== null) {
+            return new SchemaMetadata(
+                name: '',
+                isEnum: true,
+                enumType: $mapped['type'],
+                enumCases: $mapped['enum'],
+            );
+        }
         return new SchemaMetadata(
             name: '',
-            isEnum: true,
-            enumType: $mapped['type'],
-            enumCases: $mapped['enum'],
+            type: $mapped['type'],
+            format: $mapped['format'],
         );
     }
 
@@ -902,7 +1000,12 @@ final class RouteMetadataCompiler
     private function isVoidType(?ReflectionType $type): bool
     {
         return $type instanceof ReflectionNamedType
-            && in_array($type->getName(), ['void', 'never', 'null', 'mixed'], true);
+            && in_array($type->getName(), ['void', 'never', 'null'], true);
+    }
+
+    private function isMixedType(?ReflectionType $type): bool
+    {
+        return $type instanceof ReflectionNamedType && $type->getName() === 'mixed';
     }
 
     private function isArrayType(?ReflectionType $type): bool
@@ -911,18 +1014,13 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Whether a class return type is auto-derivable as a schema: a *Dto (the framework convention — 325
-     * classes in `next`), an enum, or a date/time. Domain entities, {@see \SpsFW\Core\Http\Response} and
-     * other framework types are NOT eligible and require an explicit #[Response].
+     * Whether a class customizes its JSON output via JsonSerializable (directly or inherited). Such a class's
+     * public properties are NOT its real JSON shape, so an inferred response schema would lie — it needs an
+     * explicit #[Response] contract (plan §6).
      */
-    private function isDtoEligible(string $fqcn): bool
+    private function declaresJsonSerializable(string $fqcn): bool
     {
-        if (is_subclass_of($fqcn, \UnitEnum::class) || is_a($fqcn, \DateTimeInterface::class, true)) {
-            return true;
-        }
-        $pos = strrpos($fqcn, '\\');
-        $short = $pos === false ? $fqcn : substr($fqcn, $pos + 1);
-        return str_ends_with(strtolower($short), 'dto');
+        return is_a($fqcn, \JsonSerializable::class, true);
     }
 
     private function typeLabel(?ReflectionType $type): string

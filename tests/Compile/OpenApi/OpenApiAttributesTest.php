@@ -49,6 +49,9 @@ $rDefault = new ApiResponse();
 assert_same(200, $rDefault->status, 'Response.status defaults 200');
 assert_same(null, $rDefault->schema, 'Response.schema defaults null');
 assert_same('application/json', $rDefault->contentType, 'Response.contentType defaults application/json');
+assert_true(!$rDefault->collection, 'Response.collection defaults false (single object body)');
+$rCollection = new ApiResponse(schema: 'App\\ItemDto', collection: true);
+assert_true($rCollection->collection, 'Response.collection=true marks an array-of-schema body');
 
 // --- Items: class XOR type ---
 assert_same('App\\PhoneDto', (new Items(class: 'App\\PhoneDto'))->class, 'Items.class preserved');

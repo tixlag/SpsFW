@@ -3,8 +3,11 @@
 declare(strict_types=1);
 
 use OpenApi\Attributes as OA;
+use SpsFW\Core\Attributes\OpenApi\Field;
+use SpsFW\Core\Attributes\OpenApi\Items;
 use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
+use SpsFW\Core\Compile\Introspection\RequiredSource;
 use SpsFW\Core\Router\Router;
 
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
@@ -108,6 +111,32 @@ final class DsbEmptyDto
     public string $nothing;
 }
 
+// --- #[Field]/#[Items] schema projection (Step 3 fix-pass): the schema describes the real JSON shape,
+//     sourced from EVERY public property and enriched by the new attributes — independent of OA. ---
+final class DsbFieldItemsDto
+{
+    #[Field(format: 'email', min: 1, max: 9, name: 'email_address', readOnly: true)]
+    public string $email;
+
+    #[Items(class: DsbNestedDto::class)]
+    public array $phones;
+
+    #[Items(type: 'integer')]
+    public array $ids;
+
+    public string $noOaNoField; // serializes as its PHP name; appears in the schema even without OA
+}
+
+// --- #[Items] must declare exactly one of class|type (diagnostic on both / neither) ---
+final class DsbItemsBadDto
+{
+    #[Items(class: DsbNestedDto::class, type: 'integer')]
+    public array $both;
+
+    #[Items]
+    public array $neither;
+}
+
 // --- cyclic validation graphs (must surface a compile diagnostic, never recurse forever) ---
 final class DsbCycleA
 {
@@ -182,10 +211,12 @@ assert_same(
 
 // ============================================================================
 // Schema projection (Step 2 captures it; Step 4 consumes it) — basic shape locks.
+// The serial name is the JSON key json_encode emits: #[Field(name)] or the PHP name — NEVER the legacy
+// OA `property` arg (which is the VALIDATION key only; serialization contract, plan §6).
 // ============================================================================
 $renamed = $fixture->property('renamed');
 assert_same('renamed', $renamed->name, 'PropertyMetadata.name is the PHP property name');
-assert_same('aliased', $renamed->serialName(), 'serialName() is the OA `property` arg');
+assert_same('renamed', $renamed->serialName(), 'serialName() is the PHP name, NOT the OA `property` arg (serialization contract)');
 assert_same('string', $renamed->phpType, 'phpType reflects the PHP type');
 assert_true($renamed->hasDefault, 'hasDefault set when an OA `default` arg is present');
 assert_same('def', $renamed->defaultValue, 'defaultValue carries the resolved default');
@@ -195,7 +226,54 @@ assert_same(DsbNestedDto::class, $child->refClass, 'refClass is the reflection-d
 assert_same(DsbNestedDto::class, $child->ref, 'ref follows refClass (reflection wins over OA ref)');
 
 $plain = $fixture->property('plainNoConstraints');
-assert_same('plain', $plain->serialName(), 'serialName falls back to the PHP name when no OA `property` arg');
+assert_same('plainNoConstraints', $plain->serialName(), 'serialName is the PHP name when no #[Field(name)] override exists');
+
+// The OA `property` arg is STILL the rule-graph key (parity), even though it is NOT the schema serial name.
+assert_true(array_key_exists('aliased', $graph), 'the rule graph keys on the OA `property` arg (aliased), not the PHP name');
+assert_true(!array_key_exists('renamed', $graph), 'the rule graph never keys on the PHP name when an OA property arg is set');
+
+// ============================================================================
+// required source-mode (plan §7): Oa (parity, reads required:[true]) vs PhpType (non-nullable, no default).
+// The two sources are never blended. $explicitlyNotRequired is PHP non-nullable with no default but
+// OA required:[false] — the divergence point.
+// ============================================================================
+$reqTrue = $fixture->property('explicitlyRequired');
+assert_true($reqTrue->isRequired(RequiredSource::Oa), 'Oa source: OA required:[true] ⇒ required');
+assert_true($reqTrue->isRequired(RequiredSource::PhpType), 'PhpType source: non-nullable, no default ⇒ required (agrees with OA here)');
+$reqFalse = $fixture->property('explicitlyNotRequired');
+assert_true(!$reqFalse->isRequired(RequiredSource::Oa), 'Oa source honours required:[false] even though PHP is non-nullable');
+assert_true($reqFalse->isRequired(RequiredSource::PhpType), 'PhpType source ignores OA and derives required from non-nullability');
+
+// ============================================================================
+// #[Field]/#[Items] schema projection: constraints + serial-name + item type, on a DTO with NO OA at all.
+// ============================================================================
+$fi = $builder->build(DsbFieldItemsDto::class);
+
+$email = $fi->property('email');
+assert_same('email_address', $email->serialName(), 'Field(name) overrides the JSON serial name');
+assert_same('email', $email->format, 'Field(format) populates the schema format');
+assert_same(1, $email->minimum, 'Field(min) → PropertyMetadata.minimum');
+assert_same(9, $email->maximum, 'Field(max) → PropertyMetadata.maximum');
+assert_true($email->readOnly, 'Field(readOnly) projected');
+
+$phones = $fi->property('phones');
+assert_same(DsbNestedDto::class, $phones->itemType, 'Items(class) → itemType (the element schema ref)');
+
+$ids = $fi->property('ids');
+assert_same('integer', $ids->itemType, 'Items(type) → itemType (the scalar element type)');
+
+$noOa = $fi->property('noOaNoField');
+assert_true($noOa !== null, 'a public property without OA/Field still appears in the schema projection');
+assert_same('noOaNoField', $noOa->serialName(), 'no Field ⇒ the serial name is the PHP name');
+assert_same([], $builder->ruleGraph($builder->build(DsbFieldItemsDto::class))->rules, 'a DTO with no OA yields an empty RULE GRAPH even though its schema is non-empty (the two sets diverge)');
+
+// ============================================================================
+// #[Items] exactly-one-of class|type: both / neither each surface a diagnostic.
+// ============================================================================
+$itemsDiag = new CompileDiagnostics();
+(new DtoSchemaBuilder($itemsDiag))->build(DsbItemsBadDto::class);
+assert_same(2, $itemsDiag->count(), 'Items with both / neither class+type each surface a diagnostic');
+assert_same('both', $itemsDiag->errors()[0]['field'], 'the both-diagnostic is attributed to its property');
 
 // ============================================================================
 // Memoization: build() returns the SAME instance for a repeated FQCN (plan §17).

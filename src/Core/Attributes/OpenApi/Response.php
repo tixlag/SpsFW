@@ -19,6 +19,12 @@ use Attribute;
  * `schema` is a class-string projected through DtoSchemaBuilder; it may name a `*Dto`, a backed enum, or an
  * entity whose JSON shape is otherwise described by its properties.
  *
+ * `collection` (default false) marks the response body as an ARRAY of `schema` items — disambiguating an
+ * opaque collection (`#[Response(schema: ItemDto::class, collection: true)]`) from a single object
+ * (`#[Response(schema: ItemDto::class)]`). When true the response projects `type: array, items: {schema}`;
+ * without it a `#[Response(schema: …)]` is a single object. This removes the array/opaque ambiguity that
+ * previously lost the item shape on array responses (plan §6/§7).
+ *
  * Doc-only. Named `Response` to mirror swagger-php's `#[OA\Response]`; alias on import if a controller also
  * uses {@see \SpsFW\Core\Http\Response}: `use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;`.
  */
@@ -35,6 +41,7 @@ final readonly class Response
         public ?string $description = null,
         public string $contentType = 'application/json',
         public array $headers = [],
+        public bool $collection = false,
     ) {
     }
 }

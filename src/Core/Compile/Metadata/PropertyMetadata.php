@@ -4,23 +4,30 @@ declare(strict_types=1);
 
 namespace SpsFW\Core\Compile\Metadata;
 
+use SpsFW\Core\Compile\Introspection\RequiredSource;
+
 /**
  * Compile-time description of a single DTO property — the common input for both the OpenAPI
  * SchemaMetadata projection and the ValidationRuleGraph produced from the same schema.
  *
  *  - name        : PHP property name
- *  - serialName  : JSON key this property serializes to (defaults to name); must match json_encode output
+ *  - serialName  : JSON key this property serializes to (defaults to name); must match json_encode output.
+ *                  In the schema projection it comes from #[Field(name)] or the PHP name — NEVER from the
+ *                  legacy `#[OA\Property(property:)]` arg, which is the VALIDATION key only (serialization
+ *                  contract, plan §6). The rule graph still uses that OA arg as its key (parity, M2).
  *  - phpType     : normalized PHP type string (e.g. 'int', 'string', FQCN, 'array')
  *  - ref         : FQCN of a nested DTO the graph references; null for scalars / collections of scalars
  *  - refClass    : reflection-derived nested class (first non-builtin type member), the parity source for ref
- *  - itemType    : for arrays: the element PHP type / FQCN, else null (resolved via #[Items], Step 2/3)
+ *  - itemType    : for arrays: the element PHP type / FQCN, else null (resolved via #[Items])
  *  - format      : OpenAPI format hint (uuid, date, date-time, email, …) from #[Field(format)] or class type
  *  - constraints : minimum/maximum/minLength/maxLength/enum from #[Field]
- *  - nullable / hasDefault / defaultValue / required : optionality & presence, the source of the rule graph
+ *  - nullable / hasDefault / defaultValue : the PHP-type optionality signals (post-OA required source)
+ *  - required    : the OA-parity required flag (legacy `required:[true]`); the active source in {@see isRequired()}
+ *                  under {@see RequiredSource::Oa} until the OA source is removed (M8). The two sources are
+ *                  NEVER blended — see {@see isRequired()}.
  *  - readOnly / writeOnly / schemaName : direction-specific projection hints (#[Field])
- *  - rawArguments: PARITY-PHASE ONLY — the ordered #[OA\Property] getArguments() snapshot that
- *                  DtoSchemaBuilder::ruleGraph() replays to stay byte-compatible with
- *                  Router::extractValidationRules(); removed in M8 once the OA source is gone.
+ *  - rawArguments: PARITY-PHASE ONLY — the ordered #[OA\Property] getArguments() snapshot that the rule
+ *                  graph replays to stay byte-compatible with Router::extractValidationRules(); removed in M8.
  *
  * Step 1 (M1): the VO exists but is not yet populated by any reader.
  */
@@ -65,5 +72,20 @@ final readonly class PropertyMetadata
     public function serialName(): string
     {
         return $this->serialName ?? $this->name;
+    }
+
+    /**
+     * Whether the property is required, resolved through the active {@see RequiredSource} (plan §7 — the two
+     * sources are never blended mid-parity):
+     *  - {@see RequiredSource::Oa}     : the legacy OA `required:[true]` flag ($required) — the PARITY source,
+     *                                     byte-identical to Router::extractValidationRules; the default until M8.
+     *  - {@see RequiredSource::PhpType}: derived from the PHP type — non-nullable AND no default. The post-OA
+     *                                     source, enabled in a separate source-mode after the OA cleanup.
+     */
+    public function isRequired(RequiredSource $mode = RequiredSource::Oa): bool
+    {
+        return $mode === RequiredSource::Oa
+            ? $this->required
+            : (!$this->nullable && !$this->hasDefault);
     }
 }
