@@ -6,6 +6,7 @@ use OpenApi\Attributes as OA;
 use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
 use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\RateLimit;
 use SpsFW\Core\Attributes\OpenApi\Operation;
 use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 use SpsFW\Core\Attributes\Route;
@@ -327,38 +328,41 @@ final class OpDiagController
 
 $diag = new CompileDiagnostics();
 (new RouteMetadataCompiler($diag))->compileOperationClasses([OpDiagController::class]);
-assert_true($diag->hasErrors(), 'diagnostic controller surfaces errors');
-assert_same(4, $diag->count(), 'exactly four doc diagnostics: non-eligible entity, itemless array, union, path mismatch');
+// These are all MIGRATION gaps (Step 4 severity split): the spec is generatable with an opaque/empty
+// response — they are warnings, not fatal errors. They block only in strict/managed mode.
+assert_true($diag->hasWarnings(), 'diagnostic controller surfaces migration warnings');
+assert_true(!$diag->hasErrors(), 'response-projection gaps are NOT fatal errors');
+assert_same(4, $diag->warningCount(), 'exactly four migration warnings: non-eligible entity, itemless array, union, path mismatch');
 
-// field distribution: three return diagnostics + one path-mismatch diagnostic
+// field distribution: three return warnings + one path-mismatch warning
 $fieldCounts = [];
-foreach ($diag->errors() as $err) {
+foreach ($diag->warnings() as $err) {
     $fieldCounts[$err['field']] = ($fieldCounts[$err['field']] ?? 0) + 1;
 }
-assert_same(3, $fieldCounts['return'], 'three return-field diagnostics (entity / array / union)');
-assert_same(1, $fieldCounts['missing'], 'one path-param mismatch diagnostic');
+assert_same(3, $fieldCounts['return'], 'three return-field warnings (entity / array / union)');
+assert_same(1, $fieldCounts['missing'], 'one path-param mismatch warning');
 
 // each distinct cause is present (entity/array/union share field=return, so assert over the joined causes)
-$causes = implode("\n", array_map(static fn(array $e): string => $e['cause'], $diag->errors()));
-assert_true(str_contains($causes, 'not a DTO-eligible class'), 'non-eligible class diagnostic present');
-assert_true(str_contains($causes, 'array return type has no derivable item type'), 'itemless array diagnostic present');
-assert_true(str_contains($causes, 'is not auto-derivable: union'), 'union return diagnostic present (member order is PHP-normalized)');
-assert_true(str_contains($causes, 'path parameter {missing} has no matching method parameter'), 'path-param mismatch diagnostic present');
+$causes = implode("\n", array_map(static fn(array $e): string => $e['cause'], $diag->warnings()));
+assert_true(str_contains($causes, 'not a DTO-eligible class'), 'non-eligible class warning present');
+assert_true(str_contains($causes, 'array return type has no derivable item type'), 'itemless array warning present');
+assert_true(str_contains($causes, 'is not auto-derivable: union'), 'union return warning present (member order is PHP-normalized)');
+assert_true(str_contains($causes, 'path parameter {missing} has no matching method parameter'), 'path-param mismatch warning present');
 
-// the entity diagnostic carries the entity FQCN in its `dto` slot
+// the entity warning carries the entity FQCN in its `dto` slot
 $entityErr = null;
-foreach ($diag->errors() as $err) {
+foreach ($diag->warnings() as $err) {
     if ($err['dto'] === OpEntity::class) {
         $entityErr = $err;
         break;
     }
 }
-assert_true($entityErr !== null, 'non-eligible diagnostic carries the entity FQCN in dto');
-assert_same('return', $entityErr['field'], 'entity diagnostic tagged on the return field');
+assert_true($entityErr !== null, 'non-eligible warning carries the entity FQCN in dto');
+assert_same('return', $entityErr['field'], 'entity warning tagged on the return field');
 
 // ============================================================================
-// Response-projection diagnostics (Step 3 fix-pass): missing return type, mixed, and a
-// JsonSerializable DTO each surface a distinct compile error (plan §6/§7).
+// Response-projection diagnostics (Step 3 fix-pass → Step 4 warnings): missing return type, mixed, and a
+// JsonSerializable DTO each surface a distinct MIGRATION warning (plan §6/§7).
 // ============================================================================
 final class OpRespDiagController
 {
@@ -382,13 +386,45 @@ final class OpRespDiagController
 
 $respDiag = new CompileDiagnostics();
 (new RouteMetadataCompiler($respDiag))->compileOperationClasses([OpRespDiagController::class]);
-assert_true($respDiag->hasErrors(), 'response-projection controller surfaces errors');
-assert_same(3, $respDiag->count(), 'exactly three response diagnostics: missing return type, mixed, JsonSerializable');
+assert_true($respDiag->hasWarnings(), 'response-projection controller surfaces migration warnings');
+assert_true(!$respDiag->hasErrors(), 'response-projection gaps are NOT fatal errors');
+assert_same(3, $respDiag->warningCount(), 'exactly three response warnings: missing return type, mixed, JsonSerializable');
 
-$respCauses = implode("\n", array_map(static fn(array $e): string => $e['cause'], $respDiag->errors()));
-assert_true(str_contains($respCauses, 'declares no return type'), 'missing-return-type diagnostic present');
-assert_true(str_contains($respCauses, 'mixed return type is not auto-derivable'), 'mixed-return diagnostic present');
-assert_true(str_contains($respCauses, 'implements JsonSerializable'), 'JsonSerializable diagnostic present');
+$respCauses = implode("\n", array_map(static fn(array $e): string => $e['cause'], $respDiag->warnings()));
+assert_true(str_contains($respCauses, 'declares no return type'), 'missing-return-type warning present');
+assert_true(str_contains($respCauses, 'mixed return type is not auto-derivable'), 'mixed-return warning present');
+assert_true(str_contains($respCauses, 'implements JsonSerializable'), 'JsonSerializable warning present');
+
+// ============================================================================
+// FATAL structural diagnostics stay ERRORS (Step 4 severity split): an operationId collision is not a
+// migration gap — it makes the spec ambiguous. throwOnErrors() halts; throwOnErrorsAndWarnings() too.
+// ============================================================================
+final class OpCollisionController
+{
+    #[Route('/api/op/col/a')]
+    public function view(): void
+    {
+    }
+
+    #[Route('/api/op/col/b')]
+    public function viewToo(): void
+    {
+    }
+}
+$colDiag = new CompileDiagnostics();
+// Same convention id "OpCollisionView" forced for both via the lockfile ⇒ collision.
+(new RouteMetadataCompiler($colDiag, operationIdMap: [
+    OpCollisionController::class . '::view' => 'sharedId',
+    OpCollisionController::class . '::viewToo' => 'sharedId',
+]))->compileOperationClasses([OpCollisionController::class]);
+assert_true($colDiag->hasErrors(), 'operationId collision is a FATAL structural error');
+assert_same(0, $colDiag->warningCount(), 'a collision produces no migration warnings');
+try {
+    $colDiag->throwOnErrors();
+    assert_true(false, 'throwOnErrors() must halt on a collision');
+} catch (\SpsFW\Core\Compile\CompileException $e) {
+    assert_same(2, $e->getCode(), 'collision attributed to both operations (2 fatal errors)');
+}
 
 // ============================================================================
 // Tri-state operationId lockfile (plan §19, Step 3 fix-pass): a preserved id, a deferred (null) op, and a
@@ -429,5 +465,40 @@ assert_same('legacyPreservedId', $lockBy['preserved']->operationId, 'tri-state: 
 assert_same(null, $lockBy['deferred']->operationId, 'tri-state: a lockfile null keeps the op id-less (does NOT fall through to convention)');
 assert_same('OpLockBrandNew', $lockBy['brandNew']->operationId, 'tri-state: an absent key gets the controller-qualified convention id');
 assert_true(!$lockDiag->hasErrors(), 'tri-state lockfile with unique non-null ids produces no diagnostics');
+
+// ============================================================================
+// #[Response(collection: true)] WITHOUT a schema ⇒ a migration warning (Step 4 prereq): the array element
+// shape is unknown; the spec can still emit type:array, just without an items schema.
+// Also pins the rateLimited flag → feeds the 429 standard error response.
+// ============================================================================
+final class OpCollectionNoSchemaController
+{
+    #[Route('/api/op/colnoitem', [HttpMethod::GET])]
+    #[ApiResponse(collection: true, description: 'unknown items')]
+    public function colNoItem(): Response // collection flag but no item schema ⇒ migration warning
+    {
+        return new Response();
+    }
+
+    #[Route('/api/op/ratelimited', [HttpMethod::POST])]
+    #[RateLimit(requests: ['network' => 5], window: 60)]
+    public function rateLimited(): void
+    {
+    }
+}
+
+$colNoItemDiag = new CompileDiagnostics();
+$cnOps = (new RouteMetadataCompiler($colNoItemDiag))->compileOperationClasses([OpCollectionNoSchemaController::class]);
+assert_true($colNoItemDiag->hasWarnings(), 'collection-without-schema surfaces a migration warning');
+assert_true(!$colNoItemDiag->hasErrors(), 'collection-without-schema is NOT fatal');
+$cnCauses = implode("\n", array_map(static fn(array $e): string => $e['cause'], $colNoItemDiag->warnings()));
+assert_true(str_contains($cnCauses, 'declares no item schema'), 'collection-without-item-schema warning text');
+
+$cnBy = [];
+foreach ($cnOps as $op) {
+    $cnBy[$op->method] = $op;
+}
+assert_true($cnBy['rateLimited']->rateLimited, '#[RateLimit] ⇒ operation carries the rateLimited flag (drives 429)');
+assert_true(!$cnBy['colNoItem']->rateLimited, 'an unrated operation does not carry the rateLimited flag');
 
 echo "OperationProjection passed\n";

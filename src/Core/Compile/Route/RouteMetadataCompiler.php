@@ -594,6 +594,7 @@ final class RouteMetadataCompiler
             deprecated: $operation?->deprecated ?? false,
             controller: $controller,
             method: $method->getName(),
+            rateLimited: $this->isRateLimited($method),
         );
     }
 
@@ -616,7 +617,10 @@ final class RouteMetadataCompiler
             // Router converts the placeholder kebab→camel before binding; match against that.
             $boundName = $this->convertKebabToCamelCase($rawName);
             if (!isset($signature[$boundName])) {
-                $this->diagnostics->error(
+                // A path placeholder without a matching signature arg is a MIGRATION gap, not a structural
+                // break: the runtime route still resolves (Router binds nothing), and the spec can emit a
+                // placeholder string path-param. It blocks only in strict/managed mode.
+                $this->diagnostics->warning(
                     controller: $reflection->getName(),
                     method: $method->getName(),
                     dto: null,
@@ -771,6 +775,18 @@ final class RouteMetadataCompiler
         // #[Response(collection: true)] disambiguates an array body: the schema is the per-ITEM shape and the
         // response projects type:array, items:{schema}. Without it the schema is a single object body.
         if ($response->collection) {
+            if ($itemSchema === null) {
+                // A collection flag with no item schema is an M7 migration gap (the array shape is unknown);
+                // the spec can still emit type:array, just without an items schema. Fatal only in strict mode.
+                $this->diagnostics->warning(
+                    controller: $method->getDeclaringClass()->getName(),
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'return',
+                    cause: '#[Response(collection: true)] declares no item schema (schema: …); the array element shape is not derivable',
+                    fix: 'declare the item shape: #[Response(schema: ItemDto::class, collection: true)]',
+                );
+            }
             return new ResponseMetadata(
                 status: $response->status,
                 schema: null,
@@ -809,7 +825,7 @@ final class RouteMetadataCompiler
         $returnType = $method->getReturnType();
 
         if ($returnType === null) {
-            $this->diagnostics->error(
+            $this->diagnostics->warning(
                 controller: $reflection->getName(),
                 method: $method->getName(),
                 dto: null,
@@ -827,7 +843,7 @@ final class RouteMetadataCompiler
         }
 
         if ($this->isMixedType($inner)) {
-            $this->diagnostics->error(
+            $this->diagnostics->warning(
                 controller: $reflection->getName(),
                 method: $method->getName(),
                 dto: null,
@@ -839,7 +855,7 @@ final class RouteMetadataCompiler
         }
 
         if ($this->isArrayType($inner)) {
-            $this->diagnostics->error(
+            $this->diagnostics->warning(
                 controller: $reflection->getName(),
                 method: $method->getName(),
                 dto: null,
@@ -852,7 +868,7 @@ final class RouteMetadataCompiler
 
         $mapped = $this->typeMapper->map($inner);
         if ($this->typeMapper->isUnsupported($mapped)) {
-            $this->diagnostics->error(
+            $this->diagnostics->warning(
                 controller: $reflection->getName(),
                 method: $method->getName(),
                 dto: null,
@@ -868,7 +884,7 @@ final class RouteMetadataCompiler
         // contract — its public properties are not its real JSON shape.
         if ($mapped['ref'] !== null) {
             if (!$this->eligibility->isEligible($mapped['ref'])) {
-                $this->diagnostics->error(
+                $this->diagnostics->warning(
                     controller: $reflection->getName(),
                     method: $method->getName(),
                     dto: $mapped['ref'],
@@ -879,7 +895,7 @@ final class RouteMetadataCompiler
                 return [new ResponseMetadata(200, schema: null, description: 'OK')];
             }
             if ($this->declaresJsonSerializable($mapped['ref'])) {
-                $this->diagnostics->error(
+                $this->diagnostics->warning(
                     controller: $reflection->getName(),
                     method: $method->getName(),
                     dto: $mapped['ref'],
@@ -942,6 +958,19 @@ final class RouteMetadataCompiler
             scheme: 'bearerAuth',
             requiredRules: ['any' => $any, 'all' => $all],
         );
+    }
+
+    /**
+     * Whether the method carries a #[RateLimit] (class OR method level — rate limiting merges across both like
+     * middlewares). Drives the 429 standard error response (StandardErrorPolicy, Step 4).
+     */
+    private function isRateLimited(ReflectionMethod $method): bool
+    {
+        if ($method->getAttributes(RateLimit::class) !== []) {
+            return true;
+        }
+        $declaring = $method->getDeclaringClass();
+        return $declaring->getAttributes(RateLimit::class) !== [];
     }
 
     // --- small reflection/type helpers (TypeMapper covers the actual mapping) ---

@@ -34,6 +34,7 @@ final readonly class OperationMetadata
         public bool $exclude = false,
         public ?string $controller = null,
         public ?string $method = null,
+        public bool $rateLimited = false,
     ) {
     }
 

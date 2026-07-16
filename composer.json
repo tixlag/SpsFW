@@ -15,7 +15,8 @@
     "guzzlehttp/guzzle": "^7.10",
     "ext-posix": "*",
     "monolog/monolog": "^3.10",
-    "firebase/php-jwt": "^7.0"
+    "firebase/php-jwt": "^7.0",
+    "symfony/yaml": "^7.0"
   },
   "autoload": {
     "psr-4": {

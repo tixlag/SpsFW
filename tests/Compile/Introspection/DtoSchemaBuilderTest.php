@@ -268,12 +268,15 @@ assert_same('noOaNoField', $noOa->serialName(), 'no Field ⇒ the serial name is
 assert_same([], $builder->ruleGraph($builder->build(DsbFieldItemsDto::class))->rules, 'a DTO with no OA yields an empty RULE GRAPH even though its schema is non-empty (the two sets diverge)');
 
 // ============================================================================
-// #[Items] exactly-one-of class|type: both / neither each surface a diagnostic.
+// #[Items] exactly-one-of class|type: both / neither each surface a FATAL (structural) diagnostic. The
+// `neither` property is also an itemless array ⇒ an additional MIGRATION warning (severity split, Step 4).
 // ============================================================================
 $itemsDiag = new CompileDiagnostics();
 (new DtoSchemaBuilder($itemsDiag))->build(DsbItemsBadDto::class);
-assert_same(2, $itemsDiag->count(), 'Items with both / neither class+type each surface a diagnostic');
+assert_same(2, $itemsDiag->errorCount(), 'Items with both / neither class+type each surface a FATAL error');
 assert_same('both', $itemsDiag->errors()[0]['field'], 'the both-diagnostic is attributed to its property');
+assert_same(1, $itemsDiag->warningCount(), 'the `neither` array is also itemless ⇒ one migration warning');
+assert_true(str_contains($itemsDiag->warnings()[0]['cause'], 'no derivable item type'), 'itemless-array warning text');
 
 // ============================================================================
 // Memoization: build() returns the SAME instance for a repeated FQCN (plan §17).

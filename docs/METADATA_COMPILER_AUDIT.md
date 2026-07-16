@@ -383,6 +383,82 @@ lockfile), preserved/convention-распределение честное. Вс�
 `*Dto` не классифицирована ошибочно как non-eligible (подтверждено сэмплом: 292 `Response` + 5 `UserAbstract`,
 0 misclassified DTO). `composer test` зелёный (25/25); чистый checkout F от N не зависит.
 
+### 4.11 Secondary OpenAPI emitter + normalized parity на реальном N (Step 4 / M3, dev-only probe)
+
+**Генератор:** `docs/metadata_compiler_audit/gen_n_openapi_parity.php` — dev-only (НЕ тест чистого checkout'а
+F; вручную против живого N). Тот же bootstrap, что §4.8/§4.10. Эмиттит **вторичный** артефакт
+`next/.cache/swagger/openapi.generated.yml`; основной `openapi.yml` (swagger-php) НЕ трогается (plan §15, M6).
+
+**Решения Step 4 (фиксированы, plan Шаг 4):** прямая зависимость `symfony/yaml ^7.0` (materialized в
+`composer.lock`); emitter **array-first** (детерминированный PHP-массив, YAML — только финальная сериализация);
+parity — после round-trip `Yaml::parseFile` + normalization (рекурсивный ksort, drop `x-fqcn`/`nullable`/пустых
+контейнеров), сравнение массив-к-массиву, НИКОГДА по сырой текст/whitespace.
+
+**C. Secondary emission (PARITY-режим):** `OpenApiEmitter::emit(384 ops)` — `emit()` пишет диагностики, но НЕ
+бросает; режим решает вызывающий (`throwOnErrors()` / `throwOnErrorsAndWarnings()`).
+
+| Метрика | Значение |
+|---|---|
+| Raw operations (из §4.10) | 384 |
+| Effective paths emitted | **330** (377 METHOD:path-операций, collapse last-wins) |
+| Component schemas emitted | **149** |
+| Emission — fatal (ERROR) | **30**: 28 duplicate METHOD:path (last-wins, зеркалит Router) + **2 schema-name collision** |
+| Emission — warning | 1 |
+| Operation-projection migration gaps (WARNING) | **390** (374 из §4.10 реклассифицированы error→warning + collection-without-schema) |
+| Operation-projection structural errors | **0** |
+
+**Mode behavior (требование заказчика):** в **parity**-режиме 390 migration-gaps НЕ блокируют генерацию —
+`openapi.generated.yml` эмиттится и parity-report строится. В **strict/managed** `throwOnErrorsAndWarnings()`
+HALT-ит на 390 warning(s) + 30 error(s). Реализовано разделением каналов severity в `CompileDiagnostics`
+(ERROR=структурные → `throwOnErrors()` во ВСЕХ режимах; WARNING=migration-gap → только strict/managed).
+
+**Structural findings N (fatal, не parity-fail):** (1) **28 duplicate METHOD:path** — N реально имеет
+shadowed-роуты (Router молча перетирал); emitter делает их видимыми, last-wins. (2) **schema-name collision
+`CreateNewsDto`**: два FQCN (`SpsNext\News\Dto\CreateNewsDto` и `SpsNext\LK\News\DTOs\CreateNewsDto`)
+коллапсируют в одно short name → неоднозначный `$ref`. Фикс — `#[Field(schema: …)]` rename или namespace
+cleanup (M7). **Bug найден и исправлен на N:** swagger-php `Generator::UNDEFINED` sentinel протекал через
+OA items-fallback (`oaItemsType` читал `OA\Items->type` = sentinel-строку как scalar-тип) →
+`ReflectionException`. Исправлено `DtoSchemaBuilder::isOaDefault()` (через канонический
+`\OpenApi\Generator::isDefault()`) + regression-тест (`OpenApiEmitterTest`, массив
+`items: new OA\Items(ref: X)` с UNDEFINED `type`).
+
+**D. Normalized parity vs legacy swagger-php `openapi.yml`:**
+
+| Метрика | Generated | Legacy |
+|---|---|---|
+| Paths | 330 | 300 |
+| Schemas | 149 | 338 |
+| Operations | 377 | 347 |
+| Paths only-in-generated / only-in-legacy | 32 / 2 | |
+| Schemas only-in-generated / only-in-legacy | 4 / **193** | |
+| **Total normalized divergences** | **4737** | |
+
+По категориям: **2559** missing-in-generated, **1062** value-mismatch, **1116** extra-in-generated.
+
+4737 расхождений — **ожидаемый baseline M3** (цель zero-divergence — M7/M8/M9). Доминирующие root-causes
+(сэмпл + анализ):
+
+| Root-cause | Доля / пример | Когда закрывается |
+|---|---|---|
+| **Schema coverage gap** (149 vs 338; 193 only-in-legacy) | доминирует. (a) операции с провалившейся response-projection (390 gap) не дотягиваются до своих DTO-refs → схемы не собраны; (b) swagger-php сканирует standalone `#[OA\Schema]`/nested DTO вне досягаемости эмитнутых роутов. Emitter собирает только transitively-reachable схемы | M7 (`#[Response]`) + M8 (DTO cleanup) |
+| **Serialization-name** (PHP name vs OA `property` arg) | `userCode1C` (gen) vs `user_code_1c` (legacy) — serialization contract plan §6: JSON-ключ = PHP property name, НЕ OA `property:` (если нет `JsonSerializable`-ремапа). swagger-php ошибается; projection — по контракту | M8 (per-DTO verify JsonSerializable) |
+| **$ref target** divergence | `rules` → `AccessRulesDto` (gen) vs `AccessRuleDto` (legacy) — projection выводит item-тип из `#[Items]`/reflection, swagger-php из явного OA items | M7 |
+| **Missing description/title** | swagger-php эмиттит `OA\Schema` title/description (рус. подписи) — projection их пока не имеет (нет OA\Schema-источника) | M7 (`#[Field]`/описания) |
+| **operationId delta** | 306 deferred id-less ops → missing-in-generated operationId | M9 (canonical-id assignment) |
+| **Duplicate-key / collision** | 28 + 2 (см. structural findings выше) | M7 (namespace / `#[Field(schema:)]`) |
+
+**E. Prereq 4 — non-promoted constructor fields на реальном N:** **0** DTO с non-promoted ctor-param,
+тегированным `#[OA\Property]`. N-ные DTO используют promoted ctor-params (или не тегируют non-promoted) →
+специальная ветка `Router::extractValidationRules` (Router.php:421–481) — **фактически мёртвый код на N**.
+Schema-projection корректно их исключает (они не `json_serialize`'ются); расхождений этого класса нет.
+
+**Вывод §4.11:** secondary emitter работает на полном инвентаре N (384 ops → 330 paths / 149 schemas) в
+parity-режиме, не блокируемом 390 migration-gaps; parity-report (4737 normalized divergences) —
+**baseline/фронт миграции M7–M9**, разложенный по root-causes (schema-coverage, serialization-name, $ref-target,
+описания, operationId). Режимная семантика (parity tolerate / strict-managed halt) подтверждена на реальных
+числах. Bug sentinel-протечки swagger-php найден и закрыт regression-тестом. `composer test` зелёный (27/27);
+чистый checkout F от N не зависит (probe — dev-only артефакт, числа зафиксированы в §4.11).
+
 ---
 
 ## 5. Deploy / Docker / cache-volume audit

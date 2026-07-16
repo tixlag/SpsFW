@@ -287,7 +287,7 @@ final class DtoSchemaBuilder
     ): PropertyMetadata {
         $serialName = isset($args['property']) ? (string) $args['property'] : null;
         $refClass = $this->reflectionClassName($type);
-        $oaRef = isset($args['ref']) && is_string($args['ref']) ? $args['ref'] : null;
+        $oaRef = isset($args['ref']) && is_string($args['ref']) && !$this->isOaDefault($args['ref']) ? $args['ref'] : null;
         $phpType = $type instanceof ReflectionNamedType
             ? $type->getName()
             : ($type !== null ? (string) $type : null);
@@ -331,10 +331,39 @@ final class DtoSchemaBuilder
 
         [$hasDefault, $defaultValue] = $this->resolvePropertyDefault($property, $realName, $oaArgs, $constructorParamDefaults);
         $refClass = $this->reflectionClassName($type);
-        $oaRef = isset($oaArgs['ref']) && is_string($oaArgs['ref']) ? $oaArgs['ref'] : null;
+        $oaRef = isset($oaArgs['ref']) && is_string($oaArgs['ref']) && !$this->isOaDefault($oaArgs['ref']) ? $oaArgs['ref'] : null;
         $phpType = $type instanceof ReflectionNamedType
             ? $type->getName()
             : ($type !== null ? (string) $type : null);
+
+        // Legacy OA items/ref fallback (schema parity, pre-M7/M8 OA cleanup): a typed #[Items] wins; otherwise
+        // the array element / nested ref is resolved from the legacy #[OA\Property(items:)/ref:] so the schema
+        // projection matches today's swagger-php output until the OA source is removed. This feeds ONLY the
+        // schema projection — the rule graph (oaTaggedProperties) replays OA verbatim and is untouched.
+        $itemType = $this->itemsType($items);
+        $resolvedRefClass = $refClass;
+        $oaItemType = $this->oaItemsType($oaArgs);
+        if ($itemType === null && $oaItemType !== null) {
+            $itemType = $oaItemType;
+        }
+        if ($resolvedRefClass === null && $oaRef !== null && class_exists($oaRef)) {
+            $resolvedRefClass = $oaRef;
+        }
+
+        // An array property with no derivable element type — neither #[Items] nor a legacy OA items type/ref —
+        // is a migration gap: the spec can still emit type:array, just not its items schema. Fatal only in
+        // strict mode.
+        $isArray = $phpType === 'array' || ($oaArgs['type'] ?? null) === 'array' || $oaItemType !== null;
+        if ($isArray && $itemType === null) {
+            $this->diagnostics->warning(
+                controller: null,
+                method: null,
+                dto: $declaringClass,
+                field: $realName,
+                cause: sprintf('array property %s::$%s has no derivable item type', $declaringClass, $realName),
+                fix: "declare the element shape with #[Items(class: \ExampleDto::class)] or #[Items(type: 'integer')]",
+            );
+        }
 
         // #[Field(enum)] is always a list; the legacy OA `enum` may be a scalar (swagger-php allows it) —
         // normalize to a list so the typed ?array field never receives a string.
@@ -348,9 +377,9 @@ final class DtoSchemaBuilder
             name: $realName,
             serialName: $field?->name, // null ⇒ serialName() falls back to the PHP name (the real JSON key)
             phpType: $phpType,
-            ref: $refClass ?? $oaRef,
-            refClass: $refClass,
-            itemType: $this->itemsType($items),
+            ref: $resolvedRefClass ?? $oaRef,
+            refClass: $resolvedRefClass,
+            itemType: $itemType,
             format: $field?->format ?? ($oaArgs['format'] ?? null),
             nullable: $type?->allowsNull() ?? true, // untyped ⇒ optional (treated as nullable)
             hasDefault: $hasDefault,
@@ -395,6 +424,40 @@ final class DtoSchemaBuilder
             return null;
         }
         return $items->class ?? $items->type;
+    }
+
+    /**
+     * The legacy #[OA\Property(items:)] element type: a DTO FQCN (when items->ref points at a loadable class)
+     * or a scalar OpenAPI type (items->type, e.g. 'string'/'integer'). swagger-php puts a DTO FQCN or a
+     * #/components/schemas/... ref string in items->ref; only real classes resolve here (parity is built on
+     * real classes). Feeds the schema-projection array-item fallback only — never the rule graph.
+     *
+     * @param array<string, mixed> $oaArgs
+     */
+    private function oaItemsType(array $oaArgs): ?string
+    {
+        $items = $oaArgs['items'] ?? null;
+        if (!is_object($items)) {
+            return null;
+        }
+        if (isset($items->ref) && is_string($items->ref) && class_exists($items->ref)) {
+            return $items->ref;
+        }
+        if (isset($items->type) && is_string($items->type) && $items->type !== '' && !$this->isOaDefault($items->type)) {
+            return $items->type;
+        }
+        return null;
+    }
+
+    /**
+     * swagger-php marks every UNSET attribute argument with the {@see \OpenApi\Generator::UNDEFINED} sentinel.
+     * Inner OA objects read via getArguments() (e.g. an explicitly-passed #[OA\Items]) arrive fully constructed,
+     * so an UNSET property (such as `OA\Items->type` when only `ref` was given) is that sentinel string — NOT
+     * null. Treat the sentinel as unset so it never reaches reflection or the emitted schema.
+     */
+    private function isOaDefault(mixed $value): bool
+    {
+        return \OpenApi\Generator::isDefault($value);
     }
 
     /**
