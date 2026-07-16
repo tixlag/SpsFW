@@ -7,3 +7,4 @@ composer.phar
 */openapi.yaml
 /.cache/
 /.worktrees/
+/.review-handoff/
