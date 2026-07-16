@@ -108,6 +108,10 @@ $ctx = new ApplicationContext(
     routeOverrideMap: $routeOverrideMap,
     configFiles: $configFiles,
     lockTimeoutSec: 30.0,
+    // PRIMARY openapi.yml parity scan set — the HISTORICAL DocsUtil::updateDocs() contract [src, libraryRoot], in that
+    // ORDER. This is DECOUPLED from discoveryPaths (PathManager::getControllersDirs() = [libraryRoot, src]); passing it
+    // explicitly here pins the parity order the same way the real preload will (Step 6b #1/#3).
+    legacyOpenApiScanPaths: [PathManager::getSrcPath(), PathManager::getLibraryRoot()],
 );
 
 echo "==== N preload integration (temp cache: $cachePath) ====\n";
@@ -182,13 +186,36 @@ foreach ($checks as $name => $pass) {
     $ok = $ok && (bool) $pass;
 }
 
-// PRIMARY openapi.yml (parity) must be byte-identical to what the legacy producer writes — prove the Coordinator
-// keeps the spec Orval reads fresh (Step 6b #5). Compare against DocsUtil::produceLegacyOpenApiYaml on the same scan.
+// PRIMARY openapi.yml (parity) must be byte-identical to the HISTORICAL producer — DocsUtil::updateDocs()'s contract
+// scans [src, libraryRoot], NOT route-discovery order [libraryRoot, src] (Step 6b #5). The OLD probe compared the
+// Coordinator against produceLegacyOpenApiYaml(getControllersDirs()): a TAUTOLOGICAL self-comparison — before the fix
+// the Coordinator scanned that SAME discovery set, so X-vs-X proved nothing. The golden now reproduces the historical
+// contract [src, libraryRoot]; the Coordinator is fed that SAME explicit order via legacyOpenApiScanPaths above; and
+// the order is PINNED by showing the discovery-order scan is the REVERSE and does NOT match the Coordinator output.
 $primaryYaml = is_file($cachePath . '/swagger/openapi.yml') ? file_get_contents($cachePath . '/swagger/openapi.yml') : '';
-$legacyYaml = \SpsFW\Core\DocsUtil::produceLegacyOpenApiYaml(PathManager::getControllersDirs());
-$parity = $primaryYaml === $legacyYaml;
-echo sprintf("  [%s] primary openapi.yml == legacy producer (parity, byte-identical)\n", $parity ? 'OK' : 'FAIL');
-$ok = $ok && $parity;
+$historicalScan = [PathManager::getSrcPath(), PathManager::getLibraryRoot()];
+$discoveryScan = [PathManager::getLibraryRoot(), PathManager::getSrcPath()]; // PathManager::getControllersDirs() order
+$goldenYaml = \SpsFW\Core\DocsUtil::produceLegacyOpenApiYaml($historicalScan);
+$discoveryYaml = \SpsFW\Core\DocsUtil::produceLegacyOpenApiYaml($discoveryScan);
+
+$parityVsHistorical = $primaryYaml === $goldenYaml;
+$orderSensitive = $goldenYaml !== $discoveryYaml;          // does scan order actually change the spec for N's tree?
+$matchesDiscoveryOrder = $primaryYaml === $discoveryYaml;  // must be FALSE — the Coordinator must use the historical order
+$checks['parity_vs_historical_producer'] = $parityVsHistorical;
+$checks['uses_historical_not_discovery_order'] = !$matchesDiscoveryOrder;
+echo sprintf("  [%s] primary openapi.yml == historical producer [src, libraryRoot] (byte-identical parity)\n", $parityVsHistorical ? 'OK' : 'FAIL');
+echo sprintf("  [INFO] scan-order sensitivity for N: [src, libraryRoot] vs [libraryRoot, src] %s\n", $orderSensitive ? 'DIFFER (order matters — the parity fix has real effect)' : 'are identical (swagger-php sorted them; order is immaterial here)');
+echo sprintf("  [%s] Coordinator does NOT emit discovery-order output (it uses the historical [src, libraryRoot] order)\n", !$matchesDiscoveryOrder ? 'OK' : 'FAIL');
+$ok = $ok && $parityVsHistorical && !$matchesDiscoveryOrder;
+
+// Informational: against N's currently-deployed spec (the one Orval reads). May differ if that file is stale or was
+// built with a different swagger-php version — reported, not a hard gate.
+$deployedYaml = is_file($nextRoot . '/.cache/swagger/openapi.yml') ? file_get_contents($nextRoot . '/.cache/swagger/openapi.yml') : '';
+if ($deployedYaml !== '') {
+    echo sprintf("  [INFO] deployed .cache/swagger/openapi.yml vs Coordinator: %s\n",
+        $deployedYaml === $primaryYaml ? 'byte-identical' : sprintf('differs (deployed=%d bytes vs Coordinator=%d bytes)', strlen($deployedYaml), strlen($primaryYaml))
+    );
+}
 
 $rrm($cachePath);
 echo "\nverdict: " . ($ok ? 'PASS' : 'FAIL') . "\n";

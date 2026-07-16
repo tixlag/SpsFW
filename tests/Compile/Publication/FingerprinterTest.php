@@ -110,6 +110,49 @@ $emptyFp1 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir . '
 $emptyFp2 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir . '/does-not-exist']), [], $tmpDir);
 assert_same($emptyFp1, $emptyFp2, 'empty discovery yields a stable fingerprint');
 
+// ============================================================================
+// Step 6b parity fix: legacyOpenApiScanPaths PARTICIPATE in the fingerprint, ORDER-PRESERVING (swagger-php output is
+// order-sensitive), RELATIVE-NORMALIZED (deploy-path-independent), and are NEVER stored in the manifest (absolute or
+// relative). The historical [src, libraryRoot] order and the route-discovery [libraryRoot, src] order MUST yield
+// different fingerprints — this PINS the parity contract (the latent bug was reusing discovery order for the spec).
+// ============================================================================
+$scanRoot = sys_get_temp_dir() . '/spsfw_scan_' . bin2hex(random_bytes(4));
+mkdir($scanRoot, 0777, true);
+$appScan = $scanRoot . '/scan_app';   // stands in for the app src
+$libScan = $scanRoot . '/scan_lib';   // stands in for the framework libraryRoot
+mkdir($appScan, 0777, true);
+mkdir($libScan, 0777, true);
+file_put_contents($appScan . '/C.php', "<?php\n// app\n");
+file_put_contents($libScan . '/C.php', "<?php\n// library\n");
+$scanFiles = $fingerprinter->sourceFiles([$appScan, $libScan]);
+
+// Participates: empty vs present ⇒ different fingerprint.
+$fpNoScan = $fingerprinter->fingerprint($scanFiles, [], $scanRoot, [], [], [], []);
+$fpHistorical = $fingerprinter->fingerprint($scanFiles, [], $scanRoot, [], [], [], [$appScan, $libScan]);
+assert_true($fpNoScan !== $fpHistorical, 'legacyOpenApiScanPaths participate in the fingerprint');
+
+// ORDER-PRESERVING: historical [src, libraryRoot] ≠ discovery [libraryRoot, src] — order is NOT sorted away.
+$fpDiscovery = $fingerprinter->fingerprint($scanFiles, [], $scanRoot, [], [], [], [$libScan, $appScan]);
+assert_true($fpHistorical !== $fpDiscovery, 'scan-path ORDER matters: [src, libraryRoot] ≠ [libraryRoot, src] (pins the parity contract)');
+
+// DEPLOY-PATH-INDEPENDENT (but order-preserving): identical trees at a different absolute root, same order ⇒ same fingerprint.
+$scanRoot2 = sys_get_temp_dir() . '/spsfw_scan2_' . bin2hex(random_bytes(4));
+mkdir($scanRoot2, 0777, true);
+$appScan2 = $scanRoot2 . '/scan_app';
+$libScan2 = $scanRoot2 . '/scan_lib';
+mkdir($appScan2, 0777, true);
+mkdir($libScan2, 0777, true);
+file_put_contents($appScan2 . '/C.php', "<?php\n// app\n");
+file_put_contents($libScan2 . '/C.php', "<?php\n// library\n");
+$fpHistorical2 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$appScan2, $libScan2]), [], $scanRoot2, [], [], [], [$appScan2, $libScan2]);
+assert_same($fpHistorical, $fpHistorical2, 'scan paths are relative-normalized: identical trees at different roots, same order ⇒ same fingerprint');
+
+// NEVER in the manifest: only the fingerprint hash carries the scan paths — the manifest stores neither absolute nor relative paths.
+$manifestScan = $fingerprinter->manifest($fpHistorical, [], [], [], [], [], [], '2020-01-01T00:00:00+00:00');
+$manifestScanSerialized = var_export($manifestScan, true);
+assert_true(!str_contains($manifestScanSerialized, $appScan) && !str_contains($manifestScanSerialized, $libScan), 'the manifest does NOT carry the absolute scan paths');
+assert_true(!str_contains($manifestScanSerialized, 'scan_app') && !str_contains($manifestScanSerialized, 'scan_lib'), 'the manifest does NOT carry the relative scan paths either');
+
 // cleanup
 $rrm = static function (string $dir) use (&$rrm): void {
     if (!is_dir($dir)) {
@@ -128,4 +171,6 @@ $rrm($tmpDir);
 $rrm($rootA);
 $rrm($rootB);
 $rrm($cfgRoot);
+$rrm($scanRoot);
+$rrm($scanRoot2);
 echo "Fingerprinter passed\n";
