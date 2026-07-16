@@ -508,43 +508,52 @@ end-to-end на реальном дереве контроллеров N в **re
 копию, поэтому probe переопределяет classmap для каждого локального `src`-класса (`addClassMap`), иначе stale
 vendored `DICacheBuilder` выигрывал бы у рабочей ветки.
 
-**Контракт probe — подтверждён (PASS):** `published=false`, `reason='dry-run'`, текущие N `.cache`-артефакты
-(`compiled_routes.php`, `compiled_di.php`, `job_registry.php`, `swagger/openapi.yml`, secondary
-`openapi.generated.yml`) **не изменены** (md5 до === после). Публикация **заблокирована** структурными ERROR'ами;
-ни один ERROR не понижен до warning ради прохождения.
+**Контракт probe — подтверждён (PASS):** probe передаёт Coordinator'у **реальную tri-state operationId-карту**
+(367 записей: 61 preserved id + 306 deferred-null), распарсенную из `operation_id_reconciliation.tsv` (rev.3), и
+**явную `routeOverrideMap`** для 6 Core↔Next auth-перекрытий (winner = Next). Результат: `published=false`,
+`reason='dry-run'`, текущие N `.cache`-артефакты (`compiled_routes.php`, `compiled_di.php`, `job_registry.php`,
+`swagger/openapi.yml`, secondary `openapi.generated.yml`) **не изменены** (md5 до === после). Публикация
+заблокирована оставшимися структурными ERROR'ами; ни один ERROR не понижен до warning ради прохождения.
 
-**Счётчик:** Coordinator агрегирует диагностики route-compiler + OpenAPI-emitter + operationId-resolver, и каждая
-сталкивающаяся операция даёт свою запись → **37 сырых ERROR-записей**. §4.11 baseline «15» (14 записей
-duplicate-route-key + 1 collision) — это **подмножество** этих 37 (route-compiler duplicate-key + CreateNewsDto);
-Coordinator дополнительно поднимает 14 emitter duplicate-operation записей и 8 operationId-collision записей.
-Surface строго шире; блокировка публикации — та же и подтверждена сильнее.
+**Реклассификация (исправление ревью #10): «37 сырых записей» — это НЕ 37 дефектов.** Coordinator агрегирует
+диагностики route-compiler + OpenAPI-emitter + operationId-resolver, и каждая сталкивающаяся операция даёт свою
+запись — поэтому raw-счётчик завышает число реальных проблем. Более того, ранний «unmapped» замер (пустая
+operationId-карта, без перекрытий) раздувал счётчик артефактами convention-operationId. С реальной tri-state картой
++ объявленными перекрытиями raw-поверхность схлопывается до **3 ERROR-записей**, и они делятся на 4 чётких категории:
 
-**Точный список структурных проблем → обязательное устранение перед Step 6b** (12 distinct):
+**1. Явные intentional overrides (6) — НЕ дефекты.** 6 Core↔Next auth-маршрутов (`login`, `register`, `logout`,
+`refresh-tokens`, `add-access-rules`, `set-access-rules`): Next намеренно замещает framework-шаблоны Core. С
+`routeOverrideMap` Coordinator распознаёт их как перекрытия (winner = Next, Core shadowed), НЕ как дубли —
+ERROR-записей по ним нет, а shadowed-операции не попадают ни в OpenAPI, ни в operationId-проверку. Winner выбран
+по карте, независимо от порядка discovery. (Без карты те же 6 выглядели бы «duplicate route key» — отсюда
+артефактный счётчик в unmapped-замере.)
 
-*Duplicate `METHOD:path` route keys (7)* — сегодня молча перетираются в route-cache:
-1. `POST:/api/auth/refresh-tokens` — `SpsFW\Core\Auth\AuthController::refreshTokens` ↔ `SpsNext\Auth\AuthController::refreshTokens`
-2. `POST:/api/auth/register` — Core `AuthController::register` ↔ Next `AuthController::register`
-3. `POST:/api/auth/login` — Core ↔ Next `AuthController::login`
-4. `POST:/api/auth/logout` — Core ↔ Next `AuthController::logout`
-5. `PATCH:/api/auth/add-access-rules` — `SpsFW\Core\Auth\AccessRule\AccessRuleController::addAccessRules` ↔ `SpsNext\Auth\AuthController::addAccessRules`
-6. `POST:/api/auth/set-access-rules` — Core `AccessRuleController::setAccessRules` ↔ Next `AuthController::setAccessRules`
-7. `GET:/api/employees/documents/code-1c/{code_1c}` — **внутри одного контроллера**: `EmployeeDocumentsController::getDocumentsByUserCode1C` ↔ `::getImportantDocumentsByUserCode1C` (два метода, один path)
+**2. Реальный route-дефект (1) — починить в N.** `GET:/api/employees/documents/code-1c/{code_1c}` — внутри ОДНОГО
+контроллера два метода (`EmployeeDocumentsController::getDocumentsByUserCode1C` ↔ `::getImportantDocumentsByUserCode1C`)
+регистрируют один path. Это подлинный дефект N (не перекрытие): остаётся ERROR (2 записи), должен быть устранён
+в Step 6b (развести path'ы или слить в один метод).
 
-> Пункты 1-6 — паттерн Core↔Next override (Next-контроллер должен ЗАМЕЩАТЬ Core, но оба discovered). Пункт 7 —
-> подлинный дефект N (два метода на одном GET-path). Оба класса конфликтов сегодня теряются в lazy route-cache.
+**3. Compiler-induced findings (4 operationId-коллизии) — НЕ N-дефекты, исчезают с реальной картой.** В unmapped-замере
+Core и Next `AuthController` давали одинаковый convention-operationId (`AuthLogin`, `AuthLogout`, `AuthRegister`,
+`AuthRefreshTokens`). С реальной tri-state картой Next-методы получают preserved-ids (`loginUser`, `logoutUser`, …),
+а shadowed Core-операции вообще не участвуют в проверке уникальности → **operationId-коллизий: 0** (directive #4,
+доказано: preserved-id uniqueness + shadowing). Это были артефакты пустой карты, а не баги N — поэтому
+preemptively называть их «N-bugs» было ошибкой.
 
-*operationId collisions (4)* — следствие пунктов 1-4 (Core и Next `AuthController` дают одинаковый short-name
-operationId): `AuthLogin`, `AuthLogout`, `AuthRegister`, `AuthRefreshTokens`. Пункты 5-6 operationId-коллизии не
-дают (разные short-name контроллеров: `AccessRuleController` vs `AuthController`).
+**4. Schema-name collision (1) — починить в N.** `components.schemas.CreateNewsDto` ← `SpsNext\LK\News\DTOs\CreateNewsDto`
+и `SpsNext\News\Dto\CreateNewsDto` (два DTO-класса маппятся в одно component-имя по short name). Реальный дефект N,
+остаётся ERROR.
 
-*Schema-name collision (1):* `components.schemas.CreateNewsDto` ← `SpsNext\LK\News\DTOs\CreateNewsDto` и
-`SpsNext\News\Dto\CreateNewsDto` (два DTO-класса маппятся в одно component-имя по short name).
+**Сравнение замеров:** unmapped baseline — 15 ERROR-записей (7 distinct dup-route-keys × 2 + 1 CreateNewsDto);
+с реальной картой + перекрытиями — **3 ERROR-записи** (EmployeeDocuments ×2 + CreateNewsDto ×1), 6 применённых
+перекрытий, 0 operationId-коллизий. Блокировка публикации — та же и подтверждена сильнее (на корректных входах).
 
 **Вывод §4.12:** Coordinator на реальном N ведёт себя точно по Step-5-контракту — единый flow, агрегированные
-диагностики, ERROR блокирует публикацию во ВСЕХ режимах, dry-run не трогает prod-кеш. **Текущий N нельзя
-переводить в managed production, пока существуют 12 distinct структурных проблем (37 записей) выше** — это
-worklist для Step 6b (переопределение/исключение Core↔Next auth overrides, починка intra-controller path-коллизии
-`EmployeeDocumentsController`, разрешение `CreateNewsDto` schema-name collision). Шаг 6 не начат.
+диагностики, ERROR блокирует публикацию во ВСЕХ режимах, dry-run не трогает prod-кеш, а реальные tri-state входы
+(карта + перекрытия) корректно разделяют intentional-перекрытия/артефакты от подлинных дефектов. **Worklist
+Step 6b — только реальные дефекты N:** (а) развести intra-controller path-коллизию `EmployeeDocumentsController`;
+(б) разрешить `CreateNewsDto` schema-name collision (переименовать один из DTO / добавить явное schema-имя).
+6 Core↔Next auth-перекрытий — это **конфигурация** (`routeOverrideMap`), а не дефект. Шаг 6 не начат.
 ---
 
 ## 5. Deploy / Docker / cache-volume audit

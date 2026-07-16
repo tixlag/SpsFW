@@ -7,8 +7,10 @@ use SpsFW\Core\Compile\Publication\Fingerprinter;
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
 
 /**
- * Шаг 5: Fingerprinter — the source+config fingerprint is DETERMINISTIC and EXCLUDES built_at, so invalidation
- * depends only on WHAT is built, never on WHEN. The manifest records built_at separately (for humans / ordering).
+ * Шаг 5 fix-pass: Fingerprinter — the source+config fingerprint is DETERMINISTIC, EXCLUDES built_at, is
+ * DEPLOY-PATH-INDEPENDENT (sources keyed relative to projectRoot), and hashes compile-time config FILES and the
+ * operationId/route-override MAPS by CONTENT (the manifest stores only md5, never file content or the maps — no
+ * secrets are stored wholesale).
  */
 
 $fingerprinter = new Fingerprinter();
@@ -21,15 +23,15 @@ file_put_contents($tmpDir . '/B.php', "<?php\n// controller\n");
 $files = $fingerprinter->sourceFiles([$tmpDir]);
 assert_same(2, count($files), 'sourceFiles gathers the .php files');
 
-// --- DETERMINISTIC: same source + same config ⇒ identical fingerprint, across repeated calls.
-$fp1 = $fingerprinter->fingerprint($files, ['mode' => 'managed', 'policy' => 'parity']);
-$fp2 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['mode' => 'managed', 'policy' => 'parity']);
+// --- DETERMINISTIC: same source + same config + same projectRoot ⇒ identical fingerprint.
+$fp1 = $fingerprinter->fingerprint($files, ['mode' => 'managed'], $tmpDir);
+$fp2 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['mode' => 'managed'], $tmpDir);
 assert_same($fp1, $fp2, 'fingerprint is deterministic across calls');
 assert_same(32, strlen($fp1), 'fingerprint is an md5 hex string');
 
 // --- built_at is NOT in the fingerprint: manifests with different built_at share the same fingerprint.
-$mEarly = $fingerprinter->manifest($fp1, ['compiled_routes.php' => 'abc'], ['mode' => 'managed'], '2020-01-01T00:00:00+00:00');
-$mLate = $fingerprinter->manifest($fp1, ['compiled_routes.php' => 'abc'], ['mode' => 'managed'], '2030-12-31T23:59:59+00:00');
+$mEarly = $fingerprinter->manifest($fp1, ['compiled_routes.php' => 'abc'], ['mode' => 'managed'], [], [], [], [], '2020-01-01T00:00:00+00:00');
+$mLate = $fingerprinter->manifest($fp1, ['compiled_routes.php' => 'abc'], ['mode' => 'managed'], [], [], [], [], '2030-12-31T23:59:59+00:00');
 assert_same('2020-01-01T00:00:00+00:00', $mEarly['built_at'], 'manifest records built_at (early)');
 assert_same('2030-12-31T23:59:59+00:00', $mLate['built_at'], 'manifest records built_at (late)');
 assert_true($mEarly['built_at'] !== $mLate['built_at'], 'built_at differs between the two manifests');
@@ -38,21 +40,74 @@ assert_same(Fingerprinter::COMPILER_VERSION, $mEarly['compiler_version'], 'manif
 
 // --- a source content change ⇒ a DIFFERENT fingerprint (invalidation fires).
 file_put_contents($tmpDir . '/A.php', "<?php\n// version TWO\n");
-$fpAfterEdit = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['mode' => 'managed', 'policy' => 'parity']);
+$fpAfterEdit = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['mode' => 'managed'], $tmpDir);
 assert_true($fp1 !== $fpAfterEdit, 'a source content change produces a different fingerprint');
 
 // --- a config change ⇒ a DIFFERENT fingerprint.
-$fpConfigChange = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['mode' => 'legacy', 'policy' => 'parity']);
+$fpConfigChange = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['mode' => 'legacy'], $tmpDir);
 assert_true($fpAfterEdit !== $fpConfigChange, 'a config change produces a different fingerprint');
 
 // --- config key ORDER is irrelevant (canonicalized).
-$fpOrderA = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['b' => 2, 'a' => 1]);
-$fpOrderB = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['a' => 1, 'b' => 2]);
+$fpOrderA = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['b' => 2, 'a' => 1], $tmpDir);
+$fpOrderB = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir]), ['a' => 1, 'b' => 2], $tmpDir);
 assert_same($fpOrderA, $fpOrderB, 'config key order does not affect the fingerprint');
 
+// ============================================================================
+// DEPLOY-PATH-INDEPENDENCE (Step 5 fix-pass): the SAME source tree checked out at two different absolute roots
+// yields the SAME fingerprint, because sources are keyed RELATIVE to projectRoot.
+// ============================================================================
+$rootA = sys_get_temp_dir() . '/spsfw_deployA_' . bin2hex(random_bytes(4));
+$rootB = sys_get_temp_dir() . '/spsfw_deployB_' . bin2hex(random_bytes(4));
+foreach ([$rootA, $rootB] as $root) {
+    mkdir($root . '/src', 0777, true);
+    file_put_contents($root . '/src/A.php', "<?php\n// identical content\n");
+    file_put_contents($root . '/src/B.php', "<?php\n// identical controller\n");
+}
+$fpDeployA = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$rootA . '/src']), [], $rootA);
+$fpDeployB = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$rootB . '/src']), [], $rootB);
+assert_same($fpDeployA, $fpDeployB, 'deploy-path-independent: identical trees at different roots share a fingerprint');
+
+// ============================================================================
+// Compile-time CONFIG FILES are hashed by CONTENT (md5); a content change fires invalidation. The manifest stores
+// ONLY the md5 — never the file content — so a secrets-bearing di_config is never stored wholesale.
+// ============================================================================
+$cfgRoot = sys_get_temp_dir() . '/spsfw_cfg_' . bin2hex(random_bytes(4));
+mkdir($cfgRoot, 0777, true);
+$diConfig = $cfgRoot . '/di_config.php';
+file_put_contents($diConfig, "<?php\nreturn ['secret' => 'hunter2'];\n");
+$configFiles = ['di_config' => $diConfig];
+$fpCfg1 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$cfgRoot]), [], $cfgRoot, $configFiles);
+file_put_contents($diConfig, "<?php\nreturn ['secret' => 'hunter2-changed'];\n");
+$fpCfg2 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$cfgRoot]), [], $cfgRoot, $configFiles);
+assert_true($fpCfg1 !== $fpCfg2, 'a di_config content change fires a fingerprint change');
+// Manifest carries config_file_hashes (md5 only), and the content is NOT in the manifest.
+$manifestCfg = $fingerprinter->manifest($fpCfg1, [], [], $configFiles, [], [], [], '2020-01-01T00:00:00+00:00');
+assert_true(array_key_exists('config_file_hashes', $manifestCfg), 'manifest carries config_file_hashes');
+assert_true(array_key_exists('di_config', $manifestCfg['config_file_hashes']), 'manifest carries the di_config hash');
+assert_true(str_contains($manifestCfg['config_file_hashes']['di_config'], (string) md5_file($diConfig)) === false || $manifestCfg['config_file_hashes']['di_config'] === md5_file($diConfig), 'di_config hash is a plain md5');
+$serialized = var_export($manifestCfg, true);
+assert_true(!str_contains($serialized, 'hunter2'), 'the manifest does NOT store the di_config secret content');
+
+// ============================================================================
+// operationId / route-override MAPS are hashed into the fingerprint and stored in the manifest only as md5 — never
+// the map wholesale.
+// ============================================================================
+$opMap = ['App\\Ctl::login' => 'loginUser', 'App\\Ctl::deferred' => null];
+$routeMap = ['POST:/auth/login' => 'App\\Ctl::login'];
+$fpMaps = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$cfgRoot]), [], $cfgRoot, [], $opMap, $routeMap);
+$fpNoMaps = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$cfgRoot]), [], $cfgRoot, [], [], []);
+assert_true($fpMaps !== $fpNoMaps, 'the operationId/route-override maps feed the fingerprint');
+$manifestMaps = $fingerprinter->manifest($fpMaps, [], [], [], $opMap, $routeMap, [['key' => 'POST:/auth/login', 'winner' => 'App\\Ctl::login', 'shadowed' => ['Core\\Ctl::login']]], '2020-01-01T00:00:00+00:00');
+assert_true(array_key_exists('map_hashes', $manifestMaps), 'manifest carries map_hashes');
+assert_true(array_key_exists('operation_id_map', $manifestMaps['map_hashes']), 'manifest carries operation_id_map hash');
+assert_true(array_key_exists('overrides_applied', $manifestMaps), 'manifest carries overrides_applied (observability)');
+assert_same(1, count($manifestMaps['overrides_applied']), 'overrides_applied records the one applied override');
+$serializedMaps = var_export($manifestMaps, true);
+assert_true(!str_contains($serializedMaps, 'loginUser'), 'the manifest does NOT store the operationId map wholesale (only its hash)');
+
 // --- a missing discovery dir is tolerated (empty file set ⇒ still a valid, stable fingerprint).
-$emptyFp1 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir . '/does-not-exist']), []);
-$emptyFp2 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir . '/does-not-exist']), []);
+$emptyFp1 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir . '/does-not-exist']), [], $tmpDir);
+$emptyFp2 = $fingerprinter->fingerprint($fingerprinter->sourceFiles([$tmpDir . '/does-not-exist']), [], $tmpDir);
 assert_same($emptyFp1, $emptyFp2, 'empty discovery yields a stable fingerprint');
 
 // cleanup
@@ -70,4 +125,7 @@ $rrm = static function (string $dir) use (&$rrm): void {
     @rmdir($dir);
 };
 $rrm($tmpDir);
+$rrm($rootA);
+$rrm($rootB);
+$rrm($cfgRoot);
 echo "Fingerprinter passed\n";

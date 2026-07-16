@@ -70,9 +70,13 @@ final class OperationIdResolver
     }
 
     /**
-     * Resolve the operationId for a controller::method.
+     * Resolve the operationId for a controller::method AND record it for the uniqueness check.
      *
      * Priority: explicit > lockfile (array_key_exists, value may be null) > convention.
+     *
+     * This is the recording variant (BC): it feeds {@see assertUnique()}. The unified endpoint flow instead
+     * resolves ids for every discovered operation but records ONLY the effective (non-shadowed) ones, so a
+     * shadowed override never participates in the collision check — see {@see resolveId()} + {@see record()}.
      *
      * @param string $controller FQCN of the controller
      * @param string $method controller method name
@@ -84,21 +88,44 @@ final class OperationIdResolver
         string $method,
         ?string $explicit = null,
     ): ?string {
-        if ($explicit !== null && $explicit !== '') {
-            $id = $explicit;
-        } else {
-            $signature = $controller . '::' . $method;
-            // array_key_exists (NOT ??): a present-but-null entry means "keep id-less" and must NOT fall
-            // through to convention; only an ABSENT key is new and gets the controller-qualified id.
-            $id = array_key_exists($signature, $this->lockfile)
-                ? $this->lockfile[$signature]
-                : $this->convention($controller, $method);
-        }
+        $id = $this->resolveId($controller, $method, $explicit);
+        $this->record($id, $controller, $method);
+        return $id;
+    }
 
+    /**
+     * PURE resolution: compute the operationId by priority WITHOUT recording it. Lets the caller decide which
+     * operations feed the uniqueness check (effective vs shadowed).
+     *
+     * @param string $controller FQCN of the controller
+     * @param string $method controller method name
+     * @param ?string $explicit an explicit override; '' is treated as absent
+     * @return ?string the resolved id, or null when the lockfile carries a null for this signature (deferred op)
+     */
+    public function resolveId(
+        string $controller,
+        string $method,
+        ?string $explicit = null,
+    ): ?string {
+        if ($explicit !== null && $explicit !== '') {
+            return $explicit;
+        }
+        $signature = $controller . '::' . $method;
+        // array_key_exists (NOT ??): a present-but-null entry means "keep id-less" and must NOT fall through to
+        // convention; only an ABSENT key is new and gets the controller-qualified id.
+        return array_key_exists($signature, $this->lockfile)
+            ? $this->lockfile[$signature]
+            : $this->convention($controller, $method);
+    }
+
+    /**
+     * Record a resolved id ⇒ source for the uniqueness check. A null id (a deferred, id-less op) is NOT tracked.
+     */
+    public function record(?string $id, string $controller, string $method): void
+    {
         if ($id !== null) {
             $this->assignments[$id][] = $controller . '::' . $method;
         }
-        return $id;
     }
 
     /**

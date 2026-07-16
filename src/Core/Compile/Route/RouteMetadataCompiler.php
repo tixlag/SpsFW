@@ -531,6 +531,13 @@ final class RouteMetadataCompiler
                 $operations[] = $operation;
             }
         }
+        // buildOperation resolved ids PURELY; record every operation (the legacy path has no override
+        // shadowing, so all operations are effective) and assert global uniqueness.
+        foreach ($operations as $operation) {
+            if ($operation->controller !== null && $operation->method !== null) {
+                $this->operationIds->record($operation->operationId, $operation->controller, $operation->method);
+            }
+        }
         $this->operationIds->assertUnique();
         return $operations;
     }
@@ -558,6 +565,188 @@ final class RouteMetadataCompiler
     }
 
     /**
+     * ONE discovery/reflection flow yielding the EFFECTIVE route IR + operation projection (Step 5 fix-pass,
+     * plan §11.1). Duplicate METHOD:path keys declared in $routeOverrideMap keep their declared winner and
+     * shadow the rest: shadowed operations are excluded from the projection (no OpenAPI, no operationId
+     * uniqueness check) and shadowed routes from the IR. A duplicate key with NO override is a genuine
+     * structural ERROR (last-wins in the IR, parity with Router). The winner is map-chosen — independent of
+     * discovery order.
+     *
+     * @param list<string> $discoveryPaths
+     * @param array<string, string> $routeOverrideMap METHOD:path => winner "controller::method"
+     */
+    public function compileEndpointSet(array $discoveryPaths, array $routeOverrideMap = []): EndpointSet
+    {
+        // ONE discovery pass.
+        $classes = [];
+        foreach ($discoveryPaths as $dir) {
+            if (!is_dir($dir)) {
+                continue;
+            }
+            foreach ($this->discoverControllerClasses($dir) as $class) {
+                if ($class !== null) {
+                    $classes[] = $class;
+                }
+            }
+        }
+
+        // ONE reflection pass per controller → route IR + operation projection together.
+        $allRoutes = [];
+        $allOperations = [];
+        foreach ($classes as $class) {
+            if (!class_exists($class)) {
+                continue;
+            }
+            $reflection = new ReflectionClass($class);
+            foreach ($this->compileController($reflection) as $route) {
+                $allRoutes[] = $route;
+            }
+            foreach ($this->compileOperations($reflection) as $operation) {
+                $allOperations[] = $operation;
+            }
+        }
+
+        return $this->resolveEndpointSet($allRoutes, $allOperations, $routeOverrideMap);
+    }
+
+    /**
+     * Resolve duplicate METHOD:path keys via the override map and return the effective set + applied overrides.
+     *
+     * @param list<RouteRuntimeMetadata> $routes
+     * @param list<OperationMetadata> $operations
+     * @param array<string, string> $routeOverrideMap METHOD:path => winner "controller::method"
+     */
+    private function resolveEndpointSet(array $routes, array $operations, array $routeOverrideMap): EndpointSet
+    {
+        /** @var array<string, list<RouteRuntimeMetadata>> $routesByKey */
+        $routesByKey = [];
+        /** @var array<string, list<OperationMetadata>> $opsByKey */
+        $opsByKey = [];
+        foreach ($routes as $route) {
+            $routesByKey[$route->routeKey()][] = $route;
+        }
+        foreach ($operations as $operation) {
+            $opsByKey[$this->operationRouteKey($operation)][] = $operation;
+        }
+
+        // Overrides for keys no route registers at all are invalid (stale/typo) — surface as ERROR.
+        foreach ($routeOverrideMap as $key => $winner) {
+            if (!isset($routesByKey[$key])) {
+                $this->diagnostics->error(
+                    controller: null,
+                    method: null,
+                    dto: null,
+                    field: 'route_override',
+                    cause: sprintf('route override for %s is declared, but no discovered route registers that key', $key),
+                    fix: 'remove the override or correct the METHOD:path',
+                );
+            }
+        }
+
+        $effectiveRoutes = [];
+        $effectiveOperations = [];
+        $appliedOverrides = [];
+
+        foreach ($routesByKey as $key => $group) {
+            $opGroup = $opsByKey[$key] ?? [];
+            if (count($group) < 2) {
+                // A unique key with a declared override is a stale no-op override (the winner already owns the key).
+                if (array_key_exists($key, $routeOverrideMap)) {
+                    $this->diagnostics->warning(
+                        controller: null,
+                        method: null,
+                        dto: null,
+                        field: 'route_override',
+                        cause: sprintf('route override for %s is declared, but the key is not a duplicate route', $key),
+                        fix: 'remove the stale override entry',
+                    );
+                }
+                $effectiveRoutes[] = $group[0];
+                if (isset($opGroup[0])) {
+                    $effectiveOperations[] = $opGroup[0];
+                }
+                continue;
+            }
+
+            if (!array_key_exists($key, $routeOverrideMap)) {
+                // Genuine duplicate (no override) — structural ERROR; last-wins in the IR for parity.
+                foreach ($group as $route) {
+                    $this->diagnostics->error(
+                        controller: $route->controller,
+                        method: $route->method,
+                        dto: null,
+                        field: 'route',
+                        cause: sprintf('duplicate route key %s is registered by %d operations', $key, count($group)),
+                        fix: 'disambiguate the path or HTTP method, or declare an explicit route override if one shadows the other',
+                    );
+                }
+                $effectiveRoutes[] = $group[count($group) - 1];
+                if ($opGroup !== []) {
+                    $effectiveOperations[] = $opGroup[count($opGroup) - 1];
+                }
+                continue;
+            }
+
+            // Declared override: pick the winner by signature, shadow the rest.
+            $winnerSig = $routeOverrideMap[$key];
+            $winnerRoute = null;
+            foreach ($group as $route) {
+                if ($route->controller . '::' . $route->method === $winnerSig) {
+                    $winnerRoute = $route;
+                    break;
+                }
+            }
+            if ($winnerRoute === null) {
+                $this->diagnostics->error(
+                    controller: null,
+                    method: null,
+                    dto: null,
+                    field: 'route_override',
+                    cause: sprintf('route override for %s names winner %s, but no discovered route matches that controller::method', $key, $winnerSig),
+                    fix: 'point the override winner at the controller::method that should own this route',
+                );
+                $effectiveRoutes[] = $group[count($group) - 1];
+                if ($opGroup !== []) {
+                    $effectiveOperations[] = $opGroup[count($opGroup) - 1];
+                }
+                continue;
+            }
+
+            $effectiveRoutes[] = $winnerRoute;
+            $shadowed = [];
+            foreach ($group as $route) {
+                if ($route === $winnerRoute) {
+                    continue;
+                }
+                $shadowed[] = $route->controller . '::' . $route->method;
+            }
+            // Keep only the winner's operation; shadowed operations are dropped (no OpenAPI, no id check).
+            foreach ($opGroup as $operation) {
+                if ($operation->controller !== null && $operation->method !== null
+                    && $operation->controller . '::' . $operation->method === $winnerSig) {
+                    $effectiveOperations[] = $operation;
+                }
+            }
+            $appliedOverrides[] = ['key' => $key, 'winner' => $winnerSig, 'shadowed' => $shadowed];
+        }
+
+        // operationId uniqueness over EFFECTIVE operations only — a shadowed override never participates.
+        foreach ($effectiveOperations as $operation) {
+            if ($operation->controller !== null && $operation->method !== null) {
+                $this->operationIds->record($operation->operationId, $operation->controller, $operation->method);
+            }
+        }
+        $this->operationIds->assertUnique();
+
+        return new EndpointSet($effectiveRoutes, $effectiveOperations, $appliedOverrides);
+    }
+
+    private function operationRouteKey(OperationMetadata $operation): string
+    {
+        return strtoupper($operation->httpMethod) . ':' . $operation->path;
+    }
+
+    /**
      * Assemble one OperationMetadata from the method reflection + the declared #[Operation] override.
      */
     private function buildOperation(
@@ -574,7 +763,10 @@ final class RouteMetadataCompiler
         $responses = $this->collectResponses($reflection, $method);
         $security = $this->collectSecurity($method);
 
-        $operationId = $this->operationIds->resolve($controller, $method->getName(), $operation?->id);
+        // resolveId (PURE) — the id is stored on the VO, but NOT recorded for the uniqueness check yet. The
+        // caller (compileOperationClasses for the legacy path, compileEndpointSet for the unified path) records
+        // exactly the operations it wants in the uniqueness check — so a shadowed override never collides.
+        $operationId = $this->operationIds->resolveId($controller, $method->getName(), $operation?->id);
         $tags = $operation !== null && $operation->tags !== []
             ? $operation->tags
             : [$this->operationIds->controllerShort($controller)];

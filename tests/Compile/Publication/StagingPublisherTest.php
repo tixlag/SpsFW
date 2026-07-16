@@ -172,29 +172,41 @@ foreach ($relPaths as $rel) {
 assert_same('MANIFEST-OLD', (require($manifestTarget))['fingerprint'], 'manifest-step failure: manifest rolled back to OLD (no partial set keeps a stale manifest)');
 
 // ============================================================================
-// 4. Lock contention: a second non-blocking publish cannot proceed while the lock is held by the first.
+// 4. Rollback FAILURE keeps the backup and fails EXPLICITLY (Step 5 fix-pass, required test). When the rollback
+//    restore rename CANNOT succeed (the target's parent dir is gone), the publisher does NOT claim "restored": it
+//    reports an INCOMPLETE rollback, names the unrestorable target, and PRESERVES its backup on disk for manual
+//    recovery. Exception-safe + honest — never a false "restored", never a deleted unrestorable backup.
 // ============================================================================
-$cacheDir = $tmpRoot . '/lock-cache';
-$stagingDir = $tmpRoot . '/lock-staging';
+$cacheDir = $tmpRoot . '/rollback-fail-cache';
+$stagingDir = $tmpRoot . '/rollback-fail-staging';
 [$map, $relPaths, $oldContent, $newContent] = $setup($cacheDir, $stagingDir, 1, withOld: true);
+$target = $cacheDir . '/' . $relPaths[1];
 $publisher = new StagingPublisher($cacheDir);
-$lock = fopen($publisher->lockPath(), 'c+');
-assert_true(flock($lock, LOCK_EX), 'test pre-acquires the compile lock');
-$contended = null;
+$caught = null;
 try {
-    $publisher->publish($map, lockTimeoutSec: 0.0);
+    $publisher->publish($map, faultHook: static function (int $step, string $t) use ($target): void {
+        if ($step !== 1 || $t !== $target) {
+            return;
+        }
+        // The in-flight file was already backed up (target⇒backup), so the target's parent dir is now EMPTY. Remove
+        // it so the rollback's restore rename(backup⇒target) has nowhere to write ⇒ restore FAILS.
+        @rmdir(dirname($target));
+        throw new RuntimeException('injected failure after backup; parent dir removed so restore cannot land');
+    });
+    assert_true(false, 'a publish whose rollback cannot restore should throw');
 } catch (CompileException $e) {
-    $contended = $e;
+    $caught = $e;
 }
-assert_true($contended !== null, 'a non-blocking publish while the lock is held throws CompileException');
-assert_true(str_contains($contended->getMessage(), 'lock'), 'contention message mentions the lock');
-// The held lock blocked publication: the target keeps its OLD content.
-assert_same($oldContent[$relPaths[1]], file_get_contents($cacheDir . '/' . $relPaths[1]), 'under contention nothing is published');
-flock($lock, LOCK_UN);
-fclose($lock);
-// Once released, publish proceeds.
-$publisher->publish($map, lockTimeoutSec: 0.0);
-assert_same($newContent[$relPaths[1]], file_get_contents($cacheDir . '/' . $relPaths[1]), 'after the lock is released, publish succeeds');
+assert_true($caught !== null, 'rollback failure throws CompileException');
+assert_true(str_contains($caught->getMessage(), 'INCOMPLETE'), 'rollback failure message says INCOMPLETE (not "restored")');
+assert_true(str_contains($caught->getMessage(), $target), 'rollback failure message names the unrestorable target');
+// The backup is PRESERVED (not deleted) so an operator can recover it manually.
+$backupDir = $cacheDir . '/.staging-backup';
+assert_true(is_dir($backupDir), 'the backup dir is kept when rollback was incomplete');
+$preserved = glob($backupDir . '/*');
+assert_true(count($preserved) === 1, 'exactly one unrestorable backup is preserved');
+// The target could NOT be restored, so it is absent (the rollback honestly left it unrestored).
+assert_true(!is_file($target), 'the unrestorable target is absent (restore honestly failed)');
 
 $rrm($tmpRoot);
 echo "StagingPublisher passed\n";

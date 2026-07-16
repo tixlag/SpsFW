@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace SpsFW\Core\Compile;
 
+use SpsFW\Core\Config;
 use SpsFW\Core\Router\PathManager;
 
 /**
@@ -15,7 +16,8 @@ use SpsFW\Core\Router\PathManager;
  * owner's job (the client `preload.php`, plan §11.2). Use this for ad-hoc local builds and probes; do not call it
  * from the production request path (the real owner wires its own ApplicationContext and calls Coordinator directly).
  *
- * Example (CLI): `php bin/spsfw-compile.php --dry-run --mode=managed --policy=parity`
+ * Example (CLI): `php bin/spsfw-compile.php --mode=managed --policy=parity` (default = dry-run; add `--publish` to
+ * write, which requires an application bootstrap — see {@see main()}).
  */
 final class DevCompileRunner
 {
@@ -33,6 +35,10 @@ final class DevCompileRunner
      *     cachePath?: string,
      *     discoveryPaths?: ?list<string>,
      *     configInputs?: array<string, mixed>,
+     *     operationIdMap?: array<string, ?string>,
+     *     routeOverrideMap?: array<string, string>,
+     *     configFiles?: array<string, string>,
+     *     lockTimeoutSec?: float,
      * } $options
      */
     public function execute(array $options = []): self
@@ -41,7 +47,8 @@ final class DevCompileRunner
         $policy = $options['diagnosticPolicy'] ?? ApplicationContext::POLICY_PARITY;
 
         // configInputs are part of the fingerprint; record the resolved mode/policy plus any caller-supplied inputs
-        // (openapi title/version, escape-hatch config, operation-id lock, …) so the manifest reflects the build.
+        // (openapi title/version, escape-hatch config, …) so the manifest reflects the build. Secrets-bearing config
+        // files go into configFiles (content-hashed, never stored wholesale), NOT here.
         $configInputs = array_merge(
             ['mode' => $mode, 'diagnostic_policy' => $policy],
             $options['configInputs'] ?? [],
@@ -54,6 +61,10 @@ final class DevCompileRunner
             configInputs: $configInputs,
             mode: $mode,
             diagnosticPolicy: $policy,
+            operationIdMap: $options['operationIdMap'] ?? [],
+            routeOverrideMap: $options['routeOverrideMap'] ?? [],
+            configFiles: $options['configFiles'] ?? [],
+            lockTimeoutSec: $options['lockTimeoutSec'] ?? 0.0,
         );
 
         $this->coordinator = new Coordinator($context);
@@ -104,35 +115,58 @@ final class DevCompileRunner
 
     /**
      * CLI entry point. Parses a tiny flag set, runs the coordinator, prints the report, and returns a process exit
-     * code (0 on a clean publish or a clean dry run; non-zero when publication was blocked by diagnostics).
+     * code.
+     *
+     * Contract (Step 5 fix-pass):
+     *   - DEFAULT is a DRY-RUN (read-only: build + validate + report). Publication requires the explicit `--publish`
+     *     flag — a generic framework CLI must not silently overwrite an application's cache.
+     *   - `--publish` is REFUSED unless the application bootstrapped (Config::isBootstrapped()): the engine must not
+     *     publish a DI cache built without the application's DI bindings. Run the Coordinator from your application
+     *     preload (which calls Config::init / setDIBindings) to publish for real.
+     *   - EXIT CODE: a clean build exits 0; an ERROR exits non-zero (even in a dry run); under `--strict` a WARNING
+     *     also exits non-zero. A refused `--publish` exits 2.
      *
      * @param list<string> $argv
      */
     public static function main(array $argv): int
     {
-        $options = ['dryRun' => false, 'mode' => ApplicationContext::MODE_LEGACY, 'diagnosticPolicy' => ApplicationContext::POLICY_PARITY];
+        $publish = false;
+        $mode = ApplicationContext::MODE_LEGACY;
+        $policy = ApplicationContext::POLICY_PARITY;
         foreach (array_slice($argv, 1) as $arg) {
-            if ($arg === '--dry-run') {
-                $options['dryRun'] = true;
+            if ($arg === '--publish') {
+                $publish = true;
+            } elseif ($arg === '--dry-run') {
+                $publish = false;
             } elseif ($arg === '--managed') {
-                $options['mode'] = ApplicationContext::MODE_MANAGED;
+                $mode = ApplicationContext::MODE_MANAGED;
             } elseif ($arg === '--strict') {
-                $options['diagnosticPolicy'] = ApplicationContext::POLICY_STRICT;
+                $policy = ApplicationContext::POLICY_STRICT;
             } elseif (str_starts_with($arg, '--mode=')) {
-                $options['mode'] = substr($arg, strlen('--mode='));
+                $mode = substr($arg, strlen('--mode='));
             } elseif (str_starts_with($arg, '--policy=')) {
-                $options['diagnosticPolicy'] = substr($arg, strlen('--policy='));
+                $policy = substr($arg, strlen('--policy='));
             }
         }
 
+        // The generic framework CLI must NOT publish a DI cache without application bootstrap/DI bindings.
+        if ($publish && !Config::isBootstrapped()) {
+            fwrite(STDERR, "Publication refused: the framework CLI has no application bootstrap (Config::init / DI bindings did not run). Run the Coordinator from your application preload, or bootstrap before invoking --publish.\n");
+            return 2;
+        }
+
+        $options = ['dryRun' => !$publish, 'mode' => $mode, 'diagnosticPolicy' => $policy];
         $runner = (new self())->execute($options);
         echo $runner->render() . "\n";
 
+        // Exit code is driven by diagnostics: ERROR ⇒ non-zero (always, even dry-run); strict + WARNING ⇒ non-zero.
         $result = $runner->result();
-        // A clean publish, or any dry run (read-only probe), exits 0; a blocked publication exits non-zero.
-        if ($result->published || $result->dryRun) {
-            return 0;
+        if ($result->errorCount > 0) {
+            return 1;
         }
-        return 1;
+        if ($policy === ApplicationContext::POLICY_STRICT && $result->warningCount > 0) {
+            return 1;
+        }
+        return 0;
     }
 }

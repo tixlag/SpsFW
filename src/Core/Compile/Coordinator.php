@@ -6,6 +6,7 @@ namespace SpsFW\Core\Compile;
 
 use SpsFW\Core\Compile\OpenApi\OpenApiEmitter;
 use SpsFW\Core\Compile\OpenApi\OpenApiValidator;
+use SpsFW\Core\Compile\Publication\CompileLock;
 use SpsFW\Core\Compile\Publication\Fingerprinter;
 use SpsFW\Core\Compile\Publication\StagingPublisher;
 use SpsFW\Core\Compile\Route\RouteCacheEmitter;
@@ -60,15 +61,19 @@ final class Coordinator
     public function compile(bool $dryRun = false): CompileResult
     {
         $ctx = $this->context;
-        $publisher = new StagingPublisher($ctx->cachePath);
         $fingerprinter = new Fingerprinter();
 
         // ---- ONE shared diagnostics collector: route compiler, OpenAPI emitter + validator, DI all report here.
-        $routeCompiler = new RouteMetadataCompiler($this->diagnostics);
+        //      The tri-state operationId map is a FIRST-CLASS input (not hidden in configInputs): it is passed
+        //      explicitly to the route compiler so the real `next` inventory keeps its preserved ids / nulls.
+        $routeCompiler = new RouteMetadataCompiler($this->diagnostics, operationIdMap: $ctx->operationIdMap);
 
-        // Route cache IR (runtime truth) + OpenAPI operation projection — same reflection pass, two outputs.
-        $routes = $routeCompiler->compile($ctx->discoveryPaths);
-        $operations = $routeCompiler->compileAllOperations($ctx->discoveryPaths);
+        // ---- ONE discovery/reflection flow yields BOTH the route cache IR and the OpenAPI operation projection,
+        //      with duplicate METHOD:path keys resolved to operationId uniqueness: declared overrides keep their
+        //      map-chosen winner and SHADOW the rest (shadowed ops never reach OpenAPI nor the operationId check).
+        $endpointSet = $routeCompiler->compileEndpointSet($ctx->discoveryPaths, $ctx->routeOverrideMap);
+        $routes = $endpointSet->routes;
+        $operations = $endpointSet->operations;
 
         $title = is_string($ctx->configInputs['openapi_title'] ?? null) ? $ctx->configInputs['openapi_title'] : 'SpsFW API';
         $version = is_string($ctx->configInputs['openapi_version'] ?? null) ? $ctx->configInputs['openapi_version'] : '0.1.0';
@@ -80,26 +85,68 @@ final class Coordinator
         $diClasses = $this->discoverDiClasses($ctx->discoveryPaths);
         $di = (new DICacheBuilder(null, ''))->compileOnly($diClasses, $this->diagnostics);
 
-        // Deterministic source+config fingerprint (built_at deliberately excluded).
+        // Deterministic, DEPLOY-PATH-INDEPENDENT fingerprint: sources keyed relative to projectRoot, compile-time
+        // config files + operationId/route-override maps hashed by CONTENT (built_at deliberately excluded).
         $sourceFiles = $fingerprinter->sourceFiles($ctx->discoveryPaths);
-        $fingerprint = $fingerprinter->fingerprint($sourceFiles, $ctx->configInputs);
+        $fingerprint = $fingerprinter->fingerprint(
+            $sourceFiles,
+            $ctx->configInputs,
+            $ctx->projectRoot,
+            $ctx->configFiles,
+            $ctx->operationIdMap,
+            $ctx->routeOverrideMap,
+        );
 
         // ---- Publication gate: ERROR always blocks; a WARNING blocks only under the strict policy.
         $errors = $this->diagnostics->hasErrors();
         $warnings = $this->diagnostics->hasWarnings();
         $publishable = !$errors && !($ctx->warningsBlock() && $warnings);
+        $overrides = $endpointSet->overrides;
 
         if ($dryRun) {
-            return CompileResult::notPublished(true, $this->diagnostics->errorCount(), $this->diagnostics->warningCount(), $fingerprint, 'dry-run');
+            return CompileResult::notPublished(true, $this->diagnostics->errorCount(), $this->diagnostics->warningCount(), $fingerprint, 'dry-run', $overrides);
         }
         if (!$publishable) {
             $reason = $errors ? 'errors' : 'strict-warnings';
-            return CompileResult::notPublished(false, $this->diagnostics->errorCount(), $this->diagnostics->warningCount(), $fingerprint, $reason);
+            return CompileResult::notPublished(false, $this->diagnostics->errorCount(), $this->diagnostics->warningCount(), $fingerprint, $reason, $overrides);
         }
 
-        // ---- Stage every artifact on the same FS, compute content hashes, build the manifest, then publish
-        //      artifacts first and the manifest LAST (its presence signals a complete, fingerprint-matching set).
-        $stagingDir = $ctx->cachePath . '/.staging-compile';
+        // ---- MUTATING TAIL (staging → publish → cleanup) guarded by a SINGLE whole-flow lock. The read-only head
+        //      (discovery → build → validate) writes nothing and may run concurrently; the lock serializes the
+        //      staging+publish so two compiles never interleave their renames. The publisher takes NO lock of its own
+        //      (it must not re-acquire the same lock held here). Staging is UNIQUE per run, never the shared
+        //      `.staging-compile` name. Release is exception-safe in a `finally`.
+        $lock = new CompileLock($ctx->cachePath . '/.compile.lock');
+        $lock->acquire($ctx->lockTimeoutSec);
+        try {
+            return $this->stageAndPublish($ctx, $fingerprinter, $fingerprint, $emitter, $document, $di, $routes, $overrides);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Stage every artifact on the same FS, compute content hashes, build the manifest, then publish artifacts first
+     * and the manifest LAST. Runs UNDER the whole-flow {@see CompileLock}; the {@see StagingPublisher} does not lock.
+     *
+     * @param array{compiled: array<string, mixed>, jobs: array<string, mixed>} $di
+     * @param list<\SpsFW\Core\Compile\Metadata\RouteRuntimeMetadata> $routes
+     * @param list<array{key: string, winner: string, shadowed: list<string>}> $overrides
+     */
+    private function stageAndPublish(
+        ApplicationContext $ctx,
+        Fingerprinter $fingerprinter,
+        string $fingerprint,
+        OpenApiEmitter $emitter,
+        array $document,
+        array $di,
+        array $routes,
+        array $overrides,
+    ): CompileResult {
+        $publisher = new StagingPublisher($ctx->cachePath);
+
+        // Unique staging dir per run (never the shared `.staging-compile`); clear any crash-leftover just in case.
+        $stagingDir = $ctx->cachePath . '/.staging-' . bin2hex(random_bytes(8));
         $this->cleanDir($stagingDir);
 
         $contents = [
@@ -124,8 +171,18 @@ final class Coordinator
             $artifactHashes[$relative] = md5($source);
         }
 
-        // Manifest last: compiler version, fingerprint, config inputs, artifact hashes, built_at.
-        $manifest = $fingerprinter->manifest($fingerprint, $artifactHashes, $ctx->configInputs, date('c'));
+        // Manifest last: compiler version, fingerprint, scalar config, config-file content hashes, map hashes,
+        // applied overrides, artifact hashes, built_at.
+        $manifest = $fingerprinter->manifest(
+            $fingerprint,
+            $artifactHashes,
+            $ctx->configInputs,
+            $ctx->configFiles,
+            $ctx->operationIdMap,
+            $ctx->routeOverrideMap,
+            $overrides,
+            date('c'),
+        );
         $manifestRelative = '.compile_manifest.php';
         $manifestStaging = $stagingDir . '/' . $manifestRelative;
         file_put_contents($manifestStaging, $fingerprinter->manifestSource($manifest));
@@ -142,6 +199,8 @@ final class Coordinator
             $this->diagnostics->errorCount(),
             $this->diagnostics->warningCount(),
             $fingerprint,
+            $overrides,
+            $stagingDir,
         );
     }
 

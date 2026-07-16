@@ -18,8 +18,16 @@ final readonly class CompileResult
     /** @var list<string> */
     public array $artifacts;
 
+    /** @var list<array{key: string, winner: string, shadowed: list<string>}> */
+    public array $overrides;
+
     /**
      * @param list<string> $artifacts absolute paths of published artifacts (empty unless published)
+     * @param list<array{key: string, winner: string, shadowed: list<string>}> $overrides route overrides applied
+     *        during endpoint-set resolution (winner + shadowed are "controller::method"); populated even for a
+     *        dry run / blocked build so the override resolution is observable without publishing.
+     * @param ?string $stagingDir the unique-per-run staging directory used (already cleaned up by the time this is
+     *        returned). Observable so tooling/logs can name it and so tests can prove two runs never share one.
      */
     public function __construct(
         public bool $success,
@@ -31,8 +39,11 @@ final readonly class CompileResult
         public int $warningCount = 0,
         public ?string $fingerprint = null,
         public ?string $reason = null,
+        array $overrides = [],
+        public ?string $stagingDir = null,
     ) {
         $this->artifacts = array_values($artifacts);
+        $this->overrides = array_values($overrides);
     }
 
     /** BC skeleton: an empty success that publishes nothing. */
@@ -52,6 +63,7 @@ final readonly class CompileResult
         int $warningCount,
         ?string $fingerprint,
         ?string $reason,
+        array $overrides = [],
     ): self {
         return new self(
             success: true,
@@ -63,6 +75,7 @@ final readonly class CompileResult
             warningCount: $warningCount,
             fingerprint: $fingerprint,
             reason: $reason,
+            overrides: $overrides,
         );
     }
 
@@ -70,6 +83,7 @@ final readonly class CompileResult
      * A completed compile whose artifact set WAS published.
      *
      * @param list<string> $artifacts absolute paths of published artifacts (excludes the manifest)
+     * @param list<array{key: string, winner: string, shadowed: list<string>}> $overrides
      */
     public static function published(
         array $artifacts,
@@ -77,6 +91,8 @@ final readonly class CompileResult
         int $errorCount,
         int $warningCount,
         string $fingerprint,
+        array $overrides = [],
+        ?string $stagingDir = null,
     ): self {
         return new self(
             success: true,
@@ -88,6 +104,8 @@ final readonly class CompileResult
             warningCount: $warningCount,
             fingerprint: $fingerprint,
             reason: null,
+            overrides: $overrides,
+            stagingDir: $stagingDir,
         );
     }
 }

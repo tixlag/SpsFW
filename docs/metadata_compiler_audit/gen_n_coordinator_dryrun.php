@@ -84,6 +84,53 @@ if (is_file($diConfig)) {
 $dirs = array_values(array_filter(PathManager::getControllersDirs(), 'is_dir'));
 
 // ============================================================================
+// The REAL tri-state operationId lockfile (plan §19) — parsed from the rev.3 reconciliation TSV, NOT an empty
+// default. Each documented op gets its preserved canonical id (lockfile=in) or a NULL (lockfile=deferred — the
+// 306 id-less legacy ops stay id-less, exactly as today's client sees them). Ops held out of the spec
+// (lockfile=out: exclude/pending/spec-only) are ABSENT from the map, so they fall through to the
+// <ControllerShort><Method> convention. This is the inventory the production `next` build must hand the
+// Coordinator so legacy ids are preserved and only NEW route-only ops get the convention.
+// ============================================================================
+$tsvPath = $spsfwRoot . '/docs/metadata_compiler_audit/operation_id_reconciliation.tsv';
+$operationIdMap = []; // array<string,?string>  controller::method => preserved id | null(deferred)
+if (is_file($tsvPath)) {
+    foreach (file($tsvPath, FILE_IGNORE_NEW_LINES) as $line) {
+        if ($line === '' || $line[0] === '#') {
+            continue; // comment / count lines
+        }
+        $c = explode("\t", $line);
+        if (count($c) < 11 || $c[2] === '-') {
+            continue; // header row / spec-only rows carry no controller::method
+        }
+        $controllerMethod = $c[2]; // FQCN::method
+        $canonical = $c[9];        // ready-to-pin id, or '-'
+        $lockfile = $c[10];        // in | deferred | out
+        if ($lockfile === 'in' && $canonical !== '-' && $canonical !== '') {
+            $operationIdMap[$controllerMethod] = $canonical; // PRESERVED id (39 explicit + route-only ADD)
+        } elseif ($lockfile === 'deferred') {
+            $operationIdMap[$controllerMethod] = null;       // DEFERRED — stay id-less (tri-state null, the 306)
+        }
+        // lockfile=out ⇒ absent from the map ⇒ convention <ControllerShort><Method>
+    }
+}
+
+// ============================================================================
+// The 6 Core↔Next auth duplicates are INTENTIONAL overrides (Next shadows the framework auth templates), NOT
+// genuine bugs. Declared here as a compile-time routeOverrideMap so each Next method wins INDEPENDENTLY of
+// discovery order and the shadowed Core ops never reach OpenAPI nor the operationId check. (The genuine
+// EmployeeDocuments duplicate — two methods on ONE controller sharing GET:/api/employees/documents/code-1c/{code_1c}
+// — is NOT overridden and STAYS a structural ERROR; that one is a real bug to fix in N.)
+// ============================================================================
+$routeOverrideMap = [
+    'POST:/api/auth/login'            => 'SpsNext\\Auth\\AuthController::login',
+    'POST:/api/auth/register'         => 'SpsNext\\Auth\\AuthController::register',
+    'POST:/api/auth/logout'           => 'SpsNext\\Auth\\AuthController::logout',
+    'POST:/api/auth/refresh-tokens'   => 'SpsNext\\Auth\\AuthController::refreshTokens',
+    'PATCH:/api/auth/add-access-rules' => 'SpsNext\\Auth\\AuthController::addAccessRules',
+    'POST:/api/auth/set-access-rules' => 'SpsNext\\Auth\\AuthController::setAccessRules',
+];
+
+// ============================================================================
 // READ-ONLY contract: snapshot N's current .cache artifact hashes BEFORE the compile, and assert they are
 // byte-identical AFTER. A dry run must not publish (Coordinator returns before any staging/write), but we prove it.
 // ============================================================================
@@ -114,6 +161,8 @@ $ctx = new ApplicationContext(
     ],
     mode: ApplicationContext::MODE_MANAGED,
     diagnosticPolicy: ApplicationContext::POLICY_PARITY,
+    operationIdMap: $operationIdMap,
+    routeOverrideMap: $routeOverrideMap,
 );
 
 $coordinator = new Coordinator($ctx);
@@ -127,6 +176,9 @@ $after = $snapshot();
 // ============================================================================
 echo "==== N Coordinator dry-run ====\n";
 echo "discovery dirs: " . implode(', ', $dirs) . "\n";
+$preserved = count(array_filter($operationIdMap, static fn($v): bool => $v !== null));
+$deferred = count($operationIdMap) - $preserved;
+echo "operationIdMap: " . count($operationIdMap) . " entries ($preserved preserved ids + $deferred deferred-nulls); routeOverrideMap: " . count($routeOverrideMap) . " declared overrides\n";
 echo "errors=" . $result->errorCount . " warnings=" . $result->warningCount . "\n";
 echo "published=" . ($result->published ? 'true' : 'false') . " reason=" . ($result->reason ?? '(null)') . " dryRun=" . ($result->dryRun ? 'true' : 'false') . "\n";
 echo "fingerprint=" . ($result->fingerprint ?? '(null)') . "\n";
@@ -196,26 +248,41 @@ foreach ($schemaCols as [$a, $b, $target]) {
 }
 
 // ============================================================================
-// Acceptance. The contract the probe pins (plan §11.6 / Step 5):
-//   - publication is BLOCKED (an ERROR forbids it in every policy; none are downgraded to warnings);
-//   - it is a dry run → reason='dry-run', nothing published;
-//   - N's current .cache artifacts are byte-identical before/after (read-only probe).
-// The raw record count is NOT asserted to a fixed number: the Coordinator's aggregated surface (route compiler +
-// emitter + operationId resolver) is strictly BROADER than the §4.11 emitter-only baseline of 15 (14 duplicate
-// route-key records + 1 CreateNewsDto collision), which it contains as a subset, plus emitter duplicate-operation
-// records and operationId-collision records the single-purpose probe never aggregated. The baseline "15" maps to
-// 7 distinct duplicate METHOD:path keys (×2 records each) + 1 CreateNewsDto collision; the Coordinator additionally
-// surfaces the operationId collisions on the Core↔Next auth overrides.
+// Applied route overrides (the 6 Core↔Next auth shadows) — what the engine RECOGNIZED as intentional, not bugs.
+// ============================================================================
+echo "\n-- applied route overrides (" . count($result->overrides) . ") — intentional Core↔Next shadows --\n";
+foreach ($result->overrides as $ov) {
+    echo "  • " . $ov['key'] . "  winner=" . $ov['winner'] . "  shadowed=[" . implode(', ', $ov['shadowed']) . "]\n";
+}
+
+// ============================================================================
+// Acceptance (Step 5 fix-pass). The probe drives the Coordinator with the REAL tri-state operationId map AND the
+// 6 declared Core↔Next auth overrides, and pins the contract that proves the fix-pass correct on real N:
+//   - the 6 auth duplicates are RECOGNIZED as intentional overrides (6 applied), NOT errors — so they no longer
+//     block publication as "duplicate route key";
+//   - the ONE genuine duplicate (EmployeeDocuments — two methods on one controller) is NOT overridden and STAYS a
+//     structural ERROR (a real bug to fix in N, not a compiler artifact);
+//   - the CreateNewsDto schema-name collision STAYS (two DTOs mapping to one schema — a real N bug);
+//   - operationId collisions == 0: the real map assigns 39 unique preserved ids + 306 deferred-nulls, and the
+//     shadowed Core auth ops are excluded from the uniqueness check — so there is NOTHING to collide. This is the
+//     directive #4 proof: the previously-aggregated operationId collisions vanish with the real tri-state map, for
+//     a proven reason (shadowing + preserved-id uniqueness), not because they were silently dropped;
+//   - dry-run → nothing published; N's .cache artifacts are byte-identical before/after (read-only probe).
 // ============================================================================
 echo "\n==== verdict ====\n";
+$employeeDocs = count($dupRouteKeys) === 1
+    && isset($dupRouteKeys['GET:/api/employees/documents/code-1c/{code_1c}']);
 $createNews = count($schemaCols) >= 1 && stripos(implode(' ', array_merge(...$schemaCols)), 'CreateNewsDto') !== false;
+$authApplied = count($result->overrides) === 6;
 $ok = !$result->published
     && $result->reason === 'dry-run'
     && $result->errorCount > 0
-    && count($dupRouteKeys) >= 7
-    && $createNews
-    && $unchanged;
-echo "blocked & dry-run & ≥7 duplicate route keys & CreateNewsDto collision & cache unchanged: " . ($ok ? 'PASS' : 'FAIL') . "\n";
-echo "  ({$result->errorCount} aggregated ERROR records; §4.11 emitter-only baseline of 15 is a subset — see audit §4.12)\n";
+    && count($dupRouteKeys) === 1 && $employeeDocs   // ONLY the genuine EmployeeDocuments dup remains
+    && count($operationIds) === 0                     // operationId collisions vanish with the real map (directive #4)
+    && $createNews                                    // the genuine CreateNewsDto schema collision remains
+    && $authApplied                                   // the 6 auth overrides recognized as intentional
+    && $unchanged;                                    // read-only: N's cache untouched
+echo "dry-run & only EmployeeDocuments dup & 0 operationId collisions & CreateNewsDto & 6 auth overrides & cache unchanged: " . ($ok ? 'PASS' : 'FAIL') . "\n";
+echo "  ({$result->errorCount} ERROR record(s): EmployeeDocuments ×2 + CreateNewsDto ×1; the 6 Core↔Next auth dups are recognized as intentional overrides, down from 15 in the unmapped baseline)\n";
 
 exit($ok ? 0 : 1);
