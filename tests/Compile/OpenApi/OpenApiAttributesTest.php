@@ -22,7 +22,7 @@ function opa_flags(string $class): int
 
 // --- targets / repeatable (plan §8) ---
 assert_same(Attribute::TARGET_METHOD, opa_flags(Operation::class), 'Operation targets the method');
-assert_same(Attribute::TARGET_PROPERTY, opa_flags(Field::class), 'Field targets the property');
+assert_same(Attribute::TARGET_PROPERTY | Attribute::TARGET_CLASS, opa_flags(Field::class), 'Field targets property + class (class-level #[Field(schema:)] overrides the component name)');
 assert_true((opa_flags(ApiResponse::class) & Attribute::TARGET_METHOD) !== 0, 'Response targets the method');
 assert_true((opa_flags(ApiResponse::class) & Attribute::IS_REPEATABLE) !== 0, 'Response is repeatable (one per status)');
 assert_true((opa_flags(Items::class) & Attribute::TARGET_PROPERTY) !== 0 && (opa_flags(Items::class) & Attribute::TARGET_PARAMETER) !== 0, 'Items targets property + parameter');

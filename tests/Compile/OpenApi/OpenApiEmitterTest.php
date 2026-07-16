@@ -3,27 +3,33 @@
 declare(strict_types=1);
 
 use OpenApi\Attributes as OA;
+use SpsFW\Core\Attributes\AccessRulesAll;
 use SpsFW\Core\Attributes\AccessRulesAny;
 use SpsFW\Core\Attributes\NoAuthAccess;
+use SpsFW\Core\Attributes\OpenApi\Field;
 use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 use SpsFW\Core\Attributes\RateLimit;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Attributes\Validation\JsonBody;
-use SpsFW\Core\Attributes\Validation\QueryParams;
 use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\OpenApi\OpenApiEmitter;
+use SpsFW\Core\Compile\OpenApi\OpenApiValidator;
+use SpsFW\Core\Compile\OpenApi\SchemaNameResolver;
 use SpsFW\Core\Compile\Route\RouteMetadataCompiler;
 use SpsFW\Core\Http\HttpMethod;
 use SpsFW\Core\Http\Response;
 use Symfony\Component\Yaml\Yaml;
 
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
+require_once __DIR__ . '/collision_fixture.php';
 
 /**
  * Шаг 4 (M3 secondary): OpenApiEmitter builds a deterministic OpenAPI 3.1.0 array (array-first) from
  * OperationMetadata[], normalizes duplicate METHOD:path (last-wins + fatal diagnostic), collects object DTOs
- * into components.schemas, merges StandardErrorPolicy responses (400/401/403/429/500, no 422), and serializes
- * via symfony/yaml. The primary openapi.yml is untouched — this is the secondary generated artifact.
+ * into components.schemas via SchemaNameResolver (FQCN⇒name registry INTERNAL — never published as x-fqcn),
+ * merges StandardErrorPolicy responses (400/401/403/429/500, no 422 — 403 by the EFFECTIVE runtime access
+ * pipeline), and serializes via dump()/writeFile() of the ALREADY-BUILT array. Nullability is OpenAPI 3.1 /
+ * JSON Schema 2020-12 (type union / anyOf) — `nullable: true` is never emitted.
  */
 
 enum EmMode: string
@@ -45,6 +51,12 @@ final class EmMeDto
 
     #[OA\Property(property: 'friends', type: 'array', items: new OA\Items(ref: EmFriendDto::class))]
     public array $friends;
+
+    #[OA\Property(property: 'nickname', type: 'string')]
+    public ?string $nickname;
+
+    #[OA\Property(property: 'guardian', ref: EmFriendDto::class)]
+    public ?EmFriendDto $guardian;
 }
 
 final class EmFriendDto
@@ -111,6 +123,13 @@ final class EmApiController
     {
         return new Response();
     }
+
+    #[Route('/api/em/allonly', [HttpMethod::GET])]
+    #[AccessRulesAll(['some-cap'])] // All-only quirk: NO AccessRulesAny ⇒ enforces nothing at runtime ⇒ NO 403
+    public function allOnly(): EmItemDto
+    {
+        return new EmItemDto();
+    }
 }
 
 $diag = new CompileDiagnostics();
@@ -119,8 +138,10 @@ $operations = $compiler->compileOperationClasses([EmApiController::class]);
 assert_true(!$diag->hasErrors(), 'emitter fixture: no fatal structural errors');
 assert_true(!$diag->hasWarnings(), 'emitter fixture: no migration warnings');
 
-$emitter = new OpenApiEmitter(new CompileDiagnostics());
+$emitterDiag = new CompileDiagnostics();
+$emitter = new OpenApiEmitter($emitterDiag);
 $doc = $emitter->emit($operations, title: 'Test API', version: '1.2.3');
+$diagCountAfterEmit = $emitterDiag->count();
 
 // --- top-level shape (array-first) ---
 assert_same('3.1.0', $doc['openapi'], 'openapi version 3.1.0');
@@ -128,16 +149,30 @@ assert_same('Test API', $doc['info']['title'], 'info.title honored');
 assert_same('1.2.3', $doc['info']['version'], 'info.version honored');
 assert_same(['type' => 'http', 'scheme' => 'bearer', 'bearerFormat' => 'JWT'], $doc['components']['securitySchemes']['bearerAuth'], 'bearerAuth security scheme');
 
-// the canonical Error envelope is always present
+// the canonical Error envelope is always present and uses 3.1 nullability (no `nullable` keyword)
 assert_true(isset($doc['components']['schemas']['Error']), 'the Error component is always emitted');
 assert_same('object', $doc['components']['schemas']['Error']['type'], 'Error is an object envelope');
+assert_same(['string', 'null'], $doc['components']['schemas']['Error']['properties']['error']['properties']['exception']['type'], 'Error.exception nullability is a 3.1 type union');
+assert_same(['object', 'null'], $doc['components']['schemas']['Error']['properties']['error']['properties']['previous']['type'], 'Error.previous nullability is a 3.1 type union');
 
-// --- object DTOs collected into components.schemas by short name, with the x-fqcn vendor tag ---
+// --- object DTOs collected into components.schemas by short name; the FQCN⇒name registry is INTERNAL ---
 $schemas = $doc['components']['schemas'];
 assert_true(isset($schemas['EmMeDto']), 'response DTO collected as a component');
-assert_same(EmMeDto::class, $schemas['EmMeDto']['x-fqcn'], 'component carries its FQCN for ref resolution');
 assert_true(isset($schemas['EmFriendDto']), 'nested DTO ref (EmMeDto::$friend) transitively collected');
-// the nested ref is rendered as a $ref, the array-of-strings as inline items
+// NO x-fqcn anywhere — the registry is internal to the emitter, never published into the spec.
+$hasXfqcn = false;
+array_walk_recursive($doc, static function (mixed $v, mixed $k) use (&$hasXfqcn): void {
+    if ($k === 'x-fqcn') {
+        $hasXfqcn = true;
+    }
+});
+assert_true(!$hasXfqcn, 'no x-fqcn vendor key is published — the FQCN registry stays internal');
+// componentRegistry() exposes the internal FQCN⇒name map for tooling/probes (not the spec).
+$registry = $emitter->componentRegistry();
+assert_same('EmMeDto', $registry[EmMeDto::class] ?? null, 'componentRegistry maps the response DTO FQCN⇒short name');
+assert_same('EmFriendDto', $registry[EmFriendDto::class] ?? null, 'componentRegistry maps the nested DTO FQCN⇒short name');
+
+// the nested ref is a $ref; the array-of-strings is inline items
 assert_same(['$ref' => '#/components/schemas/EmFriendDto'], $schemas['EmMeDto']['properties']['friend'], 'nested object property is a $ref');
 assert_same('array', $schemas['EmMeDto']['properties']['tags']['type'], 'array property projects type:array');
 assert_same('string', $schemas['EmMeDto']['properties']['tags']['items']['type'], 'array items type from legacy OA items (parity fallback)');
@@ -145,6 +180,12 @@ assert_same('string', $schemas['EmMeDto']['properties']['tags']['items']['type']
 // sentinel, NOT null. The element type must resolve from items->ref and the sentinel must never reach
 // reflection — otherwise the emitter throws "Class @OA\Generator::UNDEFINED🙈 does not exist".
 assert_same(['$ref' => '#/components/schemas/EmFriendDto'], $schemas['EmMeDto']['properties']['friends']['items'], 'array items ref resolved from legacy OA Items(ref) despite the UNDEFINED sentinel type');
+
+// --- OpenAPI 3.1 nullability (JSON Schema 2020-12): NO `nullable` keyword ever ---
+assert_same(['type' => ['string', 'null']], $schemas['EmMeDto']['properties']['nickname'], 'nullable scalar ⇒ type:[<type>,"null"] union');
+assert_true(!array_key_exists('nullable', $schemas['EmMeDto']['properties']['nickname']), 'nullable scalar does NOT carry a nullable key');
+assert_same(['anyOf' => [['$ref' => '#/components/schemas/EmFriendDto'], ['type' => 'null']]], $schemas['EmMeDto']['properties']['guardian'], 'nullable $ref ⇒ anyOf:[{$ref},{type:"null"}]');
+assert_true(!array_key_exists('nullable', $schemas['EmMeDto']['properties']['guardian']), 'nullable $ref does NOT carry a nullable key');
 
 // --- operation projection ---
 $paths = $doc['paths'];
@@ -189,16 +230,37 @@ foreach (['401', '403', '429', '500'] as $code) {
 }
 assert_true(!array_key_exists('400', $listResponses), 'no validated input on list ⇒ no 400');
 
+// All-only quirk: #[AccessRulesAll] WITHOUT #[AccessRulesAny] enforces nothing at runtime ⇒ NO 403.
+$allOnlyResponses = $paths['/api/em/allonly']['get']['responses'];
+assert_true(!array_key_exists('403', $allOnlyResponses), 'AccessRulesAll-only ⇒ NO 403 (effective runtime pipeline; All-only enforces nothing)');
+assert_true(array_key_exists('401', $allOnlyResponses), 'allOnly is authenticated (not NoAuthAccess) ⇒ 401 still advertised');
+
 // --- security projection ---
 assert_same([['bearerAuth' => []]], $paths['/api/em/me']['get']['security'], 'authenticated op ⇒ bearerAuth security');
 assert_same(['any' => ['admin'], 'all' => []], $paths['/api/em/list']['get']['x-required-rules'], 'access rules ⇒ x-required-rules');
 assert_same([], $paths['/api/em/health']['get']['security'], 'NoAuthAccess ⇒ empty security (anonymous)');
 assert_true(!array_key_exists('x-required-rules', $paths['/api/em/health']['get']), 'anonymous op carries no x-required-rules');
 
-// --- YAML round-trip: array-first ⇒ dump ⇒ parse ⇒ identical array (deterministic) ---
-$yaml = $emitter->toYaml($operations, title: 'Test API', version: '1.2.3');
+// --- array-first serialization: dump()/writeFile() serialize the BUILT array (no re-emit, no new diagnostics) ---
+$yaml = $emitter->dump($doc);
+assert_same($diagCountAfterEmit, $emitterDiag->count(), 'dump() of the built array adds no diagnostics (no re-emit)');
+$tmp = tempnam(sys_get_temp_dir(), 'oa_emit_');
+unlink($tmp);
+$tmp .= '.yml';
+$emitter->writeFile($doc, $tmp);
+assert_same($yaml, file_get_contents($tmp), 'writeFile() serializes the already-built array identically to dump()');
+assert_same($diagCountAfterEmit, $emitterDiag->count(), 'writeFile() adds no diagnostics (no re-emit)');
+@unlink($tmp);
+
+// --- structural validation of the built document (a YAML round-trip alone is insufficient) ---
+$validDiag = new CompileDiagnostics();
+(new OpenApiValidator($validDiag))->validate($doc);
+assert_true(!$validDiag->hasErrors(), 'fixture document passes structural validation (refs resolve, every op has responses)');
+
+// --- YAML round-trip: dump ⇒ parse ⇒ identical array; toYaml() convenience == dump(emit) ---
 $reparsed = Yaml::parse($yaml);
 assert_same($doc, $reparsed, 'YAML round-trip is lossless — dump→parse reproduces the array exactly');
+assert_same($yaml, $emitter->toYaml($operations, title: 'Test API', version: '1.2.3'), 'toYaml() convenience path == dump(emit())');
 
 // ============================================================================
 // Operation normalization (prereq 1): two operations on the same METHOD:path collapse last-wins, and each
@@ -226,5 +288,26 @@ assert_true($emitDiag->hasErrors(), 'duplicate METHOD:path surfaces a FATAL stru
 assert_same(0, $emitDiag->warningCount(), 'duplicate-key is structural, not a migration warning');
 // last-wins: the surviving operation is the second one
 assert_same('EmDupSecond', $dupDoc['paths']['/api/em/dup']['get']['operationId'], 'last-wins survives (mirrors Router $routes[$key])');
+
+// ============================================================================
+// SchemaNameResolver (prereq/correctness): FQCN⇒name with collision detection + #[Field(schema:)] override.
+// Two different FQCNs collapsing to the same short name ⇒ ambiguous $ref ⇒ FATAL; first registrant keeps it.
+// A class-level #[Field(schema:)] disambiguates (the override wins, no collision).
+// ============================================================================
+$resolverDiag = new CompileDiagnostics();
+$resolver = new SchemaNameResolver($resolverDiag);
+assert_same('CollideDto', $resolver->resolve(\SpsOaTest\DupA\CollideDto::class), 'first CollideDto resolves to its short name');
+assert_same('CollideDto', $resolver->resolve(\SpsOaTest\DupB\CollideDto::class), 'loser still resolves to the same name (its refs point at the winner)');
+assert_true($resolverDiag->hasErrors(), 'two FQCNs collapsing to one component name ⇒ FATAL collision diagnostic');
+assert_same(\SpsOaTest\DupA\CollideDto::class, $resolver->ownerOf('CollideDto'), 'first registrant owns the slot');
+assert_same([\SpsOaTest\DupA\CollideDto::class => 'CollideDto'], $resolver->componentRegistry(), 'only the owner is registered; the loser is not re-mapped');
+
+// Field(schema:) override disambiguates ⇒ no collision.
+$resolverDiag2 = new CompileDiagnostics();
+$resolver2 = new SchemaNameResolver($resolverDiag2);
+assert_same('CollideDto', $resolver2->resolve(\SpsOaTest\DupA\CollideDto::class), 'first CollideDto keeps its short name');
+assert_same('RenamedDto', $resolver2->resolve(\SpsOaTest\Renamed\CollideDto::class), 'class-level #[Field(schema:)] overrides the component name');
+assert_true(!$resolverDiag2->hasErrors(), 'a #[Field(schema:)] override resolves the collision ⇒ no fatal');
+assert_same(\SpsOaTest\Renamed\CollideDto::class, $resolver2->ownerOf('RenamedDto'), 'the renamed class owns its own slot');
 
 echo "OpenApiEmitter passed\n";

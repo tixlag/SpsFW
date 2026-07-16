@@ -38,6 +38,9 @@ final class CompileDiagnostics
     /** @var list<array{severity: string, controller: ?string, method: ?string, dto: ?string, field: ?string, cause: string, fix: ?string}> */
     private array $records = [];
 
+    /** @var array<string, true> dedup signatures (severity + location + cause) already recorded */
+    private array $seen = [];
+
     /**
      * Record a FATAL (structural) compile error. Argument order is the fixed plan contract
      * error(controller, method, dto, field, cause, fix); only `cause` is required.
@@ -76,6 +79,16 @@ final class CompileDiagnostics
         string $cause,
         ?string $fix,
     ): void {
+        // Idempotent accumulation: the same diagnostic produced twice (e.g. when emit() runs once and the
+        // serialized form is then dumped/written from the already-built array — or, defensively, if a caller
+        // invokes emit() twice) is recorded ONCE. The signature is severity + full location + cause; `fix` is
+        // advisory and intentionally not part of it.
+        $signature = $severity . "\x1f" . ($controller ?? '') . "\x1f" . ($method ?? '') . "\x1f"
+            . ($dto ?? '') . "\x1f" . ($field ?? '') . "\x1f" . $cause;
+        if (isset($this->seen[$signature])) {
+            return;
+        }
+        $this->seen[$signature] = true;
         $this->records[] = [
             'severity' => $severity,
             'controller' => $controller,

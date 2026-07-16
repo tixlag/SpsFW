@@ -385,80 +385,109 @@ lockfile), preserved/convention-распределение честное. Вс�
 
 ### 4.11 Secondary OpenAPI emitter + normalized parity на реальном N (Step 4 / M3, dev-only probe)
 
+> **Rev. 2 (Step 4 correctness fix-pass).** Пересчитано после focused-фикспасса: убран повторный `emit()` из
+> публикации (array-first `dump()`/`writeFile(array)`), введён `SchemaNameResolver` (FQCN⇒name registry
+> внутренняя — `x-fqcn` больше НЕ публикуется), nullability канонизируется в 3.1-union (а не удаляется),
+> `security: []` сохраняется, добавлен структурный `OpenApiValidator`, 403 — по эффективному runtime-access.
+> Прежние числа (30 fatal / 4737 divergences) **не сохранены искусственно** — см. ниже.
+
 **Генератор:** `docs/metadata_compiler_audit/gen_n_openapi_parity.php` — dev-only (НЕ тест чистого checkout'а
 F; вручную против живого N). Тот же bootstrap, что §4.8/§4.10. Эмиттит **вторичный** артефакт
 `next/.cache/swagger/openapi.generated.yml`; основной `openapi.yml` (swagger-php) НЕ трогается (plan §15, M6).
 
 **Решения Step 4 (фиксированы, plan Шаг 4):** прямая зависимость `symfony/yaml ^7.0` (materialized в
-`composer.lock`); emitter **array-first** (детерминированный PHP-массив, YAML — только финальная сериализация);
-parity — после round-trip `Yaml::parseFile` + normalization (рекурсивный ksort, drop `x-fqcn`/`nullable`/пустых
-контейнеров), сравнение массив-к-массиву, НИКОГДА по сырой текст/whitespace.
+`composer.lock`); emitter **array-first** — `emit()` строит детерминированный PHP-массив и копит диагностики
+**один раз** (дедуплицированы по signature); `dump(array)` / `writeFile(array)` сериализуют УЖЕ построенный
+массив без перекомпиляции (повторного накопления диагностик нет). Parity — после round-trip `Yaml::parseFile` +
+normalization: рекурсивный ksort, strip `x-fqcn`, **CANONICALIZE `nullable`⇒3.1-union на обеих сторонах**
+(скаляр ⇒ `type:[…,"null"]`, `$ref` ⇒ `anyOf:[{$ref},{type:"null"}]` — маркер НЕ удаляется, иначе скрылась бы
+реальная контрактная разница), drop пустых контейнеров **кроме** `security: []` (анонимность = контракт) и
+любого пустого контейнера внутри security-поддерева (`bearerAuth: []` scopes); сравнение массив-к-массиву,
+НИКОГДА по сырой текст/whitespace.
 
-**C. Secondary emission (PARITY-режим):** `OpenApiEmitter::emit(384 ops)` — `emit()` пишет диагностики, но НЕ
-бросает; режим решает вызывающий (`throwOnErrors()` / `throwOnErrorsAndWarnings()`).
+**C. Secondary emission (PARITY-режим):** `OpenApiEmitter::emit(385 ops)` → array; затем структурная
+валидация массива `OpenApiValidator::validate($doc)` (refs resolve / каждая op имеет responses / валидные
+HTTP-methods / security-schemes существуют — YAML round-trip сам по себе недостаточен). Эмиттер и валидатор
+пишут диагностики, но НЕ бросают; публикация gated `throwOnErrors()`-семантикой вызывающего.
 
 | Метрика | Значение |
 |---|---|
-| Raw operations (из §4.10) | 384 |
-| Effective paths emitted | **330** (377 METHOD:path-операций, collapse last-wins) |
+| Raw operations (из §4.10) | 385 |
+| Effective paths emitted | **331** (378 METHOD:path-операций, collapse last-wins) |
 | Component schemas emitted | **149** |
-| Emission — fatal (ERROR) | **30**: 28 duplicate METHOD:path (last-wins, зеркалит Router) + **2 schema-name collision** |
+| Emission — fatal (ERROR) | **15**: 14 duplicate METHOD:path (last-wins, зеркалит Router) + **1 schema-name collision** |
 | Emission — warning | 1 |
-| Operation-projection migration gaps (WARNING) | **390** (374 из §4.10 реклассифицированы error→warning + collection-without-schema) |
+| Structural validation findings (`OpenApiValidator`) | **0** (все `$ref` резолвятся, каждая op имеет responses) |
+| Operation-projection migration gaps (WARNING) | **391** (374 из §4.10 реклассифицированы error→warning + collection-without-schema) |
 | Operation-projection structural errors | **0** |
+| **Secondary-файл опубликован?** | **НЕТ** — blocked 15 структурными error(s) (in-memory preview только для отчёта) |
 
-**Mode behavior (требование заказчика):** в **parity**-режиме 390 migration-gaps НЕ блокируют генерацию —
-`openapi.generated.yml` эмиттится и parity-report строится. В **strict/managed** `throwOnErrorsAndWarnings()`
-HALT-ит на 390 warning(s) + 30 error(s). Реализовано разделением каналов severity в `CompileDiagnostics`
-(ERROR=структурные → `throwOnErrors()` во ВСЕХ режимах; WARNING=migration-gap → только strict/managed).
+**Mode behavior (требование заказчика):** **parity**-режим допускает ТОЛЬКО WARNING — 391 migration-gaps НЕ
+блокируют построение массива/parity-report. Но структурные ERROR блокируют **публикацию** secondary-файла
+(`throwOnErrors()` перед записью); при 15 error(s) файл НЕ пишется, разрешён лишь in-memory preview для отчёта.
+В **strict/managed** `throwOnErrorsAndWarnings()` HALT-ит на 391 warning(s) + 15 error(s). Реализовано
+разделением каналов severity в `CompileDiagnostics` (ERROR=структурные → `throwOnErrors()` во ВСЕХ режимах;
+WARNING=migration-gap → только strict/managed).
 
-**Structural findings N (fatal, не parity-fail):** (1) **28 duplicate METHOD:path** — N реально имеет
+**Почему fatal-счётчик уменьшился вдвое (30 → 15):** прежние 28 duplicate + 2 collision были **задвоены** —
+probe звал `$emitter->emit($ops)` и затем `$emitter->toFile($ops,…)`, а `toFile()` ре-эмиттил (до появления
+дедупликации каждая диагностика записывалась дважды). Фикспасс: (а) `CompileDiagnostics` дедуплицирует по
+signature; (б) probe эмиттит ОДИН раз и сериализует через `writeFile(array)`. Реальное структурное состояние N
+не изменилось — **14** shadowed METHOD:path + **1** `CreateNewsDto` collision; считали их неверно.
+
+**Structural findings N (fatal, не parity-fail):** (1) **14 duplicate METHOD:path** — N реально имеет
 shadowed-роуты (Router молча перетирал); emitter делает их видимыми, last-wins. (2) **schema-name collision
 `CreateNewsDto`**: два FQCN (`SpsNext\News\Dto\CreateNewsDto` и `SpsNext\LK\News\DTOs\CreateNewsDto`)
-коллапсируют в одно short name → неоднозначный `$ref`. Фикс — `#[Field(schema: …)]` rename или namespace
-cleanup (M7). **Bug найден и исправлен на N:** swagger-php `Generator::UNDEFINED` sentinel протекал через
-OA items-fallback (`oaItemsType` читал `OA\Items->type` = sentinel-строку как scalar-тип) →
-`ReflectionException`. Исправлено `DtoSchemaBuilder::isOaDefault()` (через канонический
-`\OpenApi\Generator::isDefault()`) + regression-тест (`OpenApiEmitterTest`, массив
-`items: new OA\Items(ref: X)` с UNDEFINED `type`).
+коллапсируют в одно short name → неоднозначный `$ref` (`SchemaNameResolver` детектит в одном месте; первый
+регистрант владеет слотом). Фикс — class-level `#[Field(schema: …)]` rename или namespace cleanup (M7).
+**Bug найден и исправлен на N (Phase 1):** swagger-php `Generator::UNDEFINED` sentinel протекал через
+OA items-fallback → `ReflectionException`; закрыт `DtoSchemaBuilder::isOaDefault()` + regression-тест.
 
 **D. Normalized parity vs legacy swagger-php `openapi.yml`:**
 
 | Метрика | Generated | Legacy |
 |---|---|---|
-| Paths | 330 | 300 |
+| Paths | 331 | 300 |
 | Schemas | 149 | 338 |
-| Operations | 377 | 347 |
-| Paths only-in-generated / only-in-legacy | 32 / 2 | |
+| Operations | 378 | 347 |
+| Paths only-in-generated / only-in-legacy | 33 / 2 | |
 | Schemas only-in-generated / only-in-legacy | 4 / **193** | |
-| **Total normalized divergences** | **4737** | |
+| **Total normalized divergences** | **4986** | |
 
-По категориям: **2559** missing-in-generated, **1062** value-mismatch, **1116** extra-in-generated.
+По категориям: **2569** missing-in-generated, **955** value-mismatch, **1462** extra-in-generated.
 
-4737 расхождений — **ожидаемый baseline M3** (цель zero-divergence — M7/M8/M9). Доминирующие root-causes
-(сэмпл + анализ):
+Рост 4737 → 4986 (+249) относительно rev. 1 — **ожидаемый и корректный**: nullability теперь
+канонилизируется в 3.1-union на обеих сторонах вместо удаления, поэтому реальные контрактные разницы
+nullability (nullable на одной стороне, не на другой; `type:["array","null"]` (gen) vs `type:"array"` (legacy))
+теперь видны как divergences — прежде они скрывались drop'ом `nullable` (дефект fixpass-а). preservation
+`security: []` / scopes тоже точнее. 4986 — **актуальный baseline M3** (цель zero-divergence — M7/M8/M9).
+Доминирующие root-causes (сэмпл + анализ):
 
 | Root-cause | Доля / пример | Когда закрывается |
 |---|---|---|
-| **Schema coverage gap** (149 vs 338; 193 only-in-legacy) | доминирует. (a) операции с провалившейся response-projection (390 gap) не дотягиваются до своих DTO-refs → схемы не собраны; (b) swagger-php сканирует standalone `#[OA\Schema]`/nested DTO вне досягаемости эмитнутых роутов. Emitter собирает только transitively-reachable схемы | M7 (`#[Response]`) + M8 (DTO cleanup) |
+| **Schema coverage gap** (149 vs 338; 193 only-in-legacy) | доминирует. (a) операции с провалившейся response-projection (391 gap) не дотягиваются до своих DTO-refs → схемы не собраны; (b) swagger-php сканирует standalone `#[OA\Schema]`/nested DTO вне досягаемости эмитнутых роутов. Emitter собирает только transitively-reachable схемы | M7 (`#[Response]`) + M8 (DTO cleanup) |
+| **Nullability contract** (новое, видно после canonicalization) | `type:["array","null"]` (gen) vs `type:"array"` (legacy) — emitter выводит nullable из PHP-типа (`?Type`), swagger-php из явного OA `nullable:`; разница больше не маскируется | M7/M8 |
 | **Serialization-name** (PHP name vs OA `property` arg) | `userCode1C` (gen) vs `user_code_1c` (legacy) — serialization contract plan §6: JSON-ключ = PHP property name, НЕ OA `property:` (если нет `JsonSerializable`-ремапа). swagger-php ошибается; projection — по контракту | M8 (per-DTO verify JsonSerializable) |
 | **$ref target** divergence | `rules` → `AccessRulesDto` (gen) vs `AccessRuleDto` (legacy) — projection выводит item-тип из `#[Items]`/reflection, swagger-php из явного OA items | M7 |
 | **Missing description/title** | swagger-php эмиттит `OA\Schema` title/description (рус. подписи) — projection их пока не имеет (нет OA\Schema-источника) | M7 (`#[Field]`/описания) |
 | **operationId delta** | 306 deferred id-less ops → missing-in-generated operationId | M9 (canonical-id assignment) |
-| **Duplicate-key / collision** | 28 + 2 (см. structural findings выше) | M7 (namespace / `#[Field(schema:)]`) |
+| **Duplicate-key / collision** | 14 + 1 (см. structural findings выше) | M7 (namespace / class-level `#[Field(schema:)]`) |
 
 **E. Prereq 4 — non-promoted constructor fields на реальном N:** **0** DTO с non-promoted ctor-param,
-тегированным `#[OA\Property]`. N-ные DTO используют promoted ctor-params (или не тегируют non-promoted) →
-специальная ветка `Router::extractValidationRules` (Router.php:421–481) — **фактически мёртвый код на N**.
-Schema-projection корректно их исключает (они не `json_serialize`'ются); расхождений этого класса нет.
+тегированным `#[OA\Property]` (FQCN⇒name теперь читается из внутреннего `componentRegistry()` эмиттера, а не из
+`x-fqcn`). N-ные DTO используют promoted ctor-params (или не тегируют non-promoted) → специальная ветка
+`Router::extractValidationRules` (Router.php:421–481) — **фактически мёртвый код на N**. Schema-projection
+корректно их исключает (они не `json_serialize`'ются); расхождений этого класса нет.
 
-**Вывод §4.11:** secondary emitter работает на полном инвентаре N (384 ops → 330 paths / 149 schemas) в
-parity-режиме, не блокируемом 390 migration-gaps; parity-report (4737 normalized divergences) —
-**baseline/фронт миграции M7–M9**, разложенный по root-causes (schema-coverage, serialization-name, $ref-target,
-описания, operationId). Режимная семантика (parity tolerate / strict-managed halt) подтверждена на реальных
-числах. Bug sentinel-протечки swagger-php найден и закрыт regression-тестом. `composer test` зелёный (27/27);
-чистый checkout F от N не зависит (probe — dev-only артефакт, числа зафиксированы в §4.11).
-
+**Вывод §4.11:** secondary emitter работает на полном инвентаре N (385 ops → 331 paths / 149 schemas);
+array-first контракт (`emit()` один раз → `dump()`/`writeFile()` + структурная `OpenApiValidator`) даёт
+идемпотентные/дедуплицированные диагностики и gate публикации (`throwOnErrors()`-семантика: 15 структурных
+error блокируют запись secondary-файла, in-memory preview разрешён). `x-fqcn` не публикуется (registry
+внутренняя), nullability — 3.1-union, `security: []` сохранена, 403 — по эффективному runtime-access.
+parity-report (4986 normalized divergences) — **актуальный baseline/фронт миграции M7–M9**, разложенный по
+root-causes. Режимная семантика (parity tolerate warnings / strict-managed halt / structural-error blocks
+publish) подтверждена на реальных числах. `composer test` зелёный (27/27); чистый checkout F от N не зависит
+(probe — dev-only артефакт, числа зафиксированы в §4.11).
 ---
 
 ## 5. Deploy / Docker / cache-volume audit

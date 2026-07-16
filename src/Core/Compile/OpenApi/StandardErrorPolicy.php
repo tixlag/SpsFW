@@ -22,7 +22,8 @@ use SpsFW\Core\Compile\Metadata\OperationMetadata;
  *
  * The error body is the non-debug shape of {@see \SpsFW\Core\Http\Response::createErrorBody()}: a stable
  * `{error: {status, uri, user, exception, message, file, line, previous, trace}}` envelope. Debug-only fields
- * are described as nullable/empty so the schema matches what production responses actually carry.
+ * are typed with `"null"` in their type union (OpenAPI 3.1 / JSON Schema 2020-12) so the schema matches what
+ * production responses actually carry — the removed `nullable: true` is never emitted.
  *
  * The policy is a pure function of {@see OperationMetadata}: it yields the {status ⇒ description} map; the
  * OpenApiEmitter materializes each into a response object that $refs the shared `Error` component, merging it
@@ -54,11 +55,11 @@ final class StandardErrorPolicy
                         'status' => ['type' => 'integer', 'description' => 'HTTP status code'],
                         'uri' => ['type' => 'string', 'description' => 'Request URI'],
                         'user' => ['type' => 'string', 'description' => 'Authenticated user ("id: <uuid>") or "anonymous"'],
-                        'exception' => ['type' => 'string', 'nullable' => true, 'description' => 'Exception class (debug only; null in production)'],
+                        'exception' => ['type' => ['string', 'null'], 'description' => 'Exception class (debug only; null in production)'],
                         'message' => ['type' => 'string', 'description' => 'Human-readable error message'],
                         'file' => ['type' => 'string', 'description' => 'Source file basename (debug only; empty in production)'],
                         'line' => ['type' => 'integer', 'description' => 'Source line (debug only; 0 in production)'],
-                        'previous' => ['nullable' => true, 'description' => 'Previous exception chain (debug only; null in production)'],
+                        'previous' => ['type' => ['object', 'null'], 'description' => 'Previous exception chain (debug only; null in production)'],
                         'trace' => [
                             'type' => 'array',
                             'description' => 'Sanitized stack trace (debug only; empty in production)',
@@ -95,8 +96,12 @@ final class StandardErrorPolicy
             $responses[401] = self::DESC_401;
         }
 
-        // 403: capability-gated actions (#[AccessRulesAny/All]).
-        if ($security !== null && $security->hasRules()) {
+        // 403: capability-gated actions. Decided by the EFFECTIVE runtime access pipeline
+        // (OperationMetadata::accessGated, mirroring collectAccessRules with its All-only ⇒ [] quirk) — NOT the
+        // documentation projection (SecurityMetadata::requiredRules, which keeps any/all independent for
+        // x-required-rules). An AccessRulesAll-only action enforces nothing at runtime, so it must NOT advertise
+        // a 403 it can never produce.
+        if ($operation->accessGated) {
             $responses[403] = self::DESC_403;
         }
 

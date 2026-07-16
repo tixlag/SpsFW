@@ -17,9 +17,11 @@ use Attribute;
  * `json_encode` actually emits (serialization contract, plan §6); otherwise it lies and must be avoided.
  *
  * Deliberately carries NO `oneOf/anyOf` — polymorphism lives in the OA escape hatch (plan §13). Doc +
- * rule-graph correctness; targets property (incl. promoted constructor parameters).
+ * rule-graph correctness; targets property (incl. promoted constructor parameters). When applied to a DTO
+ * CLASS, only `schema` is meaningful — it overrides the component name {@see \SpsFW\Core\Compile\OpenApi\SchemaNameResolver}
+ * assigns the class (the disambiguation lever for short-name collisions).
  */
-#[Attribute(Attribute::TARGET_PROPERTY)]
+#[Attribute(Attribute::TARGET_PROPERTY | Attribute::TARGET_CLASS)]
 final readonly class Field
 {
     /**

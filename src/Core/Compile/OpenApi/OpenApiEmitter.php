@@ -19,23 +19,33 @@ use Symfony\Component\Yaml\Yaml;
  *
  * ARRAY-FIRST (plan Шаг 4): the emitter assembles a deterministic PHP array — the full document AST
  * (openapi/info/paths/components/securitySchemes) — and YAML is ONLY the final serialization step
- * ({@see Yaml::dump()}). No hand-rolled indentation, no string concatenation. The array is the testable,
- * assertable artifact; {@see toYaml()}/{@see toFile()} are thin serializers over it.
+ * ({@see Yaml::dump()}). {@see emit()} produces the array (and accumulates diagnostics ONCE);
+ * {@see dump()} / {@see writeFile()} serialize an ALREADY-BUILT array without recompiling, so diagnostics stay
+ * idempotent (never double-counted). The legacy {@see toYaml()} / {@see toFile()} re-emit internally and are
+ * kept only for standalone convenience.
  *
- * The emitter emits a SECONDARY document (`.cache/swagger/openapi.generated.yml`); the primary
- * `openapi.yml` (swagger-php / {@see \SpsFW\Core\DocsUtil}) is untouched until M6 (plan §15).
+ * The emitter emits a SECONDARY document (`.cache/swagger/openapi.generated.yml`); the primary `openapi.yml`
+ * (swagger-php / {@see \SpsFW\Core\DocsUtil}) is untouched until M6 (plan §15). Publication is gated by the
+ * caller: in parity mode {@see CompileDiagnostics::throwOnErrors()} MUST run before the file is written —
+ * structural errors block the artifact; only an in-memory preview is allowed for the parity report.
  *
  * Operation normalization: raw operations are keyed by METHOD:path and collapsed last-wins — mirroring the
  * route-IR / Router cache (384 raw ⇒ 377 effective on the real `next` inventory). Each shadowed operation
  * surfaces a FATAL duplicate diagnostic; the surviving op is the one OpenAPI publishes.
  *
- * Schema collection: object DTOs referenced by request bodies / responses (and transitively, their nested
- * refs) are gathered into `components.schemas.<ShortName>` and referenced via `$ref`. Enums / scalars /
- * DateTime render inline. A short-name collision across two FQCNs is a FATAL structural error (ambiguous ref).
+ * Schema naming: a {@see SchemaNameResolver} maps every referenced DTO FQCN ⇒ component name (class-level
+ * `#[Field(schema:)]` override, else short name) with collision detection. The FQCN⇒name registry is INTERNAL
+ * (never published as `x-fqcn`); the cycle guard keeps a separate set of collected FQCNs. Object DTOs are
+ * gathered into `components.schemas.<Name>` and referenced via `$ref`; enums / scalars / DateTime inline.
+ *
+ * Nullability is expressed the OpenAPI 3.1 / JSON Schema 2020-12 way — a nullable scalar becomes
+ * `type: [<type>, "null"]`, a nullable `$ref` becomes `anyOf: [{$ref}, {type: "null"}]`. The legacy
+ * `nullable: true` is NEVER emitted.
  *
  * Standard errors: {@see StandardErrorPolicy} contributes the 400/401/403/429/500 responses (no 422), each
  * $ref-ing the shared `Error` component, merged with the operation's declared #[Response] entries (declared
- * wins — a status is never duplicated).
+ * wins — a status is never duplicated). 403 follows the EFFECTIVE runtime access pipeline, not the
+ * documentation projection.
  */
 final class OpenApiEmitter
 {
@@ -44,6 +54,12 @@ final class OpenApiEmitter
     private readonly TypeMapper $typeMapper;
 
     private readonly DtoSchemaBuilder $schemaBuilder;
+
+    /** Set fresh by each {@see emit()} call so emission is repeatable/idempotent. */
+    private SchemaNameResolver $resolver;
+
+    /** @var array<string, true> FQCNs whose component slot is allocated (collected or mid-render) — cycle guard */
+    private array $collectedFqcn = [];
 
     public function __construct(
         private readonly CompileDiagnostics $diagnostics,
@@ -62,13 +78,19 @@ final class OpenApiEmitter
 
     /**
      * Assemble the full OpenAPI document array (array-first). Deterministic: paths and component schemas are
-     * sorted alphabetically; per-operation keys are emitted in a fixed order.
+     * sorted alphabetically; per-operation keys are emitted in a fixed order. Diagnostics accumulate ONCE per
+     * call (deduplicated by {@see CompileDiagnostics}); pass the result to {@see dump()}/{@see writeFile()} to
+     * serialize without recompiling.
      *
      * @param list<OperationMetadata> $operations raw (pre-normalization) operations
      * @return array<string, mixed>
      */
     public function emit(array $operations, ?string $title = null, ?string $version = null): array
     {
+        // Fresh per-call state ⇒ emit() is idempotent and may be invoked repeatedly without compounding.
+        $this->resolver = new SchemaNameResolver($this->diagnostics);
+        $this->collectedFqcn = [];
+
         $effective = $this->normalize($operations);
 
         /** @var array<string, array<string, mixed>> $componentsSchemas name ⇒ schema array */
@@ -105,22 +127,50 @@ final class OpenApiEmitter
     }
 
     /**
-     * Serialize the document to a YAML string (final serialization step only).
+     * Serialize an ALREADY-BUILT document array to YAML. No compilation, no diagnostics — the document came
+     * from {@see emit()}.
      */
-    public function toYaml(array $operations, ?string $title = null, ?string $version = null): string
+    public function dump(array $document): string
     {
-        return Yaml::dump($this->emit($operations, $title, $version), inline: 4, indent: 2, flags: 0);
+        return Yaml::dump($document, inline: 4, indent: 2, flags: 0);
     }
 
     /**
-     * Emit and write the secondary generated spec to a file (dev/CI; never the primary openapi.yml).
+     * Serialize an ALREADY-BUILT document array and write it to disk.
      */
-    public function toFile(array $operations, string $path, ?string $title = null, ?string $version = null): void
+    public function writeFile(array $document, string $path): void
     {
         if (!is_dir(dirname($path))) {
             mkdir(dirname($path), 0777, true);
         }
-        file_put_contents($path, $this->toYaml($operations, $title, $version));
+        file_put_contents($path, $this->dump($document));
+    }
+
+    /**
+     * The FQCN⇒component-name registry from the last {@see emit()} (for tooling/probes; never published).
+     *
+     * @return array<string, string>
+     */
+    public function componentRegistry(): array
+    {
+        return isset($this->resolver) ? $this->resolver->componentRegistry() : [];
+    }
+
+    /**
+     * Convenience: emit + dump in one call. Prefer emit() once → dump() to avoid rebuilding. Diagnostics are
+     * deduplicated, so calling this after emit() does not double-count — but it DOES rebuild the document.
+     */
+    public function toYaml(array $operations, ?string $title = null, ?string $version = null): string
+    {
+        return $this->dump($this->emit($operations, $title, $version));
+    }
+
+    /**
+     * Convenience: emit + write in one call (standalone use). Prefer emit() once → writeFile() in probes/tests.
+     */
+    public function toFile(array $operations, string $path, ?string $title = null, ?string $version = null): void
+    {
+        $this->writeFile($this->emit($operations, $title, $version), $path);
     }
 
     /**
@@ -368,8 +418,8 @@ final class OpenApiEmitter
             return $inline;
         }
         if ($schema->className !== null && !$schema->isEmpty()) {
-            $name = $this->schemaName($schema->className);
-            $this->collectObjectSchema($name, $schema, $componentsSchemas);
+            $name = $this->resolver->resolve($schema->className);
+            $this->collectObjectSchema($schema->className, $schema, $componentsSchemas);
             return ['$ref' => $this->refTo($name)];
         }
         // Empty object fragment (no properties, no type) — render as a bare object.
@@ -377,40 +427,27 @@ final class OpenApiEmitter
     }
 
     /**
-     * Register an object DTO schema under its short name (collision ⇒ FATAL), rendering its properties and
-     * collecting nested refs. CYCLE-SAFE: a placeholder (x-fqcn only) is pre-registered BEFORE the property
-     * walk, so a cyclic ref (A→B→A) re-enters, sees its own placeholder, and stops — the outer call fills in
-     * the real properties afterward. The x-fqcn vendor extension also lets the parity normalizer resolve refs.
+     * Register an object DTO schema under its resolved component name, rendering its properties and collecting
+     * nested refs. CYCLE-SAFE: the FQCN is marked collected BEFORE the property walk, so a cyclic ref
+     * (A→B→A) re-enters, sees itself collected, and stops — the outer call fills the real slot afterward. Only
+     * the OWNER of a name (first registrant) fills the slot; a colliding loser skips it (fatal already recorded).
      *
      * @param array<string, array<string, mixed>> $componentsSchemas
      */
-    private function collectObjectSchema(string $name, SchemaMetadata $schema, array &$componentsSchemas): void
+    private function collectObjectSchema(string $fqcn, SchemaMetadata $schema, array &$componentsSchemas): void
     {
-        if (isset($componentsSchemas[$name])) {
-            $existing = $componentsSchemas[$name];
-            // Same class already collected OR mid-render (cycle placeholder) — nothing to do.
-            if (($existing['x-fqcn'] ?? null) === $schema->className) {
-                return;
-            }
-            // Two different FQCNs collapse to the same short name ⇒ ambiguous $ref target.
-            $this->diagnostics->error(
-                controller: null,
-                method: null,
-                dto: $schema->className,
-                field: 'schema',
-                cause: sprintf(
-                    'schema name collision: %s and %s both map to components.schemas.%s',
-                    $existing['x-fqcn'] ?? '(unknown)',
-                    $schema->className,
-                    $name,
-                ),
-                fix: 'rename one class, or set an explicit component name via #[Field(schema: …)]',
-            );
+        if (isset($this->collectedFqcn[$fqcn])) {
+            return; // already collected or mid-render (cycle) — the slot exists or will be filled by the owner.
+        }
+        $name = $this->resolver->resolve($fqcn);
+        if ($this->resolver->ownerOf($name) !== $fqcn) {
+            // Collision loser — the name is owned by another FQCN; the fatal diagnostic already blocks publication.
             return;
         }
+        $this->collectedFqcn[$fqcn] = true;
 
         // Pre-register a placeholder so a self-referential (or mutually-recursive) property walk terminates.
-        $componentsSchemas[$name] = ['type' => 'object', 'properties' => new \stdClass(), 'x-fqcn' => $schema->className];
+        $componentsSchemas[$name] = ['type' => 'object', 'properties' => new \stdClass()];
 
         $properties = [];
         $required = [];
@@ -428,7 +465,6 @@ final class OpenApiEmitter
         if ($schema->description !== '') {
             $component['description'] = $schema->description;
         }
-        $component['x-fqcn'] = $schema->className;
         $componentsSchemas[$name] = $component;
     }
 
@@ -485,8 +521,8 @@ final class OpenApiEmitter
             return $inline;
         }
 
-        $name = $this->schemaName($fqcn);
-        $this->collectObjectSchema($name, $this->schemaBuilder->build($fqcn), $componentsSchemas);
+        $name = $this->resolver->resolve($fqcn);
+        $this->collectObjectSchema($fqcn, $this->schemaBuilder->build($fqcn), $componentsSchemas);
         return ['$ref' => $this->refTo($name)];
     }
 
@@ -508,6 +544,10 @@ final class OpenApiEmitter
     }
 
     /**
+     * Fold constraints + OpenAPI 3.1 nullability onto a property schema fragment. Nullability is expressed via
+     * JSON Schema 2020-12 — a nullable scalar unions "null" into `type`; a nullable $ref wraps in anyOf — NEVER
+     * via the removed `nullable` keyword.
+     *
      * @param array<string, mixed> $schema
      * @return array<string, mixed>
      */
@@ -540,10 +580,33 @@ final class OpenApiEmitter
         if ($property->writeOnly) {
             $schema['writeOnly'] = true;
         }
-        if ($property->nullable && !isset($schema['$ref'])) {
-            $schema['nullable'] = true;
+        return $this->applyNullability($schema, $property);
+    }
+
+    /**
+     * OpenAPI 3.1 nullability (JSON Schema 2020-12): scalar ⇒ type:[<type>,"null"]; $ref ⇒ anyOf:[{$ref},{type:"null"}].
+     *
+     * @param array<string, mixed> $schema
+     * @return array<string, mixed>
+     */
+    private function applyNullability(array $schema, PropertyMetadata $property): array
+    {
+        if (!$property->nullable) {
+            return $schema;
         }
-        return $schema;
+        if (isset($schema['$ref'])) {
+            return ['anyOf' => [$schema, ['type' => 'null']]];
+        }
+        if (isset($schema['type'])) {
+            $type = $schema['type'];
+            $types = is_array($type) ? $type : [$type];
+            if (!in_array('null', $types, true)) {
+                $types[] = 'null';
+            }
+            $schema['type'] = array_values($types);
+            return $schema;
+        }
+        return ['anyOf' => [$schema, ['type' => 'null']]];
     }
 
     private function isClassish(string $type): bool
@@ -554,12 +617,6 @@ final class OpenApiEmitter
     private function isBuiltinScalar(string $type): bool
     {
         return in_array($type, ['int', 'integer', 'string', 'bool', 'boolean', 'float', 'double', 'number', 'array', 'object', 'mixed'], true);
-    }
-
-    private function schemaName(string $fqcn): string
-    {
-        $pos = strrpos($fqcn, '\\');
-        return $pos === false ? $fqcn : substr($fqcn, $pos + 1);
     }
 
     private function refTo(string $name): string

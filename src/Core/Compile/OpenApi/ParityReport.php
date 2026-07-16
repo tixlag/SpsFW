@@ -13,9 +13,14 @@ use Symfony\Component\Yaml\Yaml;
  *
  * Normalization is intentionally lossy on COSMETIC differences that are not part of the parity contract:
  *  - recursive key sort (order is irrelevant);
- *  - drop vendor/debug extensions (`x-fqcn`) the emitter adds for ref resolution;
- *  - drop `nullable` (3.0 `nullable: true` vs 3.1 `type:[…]` — a format, not a contract, difference);
- *  - drop empty containers and the swagger-php default `description: ''`.
+ *  - strip vendor/debug extensions (`x-fqcn`) — the emitter's FQCN⇒name registry is internal and never
+ *    published, but a stray legacy `x-fqcn` is still removed so it cannot perturb the comparison;
+ *  - CANONICALIZE nullability to OpenAPI 3.1 / JSON Schema 2020-12 semantics: a 3.0 `nullable: true` is folded
+ *    into a `type: […, "null"]` union (scalar) or `anyOf: [{$ref}, {type: "null"}]` (ref) on BOTH sides. The
+ *    marker is NOT dropped silently — that would hide a real contract difference (one side nullable, the other
+ *    not). After canonicalization both sides speak 3.1, so a nullability gap surfaces as a divergence.
+ *  - drop empty containers EXCEPT semantically significant ones (`security: []` = anonymous) and the
+ *    swagger-php default `description: ''`.
  *
  * What survives normalization IS the parity contract — operationId, path/method, parameter shape, request
  * body $ref, response $ref + status, security, component schema properties/required. Remaining differences
@@ -28,35 +33,93 @@ use Symfony\Component\Yaml\Yaml;
 final class ParityReport
 {
     /** Cosmetic/auxiliary keys that are not part of the parity contract. */
-    private const DROP_KEYS = ['x-fqcn', 'nullable'];
+    private const DROP_KEYS = ['x-fqcn'];
+
+    /** Empty containers whose EMPTINESS is the contract (kept; never collapsed to "absent / inherit"). */
+    private const KEEP_EMPTY_KEYS = ['security'];
 
     /**
-     * Normalize a parsed OpenAPI document for comparison: recursively sort keys and drop cosmetic auxiliaries.
+     * Normalize a parsed OpenAPI document for comparison: canonicalize nullability, recursively sort keys, drop
+     * cosmetic auxiliaries, and drop empty containers (except the semantically significant ones).
+     *
+     * The `$inSecurity` flag tracks descent into a `security` subtree. Inside it, empty containers are NEVER
+     * dropped: `security: []` (anonymous) and a requirement's empty scopes (`bearerAuth: []`) are both part of
+     * the contract — dropping the scopes would collapse `[[bearerAuth:[]]]` (authenticated) down to `[]`
+     * (anonymous) and hide the difference. Everywhere else, cosmetic empties (`required: []`, `properties: {}` …)
+     * are dropped as before.
      *
      * @param array<string, mixed>|mixed $doc
      * @return array<string, mixed>|mixed
      */
-    public function normalize(mixed $doc): mixed
+    public function normalize(mixed $doc, bool $inSecurity = false): mixed
     {
         if (!is_array($doc)) {
             return $doc;
         }
+        // Canonicalize this node's own nullability (3.0 nullable:true ⇒ 3.1 type union) BEFORE recursing, so the
+        // nullable marker is consumed (not dropped) and a real nullability gap stays visible downstream.
+        $doc = $this->canonicalizeNullability($doc);
+
         $out = [];
         foreach ($doc as $key => $value) {
             if (in_array($key, self::DROP_KEYS, true)) {
                 continue;
             }
-            $out[$key] = $this->normalize($value);
+            // Descending into (or through) a security subtree preserves its empty containers.
+            $childInSecurity = $inSecurity || $key === 'security';
+            $out[$key] = $this->normalize($value, $childInSecurity);
         }
-        // Drop empty containers (swagger-php emits [] / {} that carry no contract).
-        $out = array_filter($out, static function (mixed $v): bool {
-            if (is_array($v) && $v === []) {
+        // Drop empty containers (swagger-php emits [] / {} that carry no contract), but KEEP the ones whose
+        // emptiness IS the contract — `security: []` (anonymous) and any empty container inside a security
+        // subtree (e.g. `bearerAuth: []` scopes) must not collapse into "absent / inherit".
+        $out = array_filter($out, static function (mixed $v, mixed $k) use ($inSecurity): bool {
+            if (is_array($v) && $v === [] && !$inSecurity && !in_array($k, self::KEEP_EMPTY_KEYS, true)) {
                 return false;
             }
             return true;
-        });
+        }, ARRAY_FILTER_USE_BOTH);
         ksort($out);
         return $out;
+    }
+
+    /**
+     * Fold a 3.0 `nullable: true` into OpenAPI 3.1 / JSON Schema 2020-12 nullability, matching what the
+     * emitter now produces: scalar ⇒ `type: [<type>, "null"]`; `$ref` ⇒ `anyOf: [{$ref}, {type: "null"}]`;
+     * typeless ⇒ null already permitted, so the marker is a no-op and just removed. `nullable: false` is removed
+     * (null simply not in the type). Applied symmetrically to both docs, this makes a nullability CONTRACT
+     * difference (nullable on one side, not the other) surface as a real divergence instead of vanishing.
+     *
+     * @param array<string, mixed> $node
+     * @return array<string, mixed>
+     */
+    private function canonicalizeNullability(array $node): array
+    {
+        if (!array_key_exists('nullable', $node)) {
+            return $node;
+        }
+        $nullable = $node['nullable'];
+        unset($node['nullable']);
+        if ($nullable !== true) {
+            return $node; // nullable:false ⇒ null not in the type; nothing to add.
+        }
+        if (array_key_exists('type', $node)) {
+            $type = $node['type'];
+            $types = is_array($type) ? $type : [$type];
+            if (!in_array('null', $types, true)) {
+                $types[] = 'null';
+            }
+            $node['type'] = array_values($types);
+            return $node;
+        }
+        if (array_key_exists('$ref', $node)) {
+            $ref = ['$ref' => $node['$ref']];
+            unset($node['$ref']);
+            $variant = $node === [] ? $ref : ($ref + $node);
+
+            return ['anyOf' => [$variant, ['type' => 'null']]];
+        }
+        // Typeless schema ⇒ null is already permitted (no type constraint); nullable:true is a no-op.
+        return $node;
     }
 
     /**

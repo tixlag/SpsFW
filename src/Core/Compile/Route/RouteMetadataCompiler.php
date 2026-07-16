@@ -595,6 +595,7 @@ final class RouteMetadataCompiler
             controller: $controller,
             method: $method->getName(),
             rateLimited: $this->isRateLimited($method),
+            accessGated: $this->isAccessGated($method),
         );
     }
 
@@ -971,6 +972,23 @@ final class RouteMetadataCompiler
         }
         $declaring = $method->getDeclaringClass();
         return $declaring->getAttributes(RateLimit::class) !== [];
+    }
+
+    /**
+     * Whether the RUNTIME access pipeline actually enforces rules on this action (would throw 403 on denial).
+     * Mirrors {@see collectAccessRules()}: effective only when #[AccessRulesAny] is present (the All-only ⇒ []
+     * quirk means #[AccessRulesAll] alone enforces NOTHING at runtime) and the action is not anonymous. This is
+     * the 403 signal for {@see StandardErrorPolicy} — deliberately the EFFECTIVE runtime pipeline, not the
+     * documentation projection (which keeps any/all independent for x-required-rules).
+     */
+    private function isAccessGated(ReflectionMethod $method): bool
+    {
+        $rules = $this->collectAccessRules($method);
+        if ($rules === []) {
+            return false;
+        }
+        // collectAccessRules returns ['NO_AUTH_ACCESS'] for anonymous actions.
+        return ($rules[0] ?? null) !== 'NO_AUTH_ACCESS';
     }
 
     // --- small reflection/type helpers (TypeMapper covers the actual mapping) ---

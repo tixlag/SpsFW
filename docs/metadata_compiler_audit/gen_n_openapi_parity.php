@@ -4,21 +4,26 @@
  * Dev-only audit probe (NOT a committed test). The Step 4 OpenAPI parity measurement against the REAL consumer
  * app (N = lk.sps38.pro/next).
  *
- *   C. Secondary OpenAPI emission (PARITY mode) — OpenApiEmitter (local working tree) builds the secondary
- *      openapi.generated.yml from OperationMetadata[] (tri-state lockfile). The 374 response-projection
- *      migration gaps are WARNINGS: in parity mode they DO NOT block emission (no throwOnErrorsAndWarnings);
- *      in strict/managed they would halt the build.
+ *   C. Secondary OpenAPI emission (PARITY mode). RouteMetadataCompiler builds OperationMetadata[] (tri-state
+ *      lockfile); OpenApiEmitter emits the document ARRAY ONCE. The 374 response-projection migration gaps are
+ *      WARNINGS — in parity mode they do NOT block emission. Structural errors (duplicate METHOD:path, schema
+ *      collisions, unresolvable $ref, …) DO block PUBLICATION of the secondary file: the array-first contract is
+ *      `emit() → OpenApiValidator::validate($doc) → publish gated by throwOnErrors`. On structural errors the
+ *      probe still builds the in-memory preview for the parity report (section D), but the secondary file is NOT
+ *      written — there is no published artifact. (In strict/managed mode the same gate is enforced fatally via
+ *      CompileDiagnostics::throwOnErrors().)
  *
  *   D. Normalized parity vs legacy swagger-php openapi.yml — ParityReport parses BOTH docs (round-trip),
- *      normalizes (recursive ksort, drop x-fqcn/nullable/empty), and compares array-to-array. Divergences are
- *      bucketed by the path segment they touch (operationId / responses / parameters / schemas / security …)
- *      so the audit can separate the by-design deferred operationId delta (M9) from the real response/schema
- *      migration worklist.
+ *      normalizes (recursive ksort; strip x-fqcn; CANONICALIZE nullable⇒3.1 union on both sides; drop empty
+ *      containers but KEEP security:[]), and compares array-to-array. Divergences are bucketed by the path
+ *      segment they touch (operationId / responses / parameters / schemas / security …) so the audit can
+ *      separate the by-design deferred operationId delta (M9) from the real response/schema migration worklist.
  *
- *   E. Prereq 4 — non-promoted constructor fields. The generated schema projection EXCLUDES them (they are
- *      never json_serialize'd); swagger-php includes OA-tagged non-promoted ctor params. For every DTO the
- *      emitter collected (x-fqcn), this checks ctor params that are non-promoted + carry #[OA\Property] and
- *      confirms each such field is present in legacy but absent in generated — quantifying the divergence.
+ *   E. Prereq 4 — non-promoted constructor fields. The generated schema projection EXCLUDES them (they are never
+ *      json_serialize'd); swagger-php includes OA-tagged non-promoted ctor params. For every DTO the emitter
+ *      collected, this checks ctor params that are non-promoted + carry #[OA\Property] and confirms each such
+ *      field is present in legacy but absent in generated — quantifying the divergence. The FQCN⇒name mapping
+ *      comes from the emitter's INTERNAL componentRegistry() (never published as x-fqcn).
  *
  * The committed artifact is the numeric summary recorded in AUDIT §4.11, not this script's runtime.
  *
@@ -32,6 +37,7 @@ declare(strict_types=1);
 use OpenApi\Attributes as OA;
 use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\OpenApi\OpenApiEmitter;
+use SpsFW\Core\Compile\OpenApi\OpenApiValidator;
 use SpsFW\Core\Compile\OpenApi\ParityReport;
 use SpsFW\Core\Compile\Route\RouteMetadataCompiler;
 use SpsFW\Core\Router\PathManager;
@@ -93,7 +99,7 @@ if ($fh) {
 }
 
 // ============================================================================
-// C. Secondary OpenAPI emission (PARITY mode — warnings do NOT block).
+// C. Secondary OpenAPI emission (PARITY mode — warnings do NOT block; structural errors DO block publish).
 // ============================================================================
 $opDiag = new CompileDiagnostics();
 $opCompiler = new RouteMetadataCompiler($opDiag, operationIdMap: $map);
@@ -105,34 +111,59 @@ $legacy = $report->parseFile($legacyPath);
 $title = is_array($legacy['info'] ?? null) ? ($legacy['info']['title'] ?? 'SpsFW API') : 'SpsFW API';
 $version = is_array($legacy['info'] ?? null) ? ($legacy['info']['version'] ?? '0.1.0') : '0.1.0';
 
+// ARRAY-FIRST: emit() builds the document ONCE and accumulates diagnostics ONCE (deduplicated). The serialized
+// form is produced later from THIS array (dump/writeFile) without recompiling — no doubled diagnostics.
 $emitDiag = new CompileDiagnostics();
 $emitter = new OpenApiEmitter($emitDiag);
-// PARITY mode: emit() records diagnostics but does NOT throw. The 374 migration gaps (warnings) and any
-// duplicate-key structural errors are surfaced below but never block the secondary emission.
 $doc = $emitter->emit($ops, title: $title, version: $version);
 
+// Structural validation of the BUILT array (a YAML round-trip alone is insufficient). Validator findings are
+// FATAL on their own diagnostics so they can be reported separately from emission fatals.
+$validDiag = new CompileDiagnostics();
+(new OpenApiValidator($validDiag))->validate($doc);
+
+// Publication gate (plan Шаг 4 severity contract): the secondary file is published ONLY when there are no
+// structural errors. throwOnErrors() enforces that in strict/managed (it throws). In parity-probe mode we honor
+// the SAME gate — errors block the artifact — but still print the in-memory preview (section D), so we gate on
+// hasErrors() rather than letting throwOnErrors() terminate the measurement.
 $generatedPath = $nextRoot . '/.cache/swagger/openapi.generated.yml';
-$emitter->toFile($ops, $generatedPath, title: $title, version: $version);
+$publishable = !$emitDiag->hasErrors() && !$validDiag->hasErrors();
 
 echo "=== C. Secondary OpenAPI emission (PARITY mode) ===\n";
 echo "Discovery dirs: " . implode(', ', $dirs) . "\n";
 echo "Raw operations fed to emitter: " . count($ops) . "\n";
 echo "Effective paths emitted:       " . count($doc['paths']) . "\n";
 echo "Component schemas emitted:     " . count($doc['components']['schemas']) . "\n";
-echo "Emitted to: $generatedPath\n";
 echo "Emission diagnostics — fatal:   " . $emitDiag->errorCount() . "\n";
 echo "Emission diagnostics — warning: " . $emitDiag->warningCount() . "\n";
 $dupKeys = 0;
+$collisions = 0;
 foreach ($emitDiag->errors() as $e) {
     if (str_contains($e['cause'] ?? '', 'duplicate operation key')) {
         $dupKeys++;
+    } elseif (str_contains($e['cause'] ?? '', 'schema name collision')) {
+        $collisions++;
     }
 }
-echo "  of which duplicate METHOD:path (last-wins, mirrors Router): $dupKeys\n";
+echo "  emission fatals — duplicate METHOD:path (last-wins, mirrors Router): $dupKeys\n";
+echo "  emission fatals — schema-name collision:                              $collisions\n";
 foreach ($emitDiag->errors() as $e) {
-    if (!str_contains($e['cause'] ?? '', 'duplicate operation key')) {
-        echo "  OTHER fatal: dto=" . ($e['dto'] ?? '?') . ' field=' . ($e['field'] ?? '?') . ' :: ' . ($e['cause'] ?? '') . "\n";
+    $cause = $e['cause'] ?? '';
+    if (!str_contains($cause, 'duplicate operation key') && !str_contains($cause, 'schema name collision')) {
+        echo "  emission fatal (other): dto=" . ($e['dto'] ?? '?') . ' field=' . ($e['field'] ?? '?') . ' :: ' . $cause . "\n";
     }
+}
+echo "Structural validation findings (OpenApiValidator): " . $validDiag->errorCount() . "\n";
+foreach ($validDiag->errors() as $e) {
+    echo "  validation fatal: field=" . ($e['field'] ?? '?') . ' :: ' . ($e['cause'] ?? '') . "\n";
+}
+
+if ($publishable) {
+    $emitter->writeFile($doc, $generatedPath);
+    echo "Published secondary: $generatedPath (no structural errors — throwOnErrors() would pass)\n";
+} else {
+    echo "Publication BLOCKED by " . ($emitDiag->errorCount() + $validDiag->errorCount()) . " structural error(s) — secondary file NOT written (in-memory preview only, per parity-mode contract)\n";
+    echo "  strict/managed would call throwOnErrors() and HALT on these error(s)\n";
 }
 
 // Mode behavior: parity tolerates the migration gaps; strict/managed halts.
@@ -143,7 +174,7 @@ echo "Operation-projection structural errors:         $opErrors\n";
 echo "=> strict/managed would call throwOnErrorsAndWarnings() and HALT on $opWarnings warning(s) + $opErrors error(s)\n";
 
 // ============================================================================
-// D. Normalized parity vs legacy swagger-php openapi.yml.
+// D. Normalized parity vs legacy swagger-php openapi.yml (in-memory — always produced, even when unpublished).
 // ============================================================================
 $result = $report->compare($doc, $legacy);
 
@@ -195,15 +226,17 @@ foreach ($result['divergences_sample'] as $d) {
 
 // ============================================================================
 // E. Prereq 4 — non-promoted constructor fields (swagger-php includes them; the projection excludes them).
+//    The FQCN⇒name mapping is the emitter's INTERNAL componentRegistry() (never published as x-fqcn).
 // ============================================================================
 echo "\n=== E. Prereq 4: non-promoted constructor fields on real N DTOs ===\n";
 $genSchemas = $doc['components']['schemas'] ?? [];
 $legSchemas = $legacy['components']['schemas'] ?? [];
+$nameToFqcn = array_flip($emitter->componentRegistry()); // name ⇒ owning FQCN
 $dtoCount = 0;
 $divergentDtoCount = 0;
 $divergentFields = [];
 foreach ($genSchemas as $shortName => $genSchema) {
-    $fqcn = $genSchema['x-fqcn'] ?? null;
+    $fqcn = $nameToFqcn[$shortName] ?? null;
     if ($fqcn === null || !class_exists($fqcn)) {
         continue;
     }
