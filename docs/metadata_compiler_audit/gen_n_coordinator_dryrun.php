@@ -11,16 +11,17 @@
  *   - the single compile flow aggregates diagnostics from the route compiler, OpenAPI emitter + validator, and DI;
  *   - 6 Core↔Next auth duplicates are RECOGNIZED as intentional overrides (NOT errors) — Next shadows the framework
  *     auth templates, so they no longer block publication as "duplicate route key";
- *   - the residual ERROR set is exactly 2 DISTINCT defects (3 aggregated records): the EmployeeDocuments genuine
- *     duplicate (two methods on ONE controller sharing GET:/api/employees/documents/code-1c/{code_1c}) and the
- *     CreateNewsDto schema-name collision. These are REAL N bugs, reported as ERRORs, FORBIDDING publication in every
- *     policy (never downgraded to warnings), and captured for the MANDATORY fix before Step 6b;
+ *   - the two defects the earlier Step 5 probe surfaced are now FIXED in N (Step 6b #2): the EmployeeDocuments
+ *     duplicate (two methods sharing GET:/api/employees/documents/important/{code_1c}) and the CreateNewsDto
+ *     schema-name collision. The probe now pins a CLEAN build: ZERO structural ERRORs and ZERO schema-name
+ *     collisions — a regression guard, not a defect finder;
  *   - operationId collisions == 0: the real map assigns preserved ids + deferred-nulls and the shadowed Core auth
  *     ops are excluded from the uniqueness check — nothing collides;
  *   - dryRun publishes nothing and writes NOTHING to N's .cache (read-only probe contract).
  *
- * (The unmapped baseline — empty operationId map, no overrides — surfaced 15 aggregated ERRORs; this probe pins the
- * reduced-to-real-defects contract that remains once the real tri-state map + the 6 overrides are wired in.)
+ * (The unmapped baseline — empty operationId map, no overrides — surfaced 15 aggregated ERRORs; the Step 5 probe
+ * reduced that to the 2 genuine N defects, now fixed. This probe pins the clean contract that holds once the real
+ * tri-state map + the 6 overrides are wired in AND the Step 6b #2 fixes are in N.)
  *
  * Bootstrapping mirrors gen_n_openapi_parity.php (N's full dependency set, local SpsFW src prepended over the
  * vendored copy, SpsNext\ registered, SPSFW_PROJECT_ROOT → N). DI bindings are seeded from N's config/di_config.php
@@ -263,33 +264,31 @@ foreach ($result->overrides as $ov) {
 }
 
 // ============================================================================
-// Acceptance (Step 5 fix-pass). The probe drives the Coordinator with the REAL tri-state operationId map AND the
-// 6 declared Core↔Next auth overrides, and pins the contract that proves the fix-pass correct on real N:
+// Acceptance (Step 6b regression guard). The probe drives the Coordinator with the REAL tri-state operationId map
+// AND the 6 declared Core↔Next auth overrides against N's actual tree, and pins the post-fix contract:
 //   - the 6 auth duplicates are RECOGNIZED as intentional overrides (6 applied), NOT errors — so they no longer
 //     block publication as "duplicate route key";
-//   - the ONE genuine duplicate (EmployeeDocuments — two methods on one controller) is NOT overridden and STAYS a
-//     structural ERROR (a real bug to fix in N, not a compiler artifact);
-//   - the CreateNewsDto schema-name collision STAYS (two DTOs mapping to one schema — a real N bug);
-//   - operationId collisions == 0: the real map assigns preserved ids + deferred-nulls, and the shadowed Core auth
-//     ops are excluded from the uniqueness check — so there is NOTHING to collide. This is the
-//     directive #4 proof: the previously-aggregated operationId collisions vanish with the real tri-state map, for
-//     a proven reason (shadowing + preserved-id uniqueness), not because they were silently dropped;
+//   - the two genuine defects surfaced by the earlier Step 5 probe are now FIXED in N (Step 6b #2): the
+//     EmployeeDocuments duplicate (two methods sharing GET:/api/employees/documents/important/{code_1c} — N1 fixed
+//     the route path) and the CreateNewsDto schema-name collision (N2 added explicit #[OA\Schema]/#[Field] schema
+//     names). A CLEAN build therefore reports ZERO structural ERRORs;
+//   - operationId collisions == 0: the real map assigns preserved ids + deferred-nulls and the shadowed Core auth
+//     ops are excluded from the uniqueness check — nothing collides;
+//   - schema-name collisions == 0: both producers now resolve the CreateNewsDto pair to distinct names;
 //   - dry-run → nothing published; N's .cache artifacts are byte-identical before/after (read-only probe).
+// If any structural ERROR reappears (a regression in N's routes/DTOs), this guard FAILS.
 // ============================================================================
 echo "\n==== verdict ====\n";
-$employeeDocs = count($dupRouteKeys) === 1
-    && isset($dupRouteKeys['GET:/api/employees/documents/code-1c/{code_1c}']);
-$createNews = count($schemaCols) >= 1 && stripos(implode(' ', array_merge(...$schemaCols)), 'CreateNewsDto') !== false;
 $authApplied = count($result->overrides) === 6;
 $ok = !$result->published
     && $result->reason === 'dry-run'
-    && $result->errorCount > 0
-    && count($dupRouteKeys) === 1 && $employeeDocs   // ONLY the genuine EmployeeDocuments dup remains
-    && count($operationIds) === 0                     // operationId collisions vanish with the real map (directive #4)
-    && $createNews                                    // the genuine CreateNewsDto schema collision remains
-    && $authApplied                                   // the 6 auth overrides recognized as intentional
-    && $unchanged;                                    // read-only: N's cache untouched
-echo "dry-run & only EmployeeDocuments dup & 0 operationId collisions & CreateNewsDto & 6 auth overrides & cache unchanged: " . ($ok ? 'PASS' : 'FAIL') . "\n";
-echo "  ({$result->errorCount} ERROR record(s): EmployeeDocuments ×2 + CreateNewsDto ×1; the 6 Core↔Next auth dups are recognized as intentional overrides, down from 15 in the unmapped baseline)\n";
+    && $result->errorCount === 0                    // clean build: both Step-5 defects fixed in N (Step 6b #2)
+    && count($dupRouteKeys) === 0                   // no genuine route-key duplicates (EmployeeDocuments fixed)
+    && count($operationIds) === 0                   // operationId collisions vanish with the real map
+    && count($schemaCols) === 0                     // schema-name collisions resolved (CreateNewsDto fixed)
+    && $authApplied                                 // the 6 auth overrides recognized as intentional
+    && $unchanged;                                  // read-only: N's cache untouched
+echo "dry-run & 0 structural ERRORs & 0 operationId collisions & 0 schema-name collisions & 6 auth overrides & cache unchanged: " . ($ok ? 'PASS' : 'FAIL') . "\n";
+echo "  ({$result->errorCount} ERROR record(s); the 6 Core↔Next auth dups are recognized as intentional overrides, down from 15 in the unmapped baseline)\n";
 
 exit($ok ? 0 : 1);
