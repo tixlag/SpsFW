@@ -2,7 +2,6 @@
 
 namespace SpsFW\Core\Router;
 
-use Error;
 use OpenApi\Attributes\Property;
 use PHPUnit\Exception;
 use RecursiveDirectoryIterator;
@@ -26,6 +25,8 @@ use SpsFW\Core\Attributes\Validation\PostBody;
 use SpsFW\Core\Attributes\Validation\QueryParams;
 use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Auth\Util\AccessChecker;
+use SpsFW\Core\Compile\CompileMode;
+use SpsFW\Core\Compile\RuntimeCompileGate;
 use SpsFW\Core\DI\DIContainer;
 use Psr\Log\LoggerInterface;
 use SpsFW\Core\Exceptions\AuthorizationException;
@@ -150,20 +151,42 @@ class Router
 
     public function loadRoutes($createCache = false, $redis = false): void
     {
+        $managed = CompileMode::current()->isManaged();
+
         if ($this->useCache && !$createCache) {
-            try {
-                $compiledRoutesFile = $this->cacheDir . '/compiled_routes.php';
-                if (file_exists($compiledRoutesFile)) {
+            $compiledRoutesFile = $this->cacheDir . '/compiled_routes.php';
+            if (is_file($compiledRoutesFile)) {
+                try {
                     $this->routes = require $compiledRoutesFile;
                     return;
+                } catch (\Error $e) {
+                    // The cache file exists but is invalid. Legacy: rebuild it (fall through below). Managed: the
+                    // preload owns the cache, so a corrupt cache is a deployment failure — fail fast, do NOT scan.
+                    if ($managed) {
+                        throw new BaseException(sprintf(
+                            'Compiled route cache at %s is invalid and managed compile mode forbids a runtime rebuild. Rebuild via the application preload (Coordinator).',
+                            $compiledRoutesFile
+                        ));
+                    }
                 }
-                throw new Error();
-            } catch (\Error $e) {
-                $this->scanControllers();
-                $this->createRoutesCache();
-                return;
+            } elseif ($managed) {
+                // Cache missing in managed: the preload contract is "the cache exists" — fail fast, do NOT scan/compile.
+                throw new BaseException(sprintf(
+                    'Compiled route cache missing at %s and managed compile mode forbids runtime scan/compile. Build it via the application preload (Coordinator) before serving traffic.',
+                    $compiledRoutesFile
+                ));
             }
+
+            // Legacy: cache missing or invalid — rebuild by scanning now.
+            $this->scanControllers();
+            $this->createRoutesCache();
+            return;
         }
+
+        // Explicit rebuild (createCache=true) or cache disabled — a runtime compile action. Allowed in legacy (BC)
+        // and in managed ONLY in dev (the HTTP rebuild endpoints / programmatic rebuilds). Outside dev in managed,
+        // the preload owns the artifacts.
+        RuntimeCompileGate::assertAllowed('route');
 
         $this->scanControllers();
 
@@ -790,6 +813,15 @@ class Router
         // тестируем DI
 //        $globalStartTime = hrtime(true);
         if (!file_exists($this->cacheDir . '/compiled_di.php')) {
+            // Legacy: lazily build the DI cache on first use. Managed: the preload must have built it — a missing
+            // DI cache is a deployment failure, and runtime lazy DI compile is forbidden (no scanning/reflection on
+            // the request path).
+            if (CompileMode::current()->isManaged()) {
+                throw new BaseException(sprintf(
+                    'DI cache missing at %s/compiled_di.php and managed compile mode forbids runtime lazy DI compile. Build it via the application preload (Coordinator) before serving traffic.',
+                    $this->cacheDir
+                ));
+            }
             DICacheBuilder::compileDI($this->container);
         }
         $res = $this->container->get($className);

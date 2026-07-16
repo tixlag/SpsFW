@@ -7,6 +7,7 @@ use OpenApi\Attributes\OpenApi;
 use OpenApi\Generator;
 use OpenApi\Loggers\DefaultLogger;
 use OpenApi\Pipeline;
+use SpsFW\Core\Compile\RuntimeCompileGate;
 use SpsFW\Core\Router\PathManager;
 use SpsFW\Core\Swagger\SetOperationIdFromMethodNameProcessor;
 
@@ -15,9 +16,14 @@ class DocsUtil
     // TODO доделать сохранине щзутфзш
     /**
      * Генерирует OpenAPI документацию, используя относительные пути.
+     *
+     * In managed compile mode (outside dev) this independent swagger-php production build is FORBIDDEN — the
+     * application preload (Coordinator) owns the OpenAPI artifact. {@see RuntimeCompileGate} throws, pointing at the
+     * preload. Legacy behaves exactly as before.
      */
     public static function updateDocs(): void
     {
+        RuntimeCompileGate::assertAllowed('OpenAPI documentation');
 
         // Пути для сканирования аннотаций
         $scanPaths = [

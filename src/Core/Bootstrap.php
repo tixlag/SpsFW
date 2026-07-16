@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core;
 
+use SpsFW\Core\Compile\CompileMode;
 use SpsFW\Core\Router\Router;
 
 class Bootstrap
@@ -12,7 +13,10 @@ class Bootstrap
     {
         if (self::$router === null) {
             self::$router = new Router();
-            \SpsFW\Core\Router\DICacheBuilder::compileDI(self::$router->container);
+            // Legacy: rebuild the DI cache on bootstrap. Managed: the preload already built it — do not rebuild.
+            if (!CompileMode::current()->isManaged()) {
+                \SpsFW\Core\Router\DICacheBuilder::compileDI(self::$router->container);
+            }
         }
 
         return self::$router;

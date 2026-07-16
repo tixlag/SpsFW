@@ -105,21 +105,4 @@ class Config
     {
         return self::$bindings[$abstract] ?? null;
     }
-
-    /**
-     * Все привязки (read-only). Compile-tooling использует это, чтобы отличить bootstrapped application
-     * context (preload вызвал Config::setDIBindings()) от «голого» framework CLI, которому нельзя публиковать
-     * DI-кеш без привязок. Additive getter — runtime-behavior не меняет.
-     *
-     * @return array<string, string|object|array|\Closure>
-     */
-    public static function getDIBindings(): array
-    {
-        return self::$bindings;
-    }
-
-    public static function hasDIBindings(): bool
-    {
-        return self::$bindings !== [];
-    }
 }

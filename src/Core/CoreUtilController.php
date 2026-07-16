@@ -7,6 +7,7 @@ use ReflectionException;
 use SpsFW\Core\Attributes\Controller;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\Route;
+use SpsFW\Core\Compile\RuntimeCompileGate;
 use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Router\DICacheBuilder;
@@ -26,6 +27,8 @@ class CoreUtilController extends RestController
     #[Route('/api/core/update', ['POST'])]
     public function updateRoutes(): array
     {
+        RuntimeCompileGate::assertAllowed('route and OpenAPI documentation');
+
         new Router()
             ->loadRoutes(createCache: true);
         DocsUtil::updateDocs();
@@ -38,6 +41,8 @@ class CoreUtilController extends RestController
     #[Route('/api/core/update/routes', ['POST'])]
     public function updateOnlyRoutes(): array
     {
+        RuntimeCompileGate::assertAllowed('route');
+
         new Router()->loadRoutes(createCache: true);
 
         return ['result' => 'ok'];
@@ -57,6 +62,8 @@ class CoreUtilController extends RestController
     #[Route(path: '/core/update', httpMethods: ['POST'])]
     public function coreUpdate(): string
     {
+        RuntimeCompileGate::assertAllowed('route, DI and OpenAPI documentation');
+
         $router = new Router();
         $router->loadRoutes(createCache: true);
 
@@ -72,6 +79,8 @@ class CoreUtilController extends RestController
     #[Route('/swagger/update', ['POST'])]
     public function updateDocs(): array
     {
+        RuntimeCompileGate::assertAllowed('OpenAPI documentation');
+
         DocsUtil::updateDocs();
         return ['result' => 'ok'];
     }
