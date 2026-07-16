@@ -104,7 +104,7 @@ final class Coordinator
             $sourceFiles = $fingerprinter->sourceFiles($ctx->discoveryPaths);
             $fingerprint = $fingerprinter->fingerprint(
                 $sourceFiles,
-                $ctx->configInputs,
+                $this->recordedConfig($ctx),
                 $ctx->projectRoot,
                 $ctx->configFiles,
                 $ctx->operationIdMap,
@@ -198,7 +198,7 @@ final class Coordinator
         $manifest = $fingerprinter->manifest(
             $fingerprint,
             $artifactHashes,
-            $ctx->configInputs,
+            $this->recordedConfig($ctx),
             $ctx->configFiles,
             $ctx->operationIdMap,
             $ctx->routeOverrideMap,
@@ -227,6 +227,25 @@ final class Coordinator
             $fingerprint,
             $overrides,
             $stagingDir,
+        );
+    }
+
+    /**
+     * The config inputs recorded in BOTH the fingerprint and the manifest. Mode and diagnostic policy are NOT
+     * independent strings: they come from the typed {@see ApplicationContext} fields, so the manifest ALWAYS records
+     * them (their enum/scalar values) regardless of how the context was constructed — even when a caller builds an
+     * ApplicationContext directly without pre-merging them into configInputs. The TYPED fields are authoritative: a
+     * stray mode/policy string a caller tucked into configInputs is ignored, so the recorded values always match the
+     * mode the engine and the Step 6a runtime guards actually use. Other caller-supplied configInputs (openapi
+     * title/version, escape-hatch config, …) pass through untouched.
+     *
+     * @return array<string, mixed>
+     */
+    private function recordedConfig(ApplicationContext $ctx): array
+    {
+        return array_merge(
+            $ctx->configInputs,
+            ['mode' => $ctx->mode->value, 'diagnostic_policy' => $ctx->diagnosticPolicy],
         );
     }
 

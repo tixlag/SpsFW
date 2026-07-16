@@ -29,7 +29,7 @@ final class DevCompileRunner
      *
      * @param array{
      *     dryRun?: bool,
-     *     mode?: string,
+     *     mode?: string|\SpsFW\Core\Compile\CompileMode,
      *     diagnosticPolicy?: string,
      *     cachePath?: string,
      *     discoveryPaths?: ?list<string>,
@@ -42,16 +42,18 @@ final class DevCompileRunner
      */
     public function execute(array $options = []): self
     {
-        $mode = $options['mode'] ?? ApplicationContext::MODE_LEGACY;
+        // Resolve the mode through the SINGLE explicit-error resolution point: a non-empty invalid value throws here
+        // (never silently Legacy). Accept an already-resolved CompileMode too.
+        $modeRaw = $options['mode'] ?? CompileMode::Legacy;
+        $mode = $modeRaw instanceof CompileMode ? $modeRaw : CompileMode::fromString((string) $modeRaw);
         $policy = $options['diagnosticPolicy'] ?? ApplicationContext::POLICY_PARITY;
 
-        // configInputs are part of the fingerprint; record the resolved mode/policy plus any caller-supplied inputs
-        // (openapi title/version, escape-hatch config, …) so the manifest reflects the build. Secrets-bearing config
-        // files go into configFiles (content-hashed, never stored wholesale), NOT here.
-        $configInputs = array_merge(
-            ['mode' => $mode, 'diagnostic_policy' => $policy],
-            $options['configInputs'] ?? [],
-        );
+        // Caller-supplied scalar config inputs (openapi title/version, escape-hatch config, …) flow straight into the
+        // fingerprint. Mode and diagnostic policy are NOT merged here: the resolved mode is passed as the typed `mode`
+        // field below, and the Coordinator injects BOTH (from the typed fields) into the recorded config so the
+        // manifest always reflects them. Secrets-bearing config files go into configFiles (content-hashed, never
+        // stored wholesale), NOT here.
+        $configInputs = $options['configInputs'] ?? [];
 
         $context = new ApplicationContext(
             projectRoot: PathManager::getProjectRoot(),
@@ -93,7 +95,7 @@ final class DevCompileRunner
         $diag = $this->diagnostics();
 
         $lines = [];
-        $lines[] = sprintf('mode=%s policy=%s', $this->coordinator->context()->mode, $this->coordinator->context()->diagnosticPolicy);
+        $lines[] = sprintf('mode=%s policy=%s', $this->coordinator->context()->mode->value, $this->coordinator->context()->diagnosticPolicy);
         $lines[] = sprintf('errors=%d warnings=%d', $result->errorCount, $result->warningCount);
 
         if ($result->published) {
@@ -130,7 +132,7 @@ final class DevCompileRunner
     public static function main(array $argv): int
     {
         $publish = false;
-        $mode = ApplicationContext::MODE_LEGACY;
+        $mode = CompileMode::Legacy;
         $policy = ApplicationContext::POLICY_PARITY;
         foreach (array_slice($argv, 1) as $arg) {
             if ($arg === '--publish') {
@@ -138,11 +140,11 @@ final class DevCompileRunner
             } elseif ($arg === '--dry-run') {
                 $publish = false;
             } elseif ($arg === '--managed') {
-                $mode = ApplicationContext::MODE_MANAGED;
+                $mode = CompileMode::Managed;
             } elseif ($arg === '--strict') {
                 $policy = ApplicationContext::POLICY_STRICT;
             } elseif (str_starts_with($arg, '--mode=')) {
-                $mode = substr($arg, strlen('--mode='));
+                $mode = CompileMode::fromString(substr($arg, strlen('--mode=')));
             } elseif (str_starts_with($arg, '--policy=')) {
                 $policy = substr($arg, strlen('--policy='));
             }

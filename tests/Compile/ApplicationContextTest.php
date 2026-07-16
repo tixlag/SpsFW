@@ -7,10 +7,12 @@ use SpsFW\Core\Compile\ApplicationContext;
 require_once dirname(__DIR__) . '/bootstrap.php';
 
 /**
- * Шаг 1 (M1) + Шаг 5: ApplicationContext pins mode validation AND the independent diagnostic-policy validation.
- * Only legacy|managed are valid modes; only parity|strict are valid policies; an unknown value must throw
- * immediately (it is a programming error in the compilation owner, not a runtime condition). Mode and policy are
- * DECOUPLED — they can be combined freely, and the policy alone decides whether warnings block publication.
+ * Шаг 1 (M1) + Шаг 5 + Шаг 6b (mode-contract closure): ApplicationContext pins the TYPED mode (CompileMode, not a
+ * free string) AND the independent diagnostic-policy validation. Only parity|strict are valid policies, and an
+ * unknown policy throws immediately. The mode is now a typed enum, so the constructor CANNOT receive an invalid
+ * mode at all — a raw string is a TypeError (the detailed unknown-value error lives at the SINGLE resolution point
+ * CompileMode::fromString/current, exercised in CompileModeGuardTest). Mode and policy are DECOUPLED — they combine
+ * freely, and the policy alone decides whether warnings block publication.
  */
 $legacy = new ApplicationContext('/tmp/app', '/tmp/app/.cache', ['/tmp/app/src']);
 assert_same(ApplicationContext::MODE_LEGACY, $legacy->mode, 'default mode is legacy');
@@ -19,26 +21,24 @@ assert_same(ApplicationContext::POLICY_PARITY, $legacy->diagnosticPolicy, 'defau
 $managed = new ApplicationContext('/tmp/app', '/tmp/app/.cache', ['/tmp/app/src'], mode: ApplicationContext::MODE_MANAGED);
 assert_same(ApplicationContext::MODE_MANAGED, $managed->mode, 'managed mode accepted');
 
-// unknown mode must throw InvalidArgumentException immediately
-$threw = false;
+// The mode is a TYPED CompileMode: a raw string is rejected with a TypeError at construction (mode is NEVER a free
+// string anymore). The empty⇒Legacy / unknown⇒InvalidArgumentException contract lives ONLY at the env/CLI resolution
+// point (CompileMode::fromString / ::current), not here — the constructor receives an already-resolved enum case.
+$threwBogus = false;
 try {
     new ApplicationContext('/tmp/app', '/tmp/app/.cache', ['/tmp/app/src'], mode: 'bogus');
-} catch (\InvalidArgumentException $e) {
-    $threw = true;
-    assert_true(str_contains($e->getMessage(), 'bogus'), 'invalid-mode message names the bad value');
-    assert_true(str_contains($e->getMessage(), 'legacy'), 'invalid-mode message lists legacy');
-    assert_true(str_contains($e->getMessage(), 'managed'), 'invalid-mode message lists managed');
+} catch (\TypeError $e) {
+    $threwBogus = true;
 }
-assert_true($threw, 'unknown ApplicationContext mode throws InvalidArgumentException');
+assert_true($threwBogus, 'a raw non-enum mode is a TypeError (mode is a typed CompileMode, never a free string)');
 
-// empty string is not a valid mode either
 $threwEmpty = false;
 try {
     new ApplicationContext('/tmp/app', '/tmp/app/.cache', ['/tmp/app/src'], mode: '');
-} catch (\InvalidArgumentException $e) {
+} catch (\TypeError $e) {
     $threwEmpty = true;
 }
-assert_true($threwEmpty, 'empty mode throws InvalidArgumentException');
+assert_true($threwEmpty, 'an empty-string mode is a TypeError too (empty⇒Legacy applies only at the fromString/env resolution point)');
 
 // ============================================================================
 // Step 5: diagnostic policy — an INDEPENDENT axis from ownership mode.

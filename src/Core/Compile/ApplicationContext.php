@@ -35,7 +35,8 @@ namespace SpsFW\Core\Compile;
  *  - lockTimeoutSec   : the whole-flow {@see \SpsFW\Core\Compile\Publication\CompileLock} timeout. A real deadline
  *                       (LOCK_NB + usleep loop); ≤0 means a single NON-BLOCKING attempt (the safe default for a
  *                       generic CLI that must not hang on a contended lock).
- *  - mode             : ownership mode — 'legacy' (lazy BC, default) or 'managed' (preload-built, fail-fast in prod)
+ *  - mode             : ownership mode — a typed {@see CompileMode} (Legacy = lazy BC default; Managed = preload-built,
+ *                       fail-fast in prod), resolved once by the caller; the Coordinator records $mode->value
  *  - diagnosticPolicy : 'parity' (ERROR blocks; WARNING tolerated until M7) or 'strict' (ERROR and WARNING block).
  *
  * OWNERSHIP MODE and DIAGNOSTIC STRICTNESS are deliberately DECOUPLED (plan §11.4, Step 5 requirement): they are
@@ -47,8 +48,10 @@ namespace SpsFW\Core\Compile;
  */
 final readonly class ApplicationContext
 {
-    public const MODE_LEGACY = 'legacy';
-    public const MODE_MANAGED = 'managed';
+    /** Ownership-mode aliases (the typed {@see CompileMode} enum, NOT independent strings). Kept for readable named
+     *  construction (`mode: ApplicationContext::MODE_MANAGED`); they ARE the enum cases. */
+    public const MODE_LEGACY = CompileMode::Legacy;
+    public const MODE_MANAGED = CompileMode::Managed;
 
     public const POLICY_PARITY = 'parity';
     public const POLICY_STRICT = 'strict';
@@ -57,8 +60,11 @@ final readonly class ApplicationContext
      * @param string $projectRoot
      * @param string $cachePath
      * @param list<string> $discoveryPaths
-     * @param array<string, mixed> $configInputs scalar config inputs (mode/policy/title/version …)
-     * @param string $mode one of ApplicationContext::MODE_* (legacy|managed)
+     * @param array<string, mixed> $configInputs scalar config inputs (title/version …; mode & diagnostic_policy are
+     *                                            recorded by the Coordinator from the typed fields below)
+     * @param CompileMode $mode ownership mode — a typed {@see CompileMode}, resolved ONCE by the caller via
+     *                          {@see CompileMode::current()} / {@see CompileMode::fromString()} (invalid values throw
+     *                          there, never here). Default Legacy for full BC.
      * @param string $diagnosticPolicy one of ApplicationContext::POLICY_* (parity|strict)
      * @param array<string, ?string> $operationIdMap tri-state operationId lockfile "<controller>::<method>" => id|null
      * @param array<string, string> $routeOverrideMap "METHOD:path" => winner "controller::method"
@@ -70,21 +76,15 @@ final readonly class ApplicationContext
         public string $cachePath,
         public array $discoveryPaths,
         public array $configInputs = [],
-        public string $mode = self::MODE_LEGACY,
+        public CompileMode $mode = self::MODE_LEGACY,
         public string $diagnosticPolicy = self::POLICY_PARITY,
         public array $operationIdMap = [],
         public array $routeOverrideMap = [],
         public array $configFiles = [],
         public float $lockTimeoutSec = 0.0,
     ) {
-        if ($mode !== self::MODE_LEGACY && $mode !== self::MODE_MANAGED) {
-            throw new \InvalidArgumentException(sprintf(
-                'Unknown ApplicationContext mode %s; allowed values: "%s", "%s".',
-                $mode,
-                self::MODE_LEGACY,
-                self::MODE_MANAGED,
-            ));
-        }
+        // Ownership mode needs no validation here: it is a typed CompileMode, so only valid cases can exist; an
+        // invalid ENV/CLI value already threw during resolution ({@see CompileMode::fromString()}).
         if ($diagnosticPolicy !== self::POLICY_PARITY && $diagnosticPolicy !== self::POLICY_STRICT) {
             throw new \InvalidArgumentException(sprintf(
                 'Unknown ApplicationContext diagnostic policy %s; allowed values: "%s", "%s".',
