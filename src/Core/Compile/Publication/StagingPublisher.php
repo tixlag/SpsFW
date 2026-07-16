@@ -28,6 +28,12 @@ use SpsFW\Core\Compile\CompileException;
  * The `$faultHook` (test/dev only) is invoked as `fn(int $step, string $target)` immediately before each file's
  * staging⇒target rename (after its backup is staged and journaled). Throwing from it injects a failure at that
  * exact step, exercising the rollback path — including the in-flight file — without filesystem hacks.
+ *
+ * RECOVERY BACKUPS (Step 5 fix-pass): every publish gets a UNIQUE `.backup-<random>` dir (never a shared
+ * `.staging-backup`). The dir is removed only when THIS run fully restores (success, or a complete rollback); an
+ * INCOMPLETE rollback PRESERVES its dir and NAMES it in the exception so an operator can recover. A later publish
+ * gets its OWN unique dir and never deletes or reuses a preserved recovery backup (no cross-run md5($target) collision
+ * is even possible — each backup lives in its own dir).
  */
 final class StagingPublisher
 {
@@ -48,11 +54,11 @@ final class StagingPublisher
      */
     public function publish(array $stagingToTarget, ?\Closure $faultHook = null): array
     {
-        // Backup dir on the SAME filesystem as the cache — required for atomic renames in both directions.
-        $backupDir = $this->cachePath . '/.staging-backup';
-        if (!is_dir($backupDir)) {
-            mkdir($backupDir, 0777, true);
-        }
+        // Backup dir on the SAME filesystem as the cache — required for atomic renames in both directions. UNIQUE per
+        // publish (never the shared `.staging-backup`): a prior run's preserved recovery backup is never overwritten
+        // or cleared by this run, and md5($target) backup names never collide across runs — each lives in its own dir.
+        $backupDir = $this->cachePath . '/.backup-' . bin2hex(random_bytes(8));
+        mkdir($backupDir, 0777, true);
 
         /** @var list<array{0: string, 1: string|null}> $journal [target, backupPath|null], in publish order */
         $journal = [];
@@ -75,10 +81,6 @@ final class StagingPublisher
                 $backupPath = null;
                 if (is_file($target)) {
                     $backupPath = $backupDir . '/' . md5($target);
-                    // Ensure no stale backup from a previous run collides.
-                    if (is_file($backupPath)) {
-                        @unlink($backupPath);
-                    }
                     if (!@rename($target, $backupPath)) {
                         throw new CompileException(sprintf('Failed to back up %s before publish', $target));
                     }
@@ -96,15 +98,20 @@ final class StagingPublisher
                 $published[] = $target;
             }
 
-            // Everything published — the backups of the old content are no longer needed.
-            $this->cleanupBackups($journal, $backupDir, []);
+            // Everything published — the backups of the old content are no longer needed; remove THIS run's backup dir.
+            $this->removeBackupDir($backupDir);
             return $published;
         } catch (\Throwable $e) {
             // Best-effort full rollback: restore the previous set target-by-target, CHECKING each rename/unlink.
             $unrestorable = $this->rollback($journal);
-            // Keep backups for any target that could NOT be restored; remove only the successfully-restored ones.
-            $this->cleanupBackups($journal, $backupDir, $unrestorable);
-            throw $this->rollbackException($e, $unrestorable);
+            if ($unrestorable === []) {
+                // Fully restored — nothing to recover; this run's backup dir is safe to remove.
+                $this->removeBackupDir($backupDir);
+                throw $this->rollbackException($e, [], null);
+            }
+            // INCOMPLETE rollback — PRESERVE this run's backup dir and NAME it so an operator can recover. A later
+            // publish gets its OWN unique dir and must not delete or reuse this recovery backup.
+            throw $this->rollbackException($e, $unrestorable, $backupDir);
         }
     }
 
@@ -136,39 +143,32 @@ final class StagingPublisher
     }
 
     /**
-     * Remove backups whose target was successfully restored (so they are no longer needed). Backups of UNRESTORABLE
-     * targets are KEPT on disk for manual recovery. On a successful publish, $unrestorable is empty (every backup
-     * is stale old content) so all are removed.
-     *
-     * @param list<array{0: string, 1: string|null}> $journal
-     * @param list<array{target: string, backup: ?string, reason: string}> $unrestorable
+     * Recursively remove a run's backup dir. No-op if absent. Used only when the run is fully restorable (a successful
+     * publish, or a COMPLETE rollback) — an INCOMPLETE-rollback backup dir is intentionally NOT removed.
      */
-    private function cleanupBackups(array $journal, string $backupDir, array $unrestorable): void
+    private function removeBackupDir(string $backupDir): void
     {
-        $keep = [];
-        foreach ($unrestorable as $entry) {
-            if ($entry['backup'] !== null) {
-                $keep[$entry['backup']] = true;
-            }
+        if (!is_dir($backupDir)) {
+            return;
         }
-        foreach ($journal as [$target, $backupPath]) {
-            if ($backupPath !== null && is_file($backupPath) && !isset($keep[$backupPath])) {
-                @unlink($backupPath);
-            }
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($backupDir, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST,
+        );
+        foreach ($iterator as $entry) {
+            $entry->isDir() ? @rmdir($entry->getRealPath()) : @unlink($entry->getRealPath());
         }
-        if (is_dir($backupDir)) {
-            // Only remove if empty (no preserved unrestorable backups, and no concurrent compile sharing it).
-            @rmdir($backupDir);
-        }
+        @rmdir($backupDir);
     }
 
     /**
      * Build an HONEST rollback exception: claim "restored" only when every target was restored; otherwise name the
-     * unrestorable targets and the preserved backups so an operator can recover.
+     * unrestorable targets and point at the PRESERVED recovery backup dir so an operator can recover. The backup dir
+     * itself is named in the message (not just the individual files) so a later run can recognize and avoid it.
      *
      * @param list<array{target: string, backup: ?string, reason: string}> $unrestorable
      */
-    private function rollbackException(\Throwable $e, array $unrestorable): CompileException
+    private function rollbackException(\Throwable $e, array $unrestorable, ?string $backupDir): CompileException
     {
         if ($unrestorable === []) {
             return new CompileException(
@@ -184,6 +184,7 @@ final class StagingPublisher
         return new CompileException(
             "Publication failed AND rollback was INCOMPLETE — the previous set is NOT fully restored. Unrestorable:\n"
             . implode("\n", $lines)
+            . "\nRecovery backup preserved at: " . $backupDir
             . "\nOriginal cause: " . $e->getMessage(),
             0,
             $e,

@@ -4,21 +4,28 @@
  * Dev-only audit probe (NOT a committed test). The Step 5 Coordinator run against the REAL consumer app
  * (N = lk.sps38.pro/next), READ-ONLY / DRY-RUN (plan §11.6, Step 5 acceptance).
  *
- * Goal: drive the production Coordinator end-to-end on N's actual controller tree and confirm the publication gate
- * behaves exactly as promised — WITHOUT touching N's current .cache artifacts:
+ * Goal: drive the production Coordinator end-to-end on N's actual controller tree — WITH the REAL tri-state
+ * operationId map (reconciliation TSV) and the 6 declared Core↔Next auth overrides — and confirm the publication gate
+ * behaves exactly as promised, WITHOUT touching N's current .cache artifacts:
  *
- *   - the single compile flow aggregates diagnostics from the operation compiler, route compiler, OpenAPI emitter
- *     + validator, and DI (plan §11, Step 5);
- *   - the 15 known STRUCTURAL errors (14 duplicate METHOD:path groups + 1 CreateNewsDto schema-name collision) are
- *     reported as ERRORs and FORBID publication (in EVERY policy — they are never downgraded to warnings);
- *   - dryRun publishes nothing and writes NOTHING to N's .cache (read-only probe contract);
- *   - the exact duplicate route groups + the schema collision are captured for the MANDATORY fix before Step 6b
- *     (current N cannot go to managed production while these 15 ERRORs exist).
+ *   - the single compile flow aggregates diagnostics from the route compiler, OpenAPI emitter + validator, and DI;
+ *   - 6 Core↔Next auth duplicates are RECOGNIZED as intentional overrides (NOT errors) — Next shadows the framework
+ *     auth templates, so they no longer block publication as "duplicate route key";
+ *   - the residual ERROR set is exactly 2 DISTINCT defects (3 aggregated records): the EmployeeDocuments genuine
+ *     duplicate (two methods on ONE controller sharing GET:/api/employees/documents/code-1c/{code_1c}) and the
+ *     CreateNewsDto schema-name collision. These are REAL N bugs, reported as ERRORs, FORBIDDING publication in every
+ *     policy (never downgraded to warnings), and captured for the MANDATORY fix before Step 6b;
+ *   - operationId collisions == 0: the real map assigns preserved ids + deferred-nulls and the shadowed Core auth
+ *     ops are excluded from the uniqueness check — nothing collides;
+ *   - dryRun publishes nothing and writes NOTHING to N's .cache (read-only probe contract).
+ *
+ * (The unmapped baseline — empty operationId map, no overrides — surfaced 15 aggregated ERRORs; this probe pins the
+ * reduced-to-real-defects contract that remains once the real tri-state map + the 6 overrides are wired in.)
  *
  * Bootstrapping mirrors gen_n_openapi_parity.php (N's full dependency set, local SpsFW src prepended over the
  * vendored copy, SpsNext\ registered, SPSFW_PROJECT_ROOT → N). DI bindings are seeded from N's config/di_config.php
  * so the DI compile-only path is exercised EXACTLY as production (production built N's compiled_di.php from the same
- * bindings): this keeps the DI stage clean and isolates the 15 structural errors to routes + OpenAPI.
+ * bindings): this keeps the DI stage clean and isolates the structural route/OpenAPI errors.
  * Config::getDIBinding() reads the static binding map directly and does NOT require the DB-side Config::init(), so
  * no DB connection is made (the probe is read-only and connection-free).
  */
@@ -106,9 +113,9 @@ if (is_file($tsvPath)) {
         $canonical = $c[9];        // ready-to-pin id, or '-'
         $lockfile = $c[10];        // in | deferred | out
         if ($lockfile === 'in' && $canonical !== '-' && $canonical !== '') {
-            $operationIdMap[$controllerMethod] = $canonical; // PRESERVED id (39 explicit + route-only ADD)
+            $operationIdMap[$controllerMethod] = $canonical; // PRESERVED id — canonical pinned by the reconciliation TSV
         } elseif ($lockfile === 'deferred') {
-            $operationIdMap[$controllerMethod] = null;       // DEFERRED — stay id-less (tri-state null, the 306)
+            $operationIdMap[$controllerMethod] = null;       // DEFERRED — stay id-less (tri-state null, the legacy ops)
         }
         // lockfile=out ⇒ absent from the map ⇒ convention <ControllerShort><Method>
     }
@@ -263,8 +270,8 @@ foreach ($result->overrides as $ov) {
 //   - the ONE genuine duplicate (EmployeeDocuments — two methods on one controller) is NOT overridden and STAYS a
 //     structural ERROR (a real bug to fix in N, not a compiler artifact);
 //   - the CreateNewsDto schema-name collision STAYS (two DTOs mapping to one schema — a real N bug);
-//   - operationId collisions == 0: the real map assigns 39 unique preserved ids + 306 deferred-nulls, and the
-//     shadowed Core auth ops are excluded from the uniqueness check — so there is NOTHING to collide. This is the
+//   - operationId collisions == 0: the real map assigns preserved ids + deferred-nulls, and the shadowed Core auth
+//     ops are excluded from the uniqueness check — so there is NOTHING to collide. This is the
 //     directive #4 proof: the previously-aggregated operationId collisions vanish with the real tri-state map, for
 //     a proven reason (shadowing + preserved-id uniqueness), not because they were silently dropped;
 //   - dry-run → nothing published; N's .cache artifacts are byte-identical before/after (read-only probe).

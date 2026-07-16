@@ -3,18 +3,18 @@
 declare(strict_types=1);
 
 use SpsFW\Core\Compile\DevCompileRunner;
-use SpsFW\Core\Config;
 use SpsFW\Core\Router\PathManager;
 
 require_once dirname(__DIR__) . '/bootstrap.php';
 
 /**
- * Step 5 fix-pass, required test #7: the generic framework CLI DEFAULT writes nothing.
+ * Step 5 fix-pass, required test #7: the generic framework CLI is ALWAYS READ-ONLY.
  *
  *   - no flags ⇒ DRY-RUN (build + validate + report) ⇒ writes NOTHING (no compiled_* files, no staging, no lock,
  *     no manifest); the run report says "dry-run";
- *   - `--publish` is REFUSED without an application bootstrap (exit 2) and writes nothing — a generic framework CLI
- *     must not publish a DI cache built without the application's DI bindings;
+ *   - `--publish` is ALWAYS refused (exit 2) and writes nothing — the generic framework CLI never publishes a DI
+ *     cache; production publish is the application preload's job (Config::init + setDIBindings, then Coordinator,
+ *     plan §11.2, Step 6b);
  *   - a dry-run that finds an ERROR exits NON-ZERO (so CI/probes notice), and under `--strict` a WARNING does too.
  *
  * The CLI resolves its cache from SPSFW_PROJECT_ROOT (which must hold a composer.json); a throwaway temp project is
@@ -51,23 +51,19 @@ $mkProject = static function () use ($tmpRoot): string {
     return realpath($root);
 };
 
-// Reset/restore PathManager::$projectRoot + the SPSFW_PROJECT_ROOT env + Config::$bootstrapped around each main() call.
+// Reset/restore PathManager::$projectRoot + the SPSFW_PROJECT_ROOT env around each main() call.
 $pm = new ReflectionClass(PathManager::class);
 $projectRootProp = $pm->getProperty('projectRoot');
-$cfg = new ReflectionClass(Config::class);
-$bootProp = $cfg->getProperty('bootstrapped');
 $origProjectRoot = $projectRootProp->getValue();
 $origEnv = $_ENV['SPSFW_PROJECT_ROOT'] ?? null;
-$origBoot = $bootProp->getValue();
 
 $pointAt = static function (string $root) use ($projectRootProp): void {
     $projectRootProp->setValue(null, null); // force PathManager to re-read SPSFW_PROJECT_ROOT
     $_ENV['SPSFW_PROJECT_ROOT'] = $root;
     putenv('SPSFW_PROJECT_ROOT=' . $root);
 };
-$restore = static function () use ($projectRootProp, $bootProp, $origProjectRoot, $origBoot, $origEnv): void {
+$restore = static function () use ($projectRootProp, $origProjectRoot, $origEnv): void {
     $projectRootProp->setValue(null, $origProjectRoot);
-    $bootProp->setValue(null, $origBoot);
     if ($origEnv === null) {
         unset($_ENV['SPSFW_PROJECT_ROOT']);
         putenv('SPSFW_PROJECT_ROOT');
@@ -94,7 +90,6 @@ $cacheIsEmpty = static function (string $cache): bool {
 // 1. DEFAULT = dry-run ⇒ writes NOTHING; the report says dry-run.
 // ============================================================================
 $proj1 = $mkProject();
-$bootProp->setValue(null, false); // the bare CLI is never bootstrapped
 $pointAt($proj1);
 ob_start();
 $exit1 = DevCompileRunner::main(['bin/spsfw-compile.php']);
@@ -105,15 +100,14 @@ assert_true(!is_file($proj1 . '/.cache/compiled_routes.php'), 'default dry-run: 
 assert_true(!is_file($proj1 . '/.cache/.compile_manifest.php'), 'default dry-run: no manifest');
 
 // ============================================================================
-// 2. --publish WITHOUT bootstrap ⇒ REFUSED (exit 2) and writes nothing.
+// 2. --publish is ALWAYS refused (exit 2) and writes nothing — the CLI is read-only; no bootstrap changes that.
 // ============================================================================
 $proj2 = $mkProject();
-$bootProp->setValue(null, false); // explicitly NOT bootstrapped
 $pointAt($proj2);
 ob_start();
 $exit2 = DevCompileRunner::main(['bin/spsfw-compile.php', '--publish']);
 ob_end_clean();
-assert_same(2, $exit2, '--publish without bootstrap is refused with exit code 2');
+assert_same(2, $exit2, '--publish is always refused with exit code 2');
 assert_true($cacheIsEmpty($proj2 . '/.cache'), '--publish (refused) writes nothing');
 
 // ============================================================================
@@ -146,26 +140,12 @@ final class CliDupController
     }
 }
 PHP);
-$bootProp->setValue(null, false);
 $pointAt($proj3);
 ob_start();
 $exit3 = DevCompileRunner::main(['bin/spsfw-compile.php']);
 ob_end_clean();
 assert_true($exit3 !== 0, 'a dry-run with an ERROR exits non-zero');
 assert_true($cacheIsEmpty($proj3 . '/.cache'), 'error dry-run still writes nothing');
-
-// ============================================================================
-// 4. With bootstrap, a clean --publish is NOT refused (exit != 2) — the guard keys on bootstrap, not on the flag.
-//    Use the empty-src project so only library controllers are compiled; bootstrap is faked via reflection.
-// ============================================================================
-$proj4 = $mkProject();
-$bootProp->setValue(null, true); // application bootstrap ran (preload called Config::init)
-$pointAt($proj4);
-ob_start();
-$exit4 = DevCompileRunner::main(['bin/spsfw-compile.php', '--publish']);
-ob_end_clean();
-assert_true($exit4 !== 2, 'with bootstrap, --publish is NOT refused (exit != 2)');
-$bootProp->setValue(null, false);
 
 $restore();
 $rrm($tmpRoot);

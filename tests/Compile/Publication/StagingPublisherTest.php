@@ -73,7 +73,7 @@ assert_same(3, count($published), 'successful publish publishes all 3 files');
 foreach ($relPaths as $rel) {
     assert_same($newContent[$rel], file_get_contents($cacheDir . '/' . $rel), "successful publish: $rel has NEW content");
 }
-assert_true(!is_dir($cacheDir . '/.staging-backup'), 'successful publish cleans up the backup dir');
+assert_same([], glob($cacheDir . '/.backup-*'), 'successful publish leaves no recovery backup dir');
 
 // ============================================================================
 // 2. Rollback on injected failure at EACH step: no matter which publish step fails, EVERY target is restored to
@@ -103,7 +103,7 @@ for ($failAt = 1; $failAt <= $totalSteps; $failAt++) {
     foreach ($relPaths as $rel) {
         assert_same($oldContent[$rel], file_get_contents($cacheDir . '/' . $rel), "failure at step {$failAt}: $rel rolled back to OLD content");
     }
-    assert_true(!is_dir($cacheDir . '/.staging-backup') || count(array_diff(scandir($cacheDir . '/.staging-backup'), ['.', '..'])) === 0, "failure at step {$failAt}: backup dir emptied by rollback");
+    assert_true(empty(glob($cacheDir . '/.backup-*')), "failure at step {$failAt}: rollback fully restores, no recovery backup dir left");
 }
 
 // ============================================================================
@@ -200,13 +200,43 @@ try {
 assert_true($caught !== null, 'rollback failure throws CompileException');
 assert_true(str_contains($caught->getMessage(), 'INCOMPLETE'), 'rollback failure message says INCOMPLETE (not "restored")');
 assert_true(str_contains($caught->getMessage(), $target), 'rollback failure message names the unrestorable target');
-// The backup is PRESERVED (not deleted) so an operator can recover it manually.
-$backupDir = $cacheDir . '/.staging-backup';
-assert_true(is_dir($backupDir), 'the backup dir is kept when rollback was incomplete');
-$preserved = glob($backupDir . '/*');
-assert_true(count($preserved) === 1, 'exactly one unrestorable backup is preserved');
+// The recovery backup is PRESERVED in a UNIQUE per-run dir (not the shared `.staging-backup`) so an operator can
+// recover it manually — and so a LATER publish cannot delete or reuse it.
+$backupDirs = glob($cacheDir . '/.backup-*');
+assert_same(1, count($backupDirs), 'incomplete rollback keeps exactly ONE recovery backup dir');
+$preservedDir = $backupDirs[0];
+$preserved = glob($preservedDir . '/*');
+assert_same(1, count($preserved), 'exactly one unrestorable backup is preserved in it');
+assert_true(str_contains($caught->getMessage(), $preservedDir), 'the INCOMPLETE message names the preserved recovery backup dir');
 // The target could NOT be restored, so it is absent (the rollback honestly left it unrestored).
 assert_true(!is_file($target), 'the unrestorable target is absent (restore honestly failed)');
+
+// ============================================================================
+// 5. REGRESSION (Step 5 fix-pass, required test): an INCOMPLETE rollback's preserved recovery backup SURVIVES a
+//    second publish — it is neither deleted nor reused. The second publish gets its OWN unique backup dir; the first
+//    run's dir (and its backup file) must STILL exist and be BYTE-IDENTICAL afterward.
+// ============================================================================
+// Snapshot the first run's preserved recovery backup (its bytes are the OLD content).
+$preservedFile = $preserved[0];
+$preservedBytes = file_get_contents($preservedFile);
+assert_same($oldContent[$relPaths[1]], $preservedBytes, 'the preserved recovery backup holds the OLD content');
+
+// Second publish: fresh content for the SAME target. The first run left the target ABSENT (it could not restore) and
+// removed the target's parent dir, so the publisher recreates the parent and writes the target with nothing to back
+// up — its own (empty) backup dir is removed on success.
+$stagingFile2 = $stagingDir . '/' . $relPaths[1];
+$target2 = $cacheDir . '/' . $relPaths[1];
+file_put_contents($stagingFile2, "FRESHER-{$relPaths[1]}");
+$publisher2 = new StagingPublisher($cacheDir);
+$publisher2->publish([$stagingFile2 => $target2]);
+assert_same("FRESHER-{$relPaths[1]}", file_get_contents($target2), 'second publish wrote its fresh content');
+
+// The FIRST run's recovery backup is UNTOUCHED — never deleted, never reused, byte-identical.
+assert_true(is_dir($preservedDir), 'a second publish does not delete the first run\'s recovery backup dir');
+assert_true(is_file($preservedFile), 'the first run\'s backup file is still present after a second publish');
+assert_same($preservedBytes, file_get_contents($preservedFile), 'the first run\'s recovery backup is byte-identical after a second publish');
+// Only the first run's preserved dir remains — the second run created its OWN dir and cleaned it up on success.
+assert_same([$preservedDir], glob($cacheDir . '/.backup-*'), 'after a second publish only the first run\'s preserved recovery backup remains');
 
 $rrm($tmpRoot);
 echo "StagingPublisher passed\n";

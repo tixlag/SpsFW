@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace SpsFW\Core\Compile;
 
-use SpsFW\Core\Config;
 use SpsFW\Core\Router\PathManager;
 
 /**
@@ -118,13 +117,13 @@ final class DevCompileRunner
      * code.
      *
      * Contract (Step 5 fix-pass):
-     *   - DEFAULT is a DRY-RUN (read-only: build + validate + report). Publication requires the explicit `--publish`
-     *     flag — a generic framework CLI must not silently overwrite an application's cache.
-     *   - `--publish` is REFUSED unless the application bootstrapped (Config::isBootstrapped()): the engine must not
-     *     publish a DI cache built without the application's DI bindings. Run the Coordinator from your application
-     *     preload (which calls Config::init / setDIBindings) to publish for real.
-     *   - EXIT CODE: a clean build exits 0; an ERROR exits non-zero (even in a dry run); under `--strict` a WARNING
-     *     also exits non-zero. A refused `--publish` exits 2.
+     *   - DEFAULT is a DRY-RUN (read-only: build + validate + report). The generic framework CLI is ALWAYS read-only:
+     *     a DI cache must be built WITH the application's DI bindings (Config::init + Config::setDIBindings), which only
+     *     the application owner runs (`next/preload.php`, plan §11.2, Step 6b). `--publish` is therefore ALWAYS refused
+     *     here (exit 2) — it never publishes, regardless of any bootstrap. To publish for real, wire your own
+     *     ApplicationContext in your preload and call Coordinator::compile() directly.
+     *   - EXIT CODE: a clean (dry-run) build exits 0; an ERROR exits non-zero (even in a dry run); under `--strict` a
+     *     WARNING also exits non-zero. `--publish` always exits 2.
      *
      * @param list<string> $argv
      */
@@ -149,9 +148,11 @@ final class DevCompileRunner
             }
         }
 
-        // The generic framework CLI must NOT publish a DI cache without application bootstrap/DI bindings.
-        if ($publish && !Config::isBootstrapped()) {
-            fwrite(STDERR, "Publication refused: the framework CLI has no application bootstrap (Config::init / DI bindings did not run). Run the Coordinator from your application preload, or bootstrap before invoking --publish.\n");
+        // The generic framework CLI is READ-ONLY: it never publishes a DI cache. A real build needs the application's
+        // DI bindings (Config::init + setDIBindings), which the application preload owns (plan §11.2, Step 6b). Always
+        // exit 2 and point at the Coordinator-in-preload path.
+        if ($publish) {
+            fwrite(STDERR, "Publication refused: the framework CLI is read-only. Run the Coordinator from your application preload (Config::init + Config::setDIBindings, then Coordinator::compile()) — that is the production publish path.\n");
             return 2;
         }
 

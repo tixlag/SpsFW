@@ -18,14 +18,6 @@ class Config
 {
     private static array $config = [];
 
-    /**
-     * Flipped to true at the END of {@see init()} — the signal that an APPLICATION bootstrap ran (env loaded,
-     * Config::init applied, DI bindings merged). The generic framework CLI (bin/spsfw-compile.php) never calls init(),
-     * so this stays false there, and a `--publish` from that context is REFUSED: the engine must not publish a DI
-     * cache built without the application's DI bindings. Additive — runtime behavior is unchanged.
-     */
-    private static bool $bootstrapped = false;
-
     public static array $bindings = [
         AuthTokenStorageI::class => AuthTokenStorage::class,
         AccessRuleServiceI::class => AccessRuleService::class,
@@ -90,9 +82,6 @@ class Config
         // Lazy binding: RedisClient available via #[Inject] without manual di_config.php entry.
         // Connection is established only on first actual use, not at container build time.
         self::$bindings[RedisClient::class] = fn() => RedisClient::getInstance();
-
-        // Mark a complete application bootstrap (env + init + bindings) — the CLI publish guard reads this.
-        self::$bootstrapped = true;
     }
 
     /**
@@ -132,15 +121,5 @@ class Config
     public static function hasDIBindings(): bool
     {
         return self::$bindings !== [];
-    }
-
-    /**
-     * Whether an APPLICATION bootstrap (Config::init) ran. The default bindings ship pre-populated, so
-     * {@see hasDIBindings()} is not a reliable "the app bootstrapped" signal; this flag is. The generic framework
-     * CLI refuses to publish a DI cache when it is false.
-     */
-    public static function isBootstrapped(): bool
-    {
-        return self::$bootstrapped;
     }
 }
