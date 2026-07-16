@@ -27,8 +27,11 @@ namespace SpsFW\Core\Compile\Publication;
  */
 final class Fingerprinter
 {
-    /** Bumped on any change to the emitted artifact shapes; part of the fingerprint so a new engine invalidates. */
-    public const COMPILER_VERSION = 'spsfw-compile-2';
+    /** Bumped on any change to the emitted artifact shapes; part of the fingerprint so a new engine invalidates.
+     *  spsfw-compile-3: the PRIMARY openapi.yml parity producer now scans a dedicated, caller-supplied
+     *  legacyOpenApiScanPaths (historical [src, libraryRoot] order) instead of reusing route discovery order — a
+     *  behavior change to the emitted spec, so the fingerprint invalidates the prior set. */
+    public const COMPILER_VERSION = 'spsfw-compile-3';
 
     /**
      * Recursively gather every .php source file under the discovery dirs (controllers, DTOs, …), deterministically
@@ -66,6 +69,12 @@ final class Fingerprinter
      * @param array<string, string> $configFiles logical name => absolute path (content-hashed; never stored wholesale)
      * @param array<string, ?string> $operationIdMap tri-state lockfile (canonicalized-hashed)
      * @param array<string, string> $routeOverrideMap METHOD:path => controller::method (canonicalized-hashed)
+     * @param list<string> $legacyOpenApiScanPaths directories the PRIMARY openapi.yml parity producer scans, in the
+     *                                            caller's (historical) ORDER. Order matters — swagger-php output is
+     *                                            order-sensitive — so the list is keyed as-given (NOT sorted), then
+     *                                            normalized RELATIVE to projectRoot so the fingerprint stays
+     *                                            deploy-path-independent. Only the normalized list feeds the hash; the
+     *                                            absolute paths never reach the manifest (hashed into the md5 below).
      */
     public function fingerprint(
         array $sourceFiles,
@@ -74,6 +83,7 @@ final class Fingerprinter
         array $configFiles = [],
         array $operationIdMap = [],
         array $routeOverrideMap = [],
+        array $legacyOpenApiScanPaths = [],
     ): string {
         $sources = [];
         foreach ($sourceFiles as $path) {
@@ -84,6 +94,14 @@ final class Fingerprinter
         }
         ksort($sources);
 
+        // The legacy OpenAPI scan ORDER affects swagger-php output, so it participates in the fingerprint. Normalize
+        // each path RELATIVE to projectRoot (deploy-path-independent), preserving order — do NOT sort. The list is
+        // hashed into the payload below; the manifest never carries these (absolute or relative) paths.
+        $legacyScanRelative = array_map(
+            fn (string $p): string => $this->relativeTo($projectRoot, $p),
+            array_values($legacyOpenApiScanPaths),
+        );
+
         $payload = json_encode([
             'compiler' => self::COMPILER_VERSION,
             'sources' => $sources,
@@ -93,6 +111,7 @@ final class Fingerprinter
                 'operation_id_map' => $this->hashMap($operationIdMap),
                 'route_override_map' => $this->hashMap($routeOverrideMap),
             ],
+            'legacy_openapi_scan_paths' => $legacyScanRelative,
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
         return md5($payload);

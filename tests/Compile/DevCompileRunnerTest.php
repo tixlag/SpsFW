@@ -23,6 +23,10 @@ $runner = (new DevCompileRunner())->execute([
     'dryRun' => true,
     'cachePath' => $cache,
     'discoveryPaths' => [__DIR__ . '/fixtures/clean'],
+    // The legacy OpenAPI scan set is now DECOUPLED from discovery (Step 6b). Point it at the clean fixtures too, so the
+    // probe stays isolated from the host PathManager project-root resolution (which, in this dev checkout, picks a
+    // sibling project whose src is not swagger-php-clean) — mirroring how a real preload passes its own scan paths.
+    'legacyOpenApiScanPaths' => [__DIR__ . '/fixtures/clean'],
     'mode' => ApplicationContext::MODE_MANAGED,
     'diagnosticPolicy' => ApplicationContext::POLICY_PARITY,
 ]);
@@ -42,6 +46,7 @@ assert_true(str_contains($runner->render(), 'mode=managed'), 'dev runner: render
 $pub = (new DevCompileRunner())->execute([
     'cachePath' => $cache,
     'discoveryPaths' => [__DIR__ . '/fixtures/clean'],
+    'legacyOpenApiScanPaths' => [__DIR__ . '/fixtures/clean'],
 ]);
 assert_true($pub->result()->published, 'dev runner: non-dry-run clean build publishes');
 assert_true(is_file($cache . '/compiled_routes.php'), 'dev runner: route cache written via the wrapper');

@@ -12,6 +12,7 @@ use SpsFW\Core\Compile\Publication\StagingPublisher;
 use SpsFW\Core\Compile\Route\RouteCacheEmitter;
 use SpsFW\Core\Compile\Route\RouteMetadataCompiler;
 use SpsFW\Core\DocsUtil;
+use SpsFW\Core\Router\PathManager;
 use SpsFW\Core\Router\ClassScanner;
 use SpsFW\Core\Router\DICacheBuilder;
 
@@ -103,6 +104,20 @@ final class Coordinator
             // Deterministic, DEPLOY-PATH-INDEPENDENT fingerprint: sources keyed relative to projectRoot, compile-time
             // config files + operationId/route-override maps hashed by CONTENT (built_at deliberately excluded).
             $sourceFiles = $fingerprinter->sourceFiles($ctx->discoveryPaths);
+
+            // PRIMARY OpenAPI parity scan paths — DECOUPLED from route/DI discovery (Step 6b parity fix). The legacy
+            // swagger-php scan order is the HISTORICAL DocsUtil::updateDocs() contract [src, libraryRoot], which is the
+            // REVERSE of PathManager::getControllersDirs() ([libraryRoot, src]) used for route/DI discovery. Reusing
+            // discovery order here was a latent parity bug. The caller may pass an explicit ordered list; if it does
+            // not, fall back to the EXPLICIT BC default [src, libraryRoot] — NEVER to route discovery order. The app's
+            // src is derived from the EXPLICIT $ctx->projectRoot (NOT the global PathManager::getSrcPath()), so the
+            // engine stays isolated from global path state and a test/temp projectRoot never over-scans the framework
+            // tree; this equals getSrcPath() in production (same project root). Only the framework's OWN libraryRoot
+            // uses PathManager (legitimate self-location).
+            $legacyScanPaths = $ctx->legacyOpenApiScanPaths !== []
+                ? $ctx->legacyOpenApiScanPaths
+                : [$ctx->projectRoot . '/src', PathManager::getLibraryRoot()];
+
             $fingerprint = $fingerprinter->fingerprint(
                 $sourceFiles,
                 $this->recordedConfig($ctx),
@@ -110,15 +125,16 @@ final class Coordinator
                 $ctx->configFiles,
                 $ctx->operationIdMap,
                 $ctx->routeOverrideMap,
+                $legacyScanPaths,
             );
 
             // ---- PRIMARY OpenAPI parity producer (plan §11.2, Step 6b #5). Until M6 the spec Orval reads is the
             //      legacy swagger-php .cache/swagger/openapi.yml, NOT the new emitter's openapi.generated.yml. So the
             //      Coordinator keeps the PRIMARY spec fresh by building the SAME legacy document here (DocsUtil's
-            //      generator + scan set), staged for publication alongside the secondary emitter output. It does NOT
-            //      call DocsUtil::updateDocs() (gated in managed, and it writes the live cache directly, bypassing
-            //      staging); the PRIMARY spec must never be left stale.
-            $legacyOpenApiYaml = DocsUtil::produceLegacyOpenApiYaml($ctx->discoveryPaths);
+            //      generator + the historical [src, libraryRoot] scan set), staged for publication alongside the
+            //      secondary emitter output. It does NOT call DocsUtil::updateDocs() (gated in managed, and it writes
+            //      the live cache directly, bypassing staging); the PRIMARY spec must never be left stale.
+            $legacyOpenApiYaml = DocsUtil::produceLegacyOpenApiYaml($legacyScanPaths);
 
             // ---- Publication gate: ERROR always blocks; a WARNING blocks only under the strict policy.
             $errors = $this->diagnostics->hasErrors();

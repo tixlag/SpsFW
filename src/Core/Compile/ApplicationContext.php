@@ -70,6 +70,18 @@ final readonly class ApplicationContext
      * @param array<string, string> $routeOverrideMap "METHOD:path" => winner "controller::method"
      * @param array<string, string> $configFiles logical name => absolute path (content-hashed; never stored wholesale)
      * @param float $lockTimeoutSec whole-flow compile lock deadline; ≤0 = a single non-blocking attempt
+     * @param list<string> $legacyOpenApiScanPaths directories the PRIMARY openapi.yml parity producer scans, in the
+     *                                            caller's (historical) ORDER — DECOUPLED from {@see $discoveryPaths}.
+     *                                            Route/DI discovery order (PathManager::getControllersDirs() =
+     *                                            [libraryRoot, src]) is NOT the same as the legacy swagger-php scan
+     *                                            order (DocsUtil::updateDocs() = [src, libraryRoot]); reusing discovery
+     *                                            order for the parity spec is a latent bug (Step 6b parity fix). Empty
+     *                                            => the Coordinator falls back to the EXPLICIT BC default
+     *                                            [projectRoot/src, libraryRoot] (the historical DocsUtil [src,
+     *                                            libraryRoot] contract — the app src taken from $projectRoot so the
+     *                                            engine stays isolated from global PathManager state), NEVER to route
+     *                                            discovery order. Hashed (relative-normalized, order-preserving) into
+     *                                            the fingerprint; absolute paths never reach the manifest.
      */
     public function __construct(
         public string $projectRoot,
@@ -82,6 +94,7 @@ final readonly class ApplicationContext
         public array $routeOverrideMap = [],
         public array $configFiles = [],
         public float $lockTimeoutSec = 0.0,
+        public array $legacyOpenApiScanPaths = [],
     ) {
         // Ownership mode needs no validation here: it is a typed CompileMode, so only valid cases can exist; an
         // invalid ENV/CLI value already threw during resolution ({@see CompileMode::fromString()}).

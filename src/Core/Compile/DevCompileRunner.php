@@ -33,6 +33,7 @@ final class DevCompileRunner
      *     diagnosticPolicy?: string,
      *     cachePath?: string,
      *     discoveryPaths?: ?list<string>,
+     *     legacyOpenApiScanPaths?: ?list<string>,
      *     configInputs?: array<string, mixed>,
      *     operationIdMap?: array<string, ?string>,
      *     routeOverrideMap?: array<string, string>,
@@ -55,6 +56,12 @@ final class DevCompileRunner
         // stored wholesale), NOT here.
         $configInputs = $options['configInputs'] ?? [];
 
+        // The legacy OpenAPI scan set is DECOUPLED from route/DI discovery (Step 6b parity fix): discovery order is
+        // [libraryRoot, src] (PathManager::getControllersDirs()), but the legacy swagger-php spec scans the HISTORICAL
+        // [src, libraryRoot] order (DocsUtil::updateDocs). Default to that historical contract; the caller may override.
+        $legacyOpenApiScanPaths = $options['legacyOpenApiScanPaths']
+            ?? [PathManager::getSrcPath(), PathManager::getLibraryRoot()];
+
         $context = new ApplicationContext(
             projectRoot: PathManager::getProjectRoot(),
             cachePath: $options['cachePath'] ?? PathManager::getCachePath(),
@@ -66,6 +73,7 @@ final class DevCompileRunner
             routeOverrideMap: $options['routeOverrideMap'] ?? [],
             configFiles: $options['configFiles'] ?? [],
             lockTimeoutSec: $options['lockTimeoutSec'] ?? 0.0,
+            legacyOpenApiScanPaths: $legacyOpenApiScanPaths,
         );
 
         $this->coordinator = new Coordinator($context);
