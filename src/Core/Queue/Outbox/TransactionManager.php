@@ -77,4 +77,27 @@ final class TransactionManager
     {
         return $this->depth > 0;
     }
+
+    /**
+     * Whether this manager owns the exact PDO connection used by a transactional participant.
+     *
+     * PDO transactions are connection-local. Two PDO objects may point at the same database and
+     * still cannot share a transaction, so identity comparison is intentional here.
+     */
+    public function manages(PDO $pdo): bool
+    {
+        return $this->pdo === $pdo;
+    }
+
+    /**
+     * Fail fast when a storage cannot participate in this manager's transaction.
+     */
+    public function assertManages(PDO $pdo): void
+    {
+        if (!$this->manages($pdo)) {
+            throw new \LogicException(
+                'TransactionManager and transactional storage must use the same PDO instance.',
+            );
+        }
+    }
 }

@@ -6,18 +6,43 @@
 
 `OutboxPublisher` remains a compatibility fallback: it first tries RabbitMQ and
 stores the message only when publication fails. Critical business events should
-use `TransactionalOutboxPublisher`, which always stores a fully prepared
-message in the same database transaction as the business change.
+use a `TransactionalOutboxPublisher` built by `createForTransaction()`: it
+always stores a fully prepared message, and the factory proves that the outbox
+write can share the business transaction.
 
 ```php
-$transactionManager->transactional(function () use ($publisher, $job, $when): void {
-    $publisher->publishAt(
-        $job,
-        $when,
-        ['deduplicationKey' => 'task-reminder:' . $job->reminderId],
-    );
-});
+$transactionManager = new TransactionManager($businessStorage->getPdo());
+$publisher = $factory->createForTransaction(
+    queueName: 'task-reminders',
+    transactionManager: $transactionManager,
+    exchange: 'crm.reminders',
+    routingKey: 'reminder.deliver',
+    storage: $outboxStorage,
+    wakeup: $wakeup,
+);
+
+$transactionManager->transactional(
+    function () use ($businessStorage, $businessEntity, $publisher, $job, $when): void {
+        $businessStorage->save($businessEntity);
+        $publisher->publishAt(
+            $job,
+            $when,
+            ['deduplicationKey' => 'task-reminder:' . $job->reminderId],
+        );
+    },
+);
 ```
+
+`createForTransaction()` verifies that the manager and `OutboxStorage` use the
+same PDO object. This identity check matters because transactions are local to a
+connection: two PDO instances pointing to the same database still cannot share
+one transaction. The worker-config equivalent is
+`createByWorkerNameForTransaction()`.
+
+The older `createTransactional()` / `createByWorkerNameTransactional()` methods
+remain available with their original nullable-manager signatures for backwards
+compatibility. They do not perform the strict connection proof; prefer the new
+entrypoints whenever code claims atomicity with a business write.
 
 `OutboxRelay` claims due rows with `FOR UPDATE SKIP LOCKED`, commits the lease,
 publishes with AMQP mandatory routing and publisher confirms, then deletes the
