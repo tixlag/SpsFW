@@ -686,11 +686,11 @@ $publisher->publishAt(
 Если schedule должен быть атомарен вместе с бизнес-изменением, используем transactional variant:
 
 ```php
-$publisher = $factory->createByWorkerNameTransactional(
-    'notifications_worker',
-    $outboxStorage,
-    $transactionManager,
-    $wakeup,
+$publisher = $factory->createByWorkerNameForTransaction(
+    workerName: 'notifications_worker',
+    transactionManager: $transactionManager,
+    storage: $outboxStorage,
+    wakeup: $wakeup,
 );
 
 $transactionManager->transactional(function () use ($publisher, $job): void {

@@ -6,7 +6,7 @@
 
 ## Что здесь искать
 
-- [Очереди и transactional outbox](queue-outbox.md) — как устроены публикация сообщений, `LISTEN/NOTIFY`, Redis-замена для MySQL/MariaDB, lease-модель, идемпотентность и алгоритмические оценки.
+- [Очереди и transactional outbox](queue-outbox.md) — как устроены публикация сообщений, строгая привязка manager/storage к одной PDO, `LISTEN/NOTIFY`, Redis-замена для MySQL/MariaDB, lease-модель, идемпотентность и алгоритмические оценки.
 
 ## Когда сюда идти
 

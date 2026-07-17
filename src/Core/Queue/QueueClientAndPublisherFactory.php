@@ -289,6 +289,12 @@ class QueueClientAndPublisherFactory
         return new OutboxPublisher($publisher, $storage, $autoFlushBatch);
     }
 
+    /**
+     * Backwards-compatible outbox publisher entrypoint.
+     *
+     * The nullable manager is intentionally preserved. New code that requires atomicity with a
+     * business write should use createForTransaction(), which proves the same-PDO invariant.
+     */
     public function createTransactional(
         string $queueName,
         string $exchange = '',
@@ -313,6 +319,49 @@ class QueueClientAndPublisherFactory
         );
     }
 
+    /**
+     * Creates an outbox publisher that is explicitly bound to the caller's transaction.
+     *
+     * Unlike the backwards-compatible createTransactional() entrypoint, this strict variant
+     * requires a TransactionManager and verifies that OutboxStorage uses the exact same PDO
+     * connection. Use it whenever a business write and its outbox row must commit atomically.
+     */
+    public function createForTransaction(
+        string $queueName,
+        TransactionManager $transactionManager,
+        string $exchange = '',
+        string $routingKey = '',
+        ?OutboxStorage $storage = null,
+        ?OutboxWakeupInterface $wakeup = null,
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+        array $queueArguments = [],
+        array $bindingKeys = [],
+    ): TransactionalOutboxPublisher {
+        $storage ??= $this->outboxStorage ?? throw new \LogicException(
+            'OutboxStorage must be provided for transactional publication.',
+        );
+        $transactionManager->assertManages($storage->getPdo());
+
+        return $this->createTransactional(
+            queueName: $queueName,
+            exchange: $exchange,
+            routingKey: $routingKey,
+            storage: $storage,
+            transactionManager: $transactionManager,
+            wakeup: $wakeup,
+            exchangeType: $exchangeType,
+            exchangeArguments: $exchangeArguments,
+            queueArguments: $queueArguments,
+            bindingKeys: $bindingKeys,
+        );
+    }
+
+    /**
+     * Backwards-compatible worker-config entrypoint.
+     *
+     * Use createByWorkerNameForTransaction() when the outbox row must share a business transaction.
+     */
     public function createByWorkerNameTransactional(
         string $workerName,
         ?OutboxStorage $storage = null,
@@ -337,6 +386,31 @@ class QueueClientAndPublisherFactory
             $storage,
             $transactionManager,
             $wakeup,
+        );
+    }
+
+    /**
+     * Worker-config counterpart of createForTransaction().
+     *
+     * The required manager plus same-PDO assertion make the atomicity boundary explicit while
+     * createByWorkerNameTransactional() remains unchanged for existing callers.
+     */
+    public function createByWorkerNameForTransaction(
+        string $workerName,
+        TransactionManager $transactionManager,
+        ?OutboxStorage $storage = null,
+        ?OutboxWakeupInterface $wakeup = null,
+    ): TransactionalOutboxPublisher {
+        $storage ??= $this->outboxStorage ?? throw new \LogicException(
+            'OutboxStorage must be provided for transactional publication.',
+        );
+        $transactionManager->assertManages($storage->getPdo());
+
+        return $this->createByWorkerNameTransactional(
+            workerName: $workerName,
+            storage: $storage,
+            transactionManager: $transactionManager,
+            wakeup: $wakeup,
         );
     }
 
