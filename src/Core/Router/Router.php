@@ -297,7 +297,7 @@ class Router
                 $validationParams[] = [
                     'in' => $paramsIn,
                     'dto' => $dtoClass,
-                    'rules' => $this->extractValidationRules($dtoClass), // Извлекаем правила
+                    'rules' => self::extractValidationRules($dtoClass), // Извлекаем правила
                 ];
             }
             // Check for PhpIni attribute
@@ -363,9 +363,19 @@ class Router
     }
 
     /**
+     * The legacy OA-sourced validation rule graph — the byte-compat parity oracle AND the M5 rollback source
+     * (plan §7/§15, Step 7). Pure and stateless: it reads only the DTO's reflection + Validator::$attributesOpenApi
+     * (a static whitelist), so it is exposed as a STATIC callable for the compile engine
+     * ({@see \SpsFW\Core\Compile\Route\RouteMetadataCompiler}) without instantiating a Router.
+     * DtoSchemaBuilder::ruleGraphArray() is a documented byte-faithful replay of this method.
+     *
+     * KEPT (not removed) until M8: in RuleSource::Legacy it is the EMITTED source (byte-identical rollback), and in
+     * RuleSource::Metadata it is the strict-parity oracle the new DtoSchemaBuilder source is gated against — so the
+     * route-cache producer can be switched behind a flag without ever losing byte-compat rollback.
+     *
      * @throws ReflectionException
      */
-    private function extractValidationRules(string $dtoClass): array
+    public static function extractValidationRules(string $dtoClass): array
     {
         $rules = [];
         $reflection = new ReflectionClass($dtoClass);
@@ -394,7 +404,7 @@ class Router
                 $attributesOpenApi = $propertyAttribute->getArguments();
                 $propertyName = $attributesOpenApi['property'] ?? $property->getName();
                 $propertyType = $property->getType();
-                $propertyClass = $this->reflectionClassName($propertyType);
+                $propertyClass = self::reflectionClassName($propertyType);
 
                 // Дефолт: сначала из свойства, затем из параметра конструктора
                 $propertyDefaultValue = null;
@@ -423,10 +433,10 @@ class Router
                         if ($attributeKey === 'items' || (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array')) {
                             $propertyRules['ref'] = $attributeValue;
                             $propertyRules['type'] = 'array';
-                            $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                            $propertyRules['nested_rules'] = self::extractValidationRules($attributeValue);
                         } else {
                             $propertyRules['ref'] = $attributeValue;
-                            $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                            $propertyRules['nested_rules'] = self::extractValidationRules($attributeValue);
                         }
                         break;
                     }
@@ -458,7 +468,7 @@ class Router
                     $attributesOpenApi = $paramAttribute->getArguments();
                     $propertyName = $attributesOpenApi['property'] ?? $realParamName;
                     $paramType = $param->getType();
-                    $paramClass = $this->reflectionClassName($paramType);
+                    $paramClass = self::reflectionClassName($paramType);
 
                     $defaultValue = null;
                     if ($param->isDefaultValueAvailable()) {
@@ -484,10 +494,10 @@ class Router
                             if ($attributeKey === 'items' || (isset($attributesOpenApi['type']) && $attributesOpenApi['type'] == 'array')) {
                                 $propertyRules['ref'] = $attributeValue;
                                 $propertyRules['type'] = 'array';
-                                $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                                $propertyRules['nested_rules'] = self::extractValidationRules($attributeValue);
                             } else {
                                 $propertyRules['ref'] = $attributeValue;
-                                $propertyRules['nested_rules'] = $this->extractValidationRules($attributeValue);
+                                $propertyRules['nested_rules'] = self::extractValidationRules($attributeValue);
                             }
                             break;
                         }
@@ -506,7 +516,7 @@ class Router
         return $rules;
     }
 
-    private function reflectionClassName(?\ReflectionType $type): ?string
+    private static function reflectionClassName(?\ReflectionType $type): ?string
     {
         if ($type instanceof ReflectionNamedType) {
             return $type->isBuiltin() ? null : $type->getName();
@@ -514,7 +524,7 @@ class Router
 
         if ($type instanceof \ReflectionUnionType || $type instanceof \ReflectionIntersectionType) {
             foreach ($type->getTypes() as $nestedType) {
-                $className = $this->reflectionClassName($nestedType);
+                $className = self::reflectionClassName($nestedType);
                 if ($className !== null) {
                     return $className;
                 }

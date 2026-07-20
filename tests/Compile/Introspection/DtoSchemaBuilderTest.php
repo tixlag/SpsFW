@@ -154,15 +154,14 @@ final class DsbCycleSelf
     public DsbCycleSelf $next;
 }
 
-$router = (new ReflectionClass(Router::class))->newInstanceWithoutConstructor();
-$extract = new ReflectionMethod(Router::class, 'extractValidationRules');
 $builder = new DtoSchemaBuilder();
 
 /**
  * The core parity oracle: the builder's rule graph must be strictly identical to the legacy producer's.
+ * Router::extractValidationRules is now a public static callable (Step 7 — the M5 legacy/parity source).
  */
-$assertParity = static function (string $dtoClass, string $label) use ($router, $extract, $builder): void {
-    $expected = $extract->invoke($router, $dtoClass);
+$assertParity = static function (string $dtoClass, string $label) use ($builder): void {
+    $expected = Router::extractValidationRules($dtoClass);
     $actual = $builder->ruleGraph($builder->build($dtoClass))->rules;
     assert_same($expected, $actual, $label . ' — ruleGraph() byte-identical to extractValidationRules()');
 };

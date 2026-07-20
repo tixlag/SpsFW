@@ -45,6 +45,11 @@ namespace SpsFW\Core\Compile;
  * own publication gate. So `managed + parity` is a legitimate configuration (preload-built, but warnings tolerated
  * through the M7 migration), and `legacy + strict` is legitimate too. An ERROR blocks publication in EVERY policy;
  * only a WARNING's effect depends on the policy.
+ *
+ * RULE SOURCE (Step 7 / M5) is a THIRD, independent axis — which producer feeds the route-cache DTO rule graph
+ * (`ruleSource`): it is decoupled from both `mode` and `diagnosticPolicy`. Any combination is legitimate; e.g.
+ * `managed + metadata` is the production target once parity holds, while `managed + legacy` is the byte-compat
+ * rollback. See {@see RuleSource}.
  */
 final readonly class ApplicationContext
 {
@@ -55,6 +60,11 @@ final readonly class ApplicationContext
 
     public const POLICY_PARITY = 'parity';
     public const POLICY_STRICT = 'strict';
+
+    /** Rule-source aliases (the typed {@see RuleSource} enum). Kept for readable named construction
+     *  (`ruleSource: ApplicationContext::RULE_SOURCE_METADATA`); they ARE the enum cases. */
+    public const RULE_SOURCE_LEGACY = RuleSource::Legacy;
+    public const RULE_SOURCE_METADATA = RuleSource::Metadata;
 
     /**
      * @param string $projectRoot
@@ -82,6 +92,12 @@ final readonly class ApplicationContext
      *                                            engine stays isolated from global PathManager state), NEVER to route
      *                                            discovery order. Hashed (relative-normalized, order-preserving) into
      *                                            the fingerprint; absolute paths never reach the manifest.
+     * @param RuleSource $ruleSource producer of the route-cache DTO rule graph (Step 7 / M5) — a typed
+     *                               {@see RuleSource}, resolved ONCE by the caller via
+     *                               {@see RuleSource::fromString()} (invalid values throw there, never here). Legacy
+     *                               (default) emits the OA source byte-identically (pure rollback); Metadata emits the
+     *                               DtoSchemaBuilder graph gated strict-=== against the legacy source. Recorded in the
+     *                               fingerprint + manifest; NO env is read to resolve it (the caller resolves).
      */
     public function __construct(
         public string $projectRoot,
@@ -95,6 +111,7 @@ final readonly class ApplicationContext
         public array $configFiles = [],
         public float $lockTimeoutSec = 0.0,
         public array $legacyOpenApiScanPaths = [],
+        public RuleSource $ruleSource = self::RULE_SOURCE_LEGACY,
     ) {
         // Ownership mode needs no validation here: it is a typed CompileMode, so only valid cases can exist; an
         // invalid ENV/CLI value already threw during resolution ({@see CompileMode::fromString()}).

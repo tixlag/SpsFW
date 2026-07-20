@@ -82,7 +82,11 @@ final class Coordinator
             // ---- ONE shared diagnostics collector: route compiler, OpenAPI emitter + validator, DI all report here.
             //      The tri-state operationId map is a FIRST-CLASS input (not hidden in configInputs): it is passed
             //      explicitly to the route compiler so the real `next` inventory keeps its preserved ids / nulls.
-            $routeCompiler = new RouteMetadataCompiler($this->diagnostics, operationIdMap: $ctx->operationIdMap);
+            $routeCompiler = new RouteMetadataCompiler(
+                $this->diagnostics,
+                operationIdMap: $ctx->operationIdMap,
+                ruleSource: $ctx->ruleSource,
+            );
 
             // ---- ONE discovery/reflection flow yields BOTH the route cache IR and the OpenAPI operation projection,
             //      with duplicate METHOD:path keys resolved to operationId uniqueness: declared overrides keep their
@@ -274,7 +278,7 @@ final class Coordinator
     {
         return array_merge(
             $ctx->configInputs,
-            ['mode' => $ctx->mode->value, 'diagnostic_policy' => $ctx->diagnosticPolicy],
+            ['mode' => $ctx->mode->value, 'diagnostic_policy' => $ctx->diagnosticPolicy, 'rule_source' => $ctx->ruleSource->value],
         );
     }
 

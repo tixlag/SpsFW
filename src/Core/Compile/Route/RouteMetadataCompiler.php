@@ -26,6 +26,7 @@ use SpsFW\Core\Attributes\Validation\PostBody;
 use SpsFW\Core\Attributes\Validation\QueryParams;
 use SpsFW\Core\Attributes\Validation\ValidateAttr;
 use SpsFW\Core\Compile\CompileDiagnostics;
+use SpsFW\Core\Compile\RuleSource;
 use SpsFW\Core\Compile\Introspection\AttributeReader;
 use SpsFW\Core\Compile\Introspection\DtoEligibility;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
@@ -42,6 +43,7 @@ use SpsFW\Core\Compile\Metadata\SecurityMetadata;
 use SpsFW\Core\Compile\Metadata\ValidationRuleGraph;
 use SpsFW\Core\Middleware\RateLimitMiddleware;
 use SpsFW\Core\Router\ClassScanner;
+use SpsFW\Core\Router\Router;
 use SpsFW\Core\Validation\Enum\ParamsIn;
 
 /**
@@ -75,6 +77,8 @@ final class RouteMetadataCompiler
         private readonly DtoEligibility $eligibility = new DtoEligibility(),
         private readonly RequiredSource $requiredSource = RequiredSource::Oa,
         array $operationIdMap = [],
+        private readonly RuleSource $ruleSource = RuleSource::Legacy,
+        private readonly ?\Closure $legacyRuleSource = null,
     ) {
         // Share diagnostics so a cyclic/missing DTO surfaces on the SAME collector that halts the build,
         // instead of the throwaway CompileDiagnostics a default-constructed builder would carry.
@@ -281,6 +285,20 @@ final class RouteMetadataCompiler
         return $bindings;
     }
 
+    /**
+     * Produce the DTO rule graph for the route cache (Step 7 / M5 producer switch, plan §15).
+     *
+     *  - {@see RuleSource::Legacy} (default, byte-compat): the graph comes from the legacy OA source
+     *    {@see Router::extractValidationRules()} verbatim — pure rollback, NO gate, byte-identical to what Router
+     *    always wrote. The M5 switch stays BEHIND a flag until parity is proven.
+     *  - {@see RuleSource::Metadata} (opt-in): the graph comes from {@see DtoSchemaBuilder} (the unified producer),
+     *    gated strict-=== against the legacy source via {@see enforceParity()}. A divergence is a FATAL error that
+     *    blocks publication; the IR is still assembled with the metadata graph, but the Coordinator never publishes
+     *    on an error, so the old set stays byte-identical.
+     *
+     * ruleGraphFor (not build()) — the route-cache path wants ONLY the rule graph; a DTO's schema projection (and any
+     * future schema-only diagnostics) must not leak into route-cache compilation.
+     */
     private function buildRules(string $controller, string $method, string $param, string $dtoClass): ValidationRuleGraph
     {
         if (!class_exists($dtoClass)) {
@@ -294,9 +312,68 @@ final class RouteMetadataCompiler
             );
             return ValidationRuleGraph::empty();
         }
-        // ruleGraphFor (not build()) — the route-cache path wants ONLY the rule graph; a DTO's schema
-        // projection (and any future schema-only diagnostics) must not leak into route-cache compilation.
-        return $this->schemas->ruleGraphFor($dtoClass);
+
+        $legacy = $this->legacyRulesFor($dtoClass);
+
+        // LEGACY: emit the OA-sourced graph verbatim (pure rollback, no gate).
+        if ($this->ruleSource->isLegacy()) {
+            return new ValidationRuleGraph($legacy);
+        }
+
+        // METADATA: emit the DtoSchemaBuilder graph, after proving it equals the legacy OA source exactly.
+        $metadata = $this->schemas->ruleGraphFor($dtoClass)->rules;
+        $this->enforceParity($controller, $method, $param, $dtoClass, $legacy, $metadata);
+        return new ValidationRuleGraph($metadata);
+    }
+
+    /**
+     * The legacy OA-sourced rule graph for a DTO — the byte-compat EMIT in Legacy mode and the strict-parity ORACLE
+     * in Metadata mode. Defaults to {@see Router::extractValidationRules()}; a caller may inject a different source
+     * (constructor $legacyRuleSource) so the parity gate is exercisable in tests without contriving a divergence in
+     * production DTOs (DtoSchemaBuilder is a faithful replay, so the two never diverge on real classes).
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function legacyRulesFor(string $dtoClass): array
+    {
+        return ($this->legacyRuleSource ?? Router::extractValidationRules(...))($dtoClass);
+    }
+
+    /**
+     * Strict parity gate: the metadata rule graph must equal the legacy OA source exactly (=== — keys, key order,
+     * value types, recursively) or the build fails with a FATAL diagnostic naming the diverging property path and
+     * both sides. Runs ONLY in Metadata mode; Legacy mode IS the legacy source, so it needs no gate. Publication is
+     * blocked downstream by the Coordinator's error gate, leaving the old set byte-identical.
+     *
+     * @param array<string, array<string, mixed>> $legacy
+     * @param array<string, array<string, mixed>> $metadata
+     */
+    private function enforceParity(string $controller, string $method, string $param, string $dtoClass, array $legacy, array $metadata): void
+    {
+        $diff = RuleGraphParity::compare($legacy, $metadata);
+        if ($diff === null) {
+            return;
+        }
+        $this->diagnostics->error(
+            controller: $controller,
+            method: $method,
+            dto: $dtoClass,
+            field: $param,
+            cause: sprintf(
+                'rule-source parity violation: the metadata rule graph (DtoSchemaBuilder) diverges from the legacy OA source (Router::extractValidationRules) at %s — %s; legacy=%s, metadata=%s',
+                $diff['path'],
+                $diff['kind'],
+                self::exportTruncated($diff['legacy']),
+                self::exportTruncated($diff['metadata']),
+            ),
+            fix: 'the metadata source must match the legacy OA source byte-for-byte before it can publish; fix the divergence in DtoSchemaBuilder, or keep RuleSource::Legacy until parity holds',
+        );
+    }
+
+    private static function exportTruncated(mixed $value): string
+    {
+        $text = var_export($value, true);
+        return strlen($text) > 200 ? substr($text, 0, 197) . '...' : $text;
     }
 
     private function collectPhpIni(ReflectionMethod $method): ?array
