@@ -32,7 +32,7 @@
 |---|---|---|
 | Direct publish | Сообщение можно потерять при сбое RabbitMQ | Минимальная задержка, простая схема |
 | Outbox publish | Сообщение можно восстановить из БД | Доставку можно отложить до восстановления брокера |
-| Transactional outbox | Бизнес-запись и публикация должны быть атомарны | Сообщение не потеряется между сохранением данных и публикацией |
+| Transactional outbox | Бизнес-запись и публикация должны быть атомарны | Бизнес-запись и outbox row используют один `TransactionManager` и одно PDO-соединение |
 
 Правило практическое: если событие можно пересоздать из бизнес-данных, direct publish допустим. Если нельзя — используй outbox. Если публикация должна жить в одной транзакции с данными, используй transactional outbox.
 
@@ -41,7 +41,7 @@
 1. Код создаёт job и вызывает publisher.
 2. Publisher собирает `PreparedQueueMessage` с `message_id`, `available_at`, routing metadata и headers.
 3. В outbox-режиме сообщение пишется в `queue_outbox`.
-4. Если `TransactionManager` передан и бизнес-операция обёрнута в `transactional()`, wakeup откладывается до commit через `TransactionManager::afterCommit()`. Если менеджера нет, wakeup вызывается сразу — корректность не теряется, меняется только latency.
+4. При создании через `createForTransaction()` manager и storage проверены на одно PDO; внутри `transactional()` wakeup откладывается до commit через `TransactionManager::afterCommit()`. Если менеджера нет, outbox insert остаётся durable, а wakeup вызывается сразу, но атомарности с ранее выполненной бизнес-записью такой вызов не обещает.
 5. Relay берёт due rows через `SELECT ... FOR UPDATE SKIP LOCKED`.
 6. Успешно опубликованные строки удаляются.
 7. При ошибке строка остаётся в outbox, получает `attempts + 1`, `last_error` и новый `next_attempt_at`.
@@ -128,7 +128,17 @@ $publisher->publish($job, [
 ### Публикация внутри бизнес-транзакции
 
 ```php
-$transactionManager->transactional(function () use (
+$manager = new TransactionManager($orderStorage->getPdo());
+$publisher = $factory->createForTransaction(
+    queueName: 'orders',
+    transactionManager: $manager,
+    exchange: 'orders.events',
+    routingKey: 'order.created',
+    storage: $outboxStorage,
+    wakeup: $wakeup,
+);
+
+$manager->transactional(function () use (
     $orderStorage,
     $publisher,
     $order,
@@ -140,6 +150,27 @@ $transactionManager->transactional(function () use (
     ]);
 });
 ```
+
+`createForTransaction()` — рекомендуемый строгий entrypoint. Он требует manager явно и до
+публикации проверяет, что `OutboxStorage` использует **тот же объект PDO**, что и manager.
+Вариант по имени воркера называется `createByWorkerNameForTransaction()`.
+
+### Почему проверяется именно объект PDO
+
+Транзакция принадлежит соединению, а не DSN и не серверу БД. Два объекта PDO могут указывать на
+одинаковые host/database/user, но `BEGIN` на первом соединении никак не охватывает `INSERT` через
+второе. Без проверки такой код выглядит атомарным, проходит happy-path и теряет outbox row именно на
+rollback/error path.
+
+SpsFW намеренно не добавляет публичный `TransactionManager::getPdo()`: вызывающему коду не нужно
+извлекать инфраструктурную зависимость и вручную сравнивать соединения. Вместо этого manager даёт
+узкий контракт `manages()` / `assertManages()`, а строгая фабрика применяет его в единственной точке
+сборки publisher'а. Это уменьшает coupling и делает ошибку fail-fast.
+
+Старые `createTransactional()` и `createByWorkerNameTransactional()` сохранены без изменения сигнатур
+и поведения для обратной совместимости. Они допускают nullable manager и поэтому не могут доказать
+общую транзакцию. Используй их только для существующего кода или самостоятельной durable outbox-записи;
+новый код, который заявляет атомарность с бизнес-изменением, должен использовать строгие методы.
 
 ### Relay loop
 
@@ -155,11 +186,14 @@ Relay обычно живёт в отдельном long-running процесс�
 - Используй outbox только там, где потеря сообщения действительно дорога.
 - Не воспринимай outbox как гарантию exactly-once.
 - Держи handler’ы идемпотентными.
+- Для атомарной бизнес-записи используй `createForTransaction()` /
+  `createByWorkerNameForTransaction()`, а manager создавай от PDO бизнес-storage.
 - Для PostgreSQL используй native `LISTEN/NOTIFY`, если он доступен.
 - Для MySQL/MariaDB планируй Redis как wakeup-слой.
 - Если Redis не подходит, принимай latency trade-off от `SleepOutboxWakeup`.
 - Следи за `attempts` и `last_error`, а не только за количеством сообщений в очереди.
-- Если бизнес-транзакция и outbox живут на разных DB-конфигах, атомарность теряется.
+- Если бизнес-транзакция и outbox живут на разных PDO, атомарность невозможна; строгая фабрика
+  отклоняет такую конфигурацию до записи.
 
 ## Что читать дальше
 
