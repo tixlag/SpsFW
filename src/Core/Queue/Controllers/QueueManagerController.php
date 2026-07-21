@@ -14,7 +14,7 @@ use Psr\SimpleCache\CacheInterface;
 
 // Импорты OpenAPI атрибутов
 use OpenApi\Attributes as OA;
-use SpsFW\Core\Attributes\OpenApi\Operation;
+use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 
 #[Controller]
 #[OA\Tag(name: "Queue Management", description: "API для управления очередями задач и воркерами")]
@@ -58,7 +58,7 @@ class QueueManagerController extends RestController
         tags: ["Queue Management"]
     )]
     #[Route(path: "/api/workers")]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Workers Management')]
     public function index(): Response
     {
         return Response::html(file_get_contents('worker-dashboard.html', true));
@@ -98,7 +98,7 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Успешный ответ')]
     public function dashboard(): Response
     {
         $workers = [];
@@ -157,7 +157,7 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Информация о статистике')]
     public function stats(): Response
     {
         // Здесь можно добавить подключение к RabbitMQ Management API
@@ -231,7 +231,7 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Задача успешно отправлена')]
     public function send(): Response
     {
         $data = $this->request->getJsonData();
@@ -320,7 +320,7 @@ class QueueManagerController extends RestController
             new OA\Response(response: 500, description: "Ошибка сервера")
         ]
     )]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Операция выполнена')]
     public function controlWorker(string $workerId, string $action): Response
     {
         if (!isset($this->getWorkerDefinitions()[$workerId])) {
@@ -424,7 +424,7 @@ class QueueManagerController extends RestController
             new OA\Response(response: 404, description: "Воркер не найден")
         ]
     )]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Данные очищены')]
     public function clearWorker(string $workerId): Response
     {
         if (!isset($this->getWorkerDefinitions()[$workerId])) {
@@ -471,7 +471,7 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Список задач')]
     public function listJobs(): Response
     {
         $jobs = [];

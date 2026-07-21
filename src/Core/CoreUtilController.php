@@ -13,6 +13,7 @@ use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Router\DICacheBuilder;
 use SpsFW\Core\Router\Router;
 use SpsFW\Core\Attributes\OpenApi\Operation;
+use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 
 #[Controller]
 class CoreUtilController extends RestController
@@ -26,7 +27,7 @@ class CoreUtilController extends RestController
     #[OA\Post(path: '/api/core/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
     #[Route('/api/core/update', ['POST'])]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateRoutes(): array
     {
         RuntimeCompileGate::assertAllowed('route and OpenAPI documentation');
@@ -41,7 +42,7 @@ class CoreUtilController extends RestController
     #[OA\Post(path: '/api/core/update/routes', summary: 'Обновляет только роуты', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
     #[Route('/api/core/update/routes', ['POST'])]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateOnlyRoutes(): array
     {
         RuntimeCompileGate::assertAllowed('route');
@@ -82,7 +83,7 @@ class CoreUtilController extends RestController
     #[OA\Post(path: '/swagger/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
     #[Route('/swagger/update', ['POST'])]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateDocs(): array
     {
         RuntimeCompileGate::assertAllowed('OpenAPI documentation');

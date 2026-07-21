@@ -13,7 +13,7 @@ use SpsFW\Core\Workers\WorkerConfig;
 
 // Импортируем атрибуты OpenAPI
 use OpenApi\Attributes as OA;
-use SpsFW\Core\Attributes\OpenApi\Operation;
+use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 
 #[Controller]
 #[OA\Tag(name: "Worker Health", description: "Проверка работоспособности фоновых воркеров")]
@@ -62,7 +62,7 @@ class WorkerHealthController extends RestController
             )
         ]
     )]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Успешный ответ')]
     public function check(): Response
     {
         $workers = $this->workerConfig?->getQueueWorkerNames() ?? [

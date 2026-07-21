@@ -129,10 +129,42 @@ final class OpenApiEmitter
     /**
      * Serialize an ALREADY-BUILT document array to YAML. No compilation, no diagnostics — the document came
      * from {@see emit()}.
+     *
+     * Two Symfony-YAML portability guarantees are applied so the dumped spec is valid, portable OpenAPI
+     * (consumers include js-yaml/Orval, which are stricter than the framework's own validator):
+     *  - {@see normalizeForYaml()} collapses PHP enum instances to scalars (no `!php/enum` tag); and
+     *  - `Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE` renders empty arrays as `[]`, not `{}`. Without it Symfony
+     *    emits e.g. `security: [{ bearerAuth: {} }]` — the empty OAuth-scopes list `[]` becomes an empty
+     *    MAP, which is invalid OpenAPI (must be an array). Safe here because the metadata graph never
+     *    produces a legitimate empty-object SCHEMA `{}` (the only OpenAPI value that is an empty map);
+     *    every empty array it emits is a list (security requirements, scopes, rule lists).
      */
     public function dump(array $document): string
     {
-        return Yaml::dump($document, inline: 4, indent: 2, flags: 0);
+        return Yaml::dump($this->normalizeForYaml($document), inline: 4, indent: 2, flags: Yaml::DUMP_EMPTY_ARRAY_AS_SEQUENCE);
+    }
+
+    /**
+     * Recursively convert PHP enum instances to portable scalars so the dumped YAML never carries the
+     * Symfony-specific `!php/enum` tag — which js-yaml (Orval) and other OpenAPI tooling reject as an
+     * unknown tag. An `example` declared as `[Site::LK, Site::PRO]` (real enum instances, read from a
+     * PHP attribute) would otherwise serialize as `!php/enum FQCN::LK`. Backed enums use their backing
+     * value; pure unit enums use the case name. Every other value passes through unchanged.
+     */
+    private function normalizeForYaml(mixed $value): mixed
+    {
+        if ($value instanceof \BackedEnum) {
+            return $value->value;
+        }
+        if ($value instanceof \UnitEnum) {
+            return $value->name;
+        }
+        if (is_array($value)) {
+            foreach ($value as $k => $v) {
+                $value[$k] = $this->normalizeForYaml($v);
+            }
+        }
+        return $value;
     }
 
     /**

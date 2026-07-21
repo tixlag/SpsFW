@@ -264,6 +264,49 @@ $reparsed = Yaml::parse($yaml);
 assert_same($doc, $reparsed, 'YAML round-trip is lossless — dump→parse reproduces the array exactly');
 assert_same($yaml, $emitter->toYaml($operations, title: 'Test API', version: '1.2.3'), 'toYaml() convenience path == dump(emit())');
 
+// --- enum example portability: dump() must NEVER emit the Symfony `!php/enum` tag — js-yaml (Orval) and
+//     other OpenAPI tooling reject it as an unknown tag. A #[OA\Property(example: [Site::LK, Site::PRO])]
+//     puts real enum instances into the document; dump() normalizes them (backed ⇒ backing value) so the
+//     serialized YAML is portable. (Single observed producer: N's PublicationSettingsNewsDto.publishOnSites.)
+$enumDoc = [
+    'openapi' => '3.1.0',
+    'info' => ['title' => 't', 'version' => '1'],
+    'paths' => [],
+    'components' => ['schemas' => [
+        'EnumExample' => ['type' => 'object', 'properties' => [
+            'mode' => ['type' => 'string', 'example' => EmMode::Active],
+            'modes' => ['type' => 'array', 'items' => ['type' => 'string'], 'example' => [EmMode::Active, EmMode::Disabled]],
+        ]],
+    ]],
+];
+$enumYaml = $emitter->dump($enumDoc);
+assert_true(!str_contains($enumYaml, '!php/'), 'dump() never emits a Symfony !php/ tag (portable to js-yaml/Orval)');
+assert_true(str_contains($enumYaml, 'active') && str_contains($enumYaml, 'disabled'), 'backed-enum examples serialize to their backing values');
+$enumReparsed = Yaml::parse($enumYaml);
+assert_same('active', $enumReparsed['components']['schemas']['EnumExample']['properties']['mode']['example'], 'single backed-enum example round-trips as its backing scalar');
+assert_same(['active', 'disabled'], $enumReparsed['components']['schemas']['EnumExample']['properties']['modes']['example'], 'array-of-backed-enum example round-trips as backing scalars');
+
+// --- empty-array portability: an empty array must serialize as `[]`, never the empty map `{}`.
+//     The metadata graph emits empty arrays for security requirement scopes (`bearerAuth: []`), anonymous
+//     ops (`security: []`), and access-rule lists (`x-required-rules.all: []`). Symfony YAML renders an
+//     empty array as `{}` by default — invalid OpenAPI (Ajv/Orval reject `bearerAuth must be array`).
+//     DUMP_EMPTY_ARRAY_AS_SEQUENCE keeps them as sequences. (Legacy swagger-php already renders `[]`.)
+$emptyDoc = [
+    'openapi' => '3.1.0',
+    'info' => ['title' => 't', 'version' => '1'],
+    'paths' => [
+        '/auth' => ['get' => ['security' => [['bearerAuth' => []]], 'responses' => ['200' => ['description' => 'ok']]]],
+        '/anon' => ['get' => ['security' => [], 'responses' => ['200' => ['description' => 'ok']]]],
+    ],
+];
+$emptyYaml = $emitter->dump($emptyDoc);
+assert_true(!str_contains($emptyYaml, 'bearerAuth: {}'), 'empty OAuth-scopes list serializes as [] not {} (valid OpenAPI)');
+assert_true(str_contains($emptyYaml, 'bearerAuth: []'), 'empty OAuth-scopes list serializes as []');
+assert_true(!preg_match('/security:\s*\{\}/', $emptyYaml), 'anonymous security serializes as [] not {}');
+$emptyReparsed = Yaml::parse($emptyYaml);
+assert_same([['bearerAuth' => []]], $emptyReparsed['paths']['/auth']['get']['security'], 'empty scopes list round-trips as an empty array');
+assert_same([], $emptyReparsed['paths']['/anon']['get']['security'], 'anonymous security round-trips as an empty array');
+
 // --- Step 8 / M6 emit-once array-first contract: merge() + a second validate() on the ALREADY-BUILT graph
 //     document add NO new diagnostics. The Coordinator relies on this under Metadata: it builds the graph ONCE
 //     (emit()), then runs OpenApiEscapeHatchMerger::merge() + OpenApiValidator::validate() on the result WITHOUT

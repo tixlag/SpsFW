@@ -10,7 +10,7 @@ use SpsFW\Core\DocsUtil;
 use SpsFW\Core\Http\Response;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Router\PathManager;
-use SpsFW\Core\Attributes\OpenApi\Operation;
+use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 
 #[OA\Info(
     version: "0.8",
@@ -28,7 +28,7 @@ class SwaggerController extends RestController
     )]
     #[Route(path: "/swagger")]
     #[NoAuthAccess]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'Swagger UI')]
     public function index(): Response
     {
         return Response::html(file_get_contents('View/index.html', true));
@@ -41,7 +41,7 @@ class SwaggerController extends RestController
         tags: ["Swagger"]
     )]
     #[Route(path: "/swagger/openapi.yaml")]
-    #[Operation(exclude: true)]
+    #[ApiResponse(status: 200, description: 'OpenAPI YAML')]
     public function yaml(): Response
     {
         return Response::html(file_get_contents(PathManager::getProjectRoot() . '/.cache/swagger/openapi.yml', true));
