@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SpsFW\Core\Compile;
 
+use SpsFW\Core\Compile\OpenApi\OpenApiEscapeHatch;
+
 /**
  * Explicit application context handed to the {@see Coordinator}.
  *
@@ -66,6 +68,11 @@ final readonly class ApplicationContext
     public const RULE_SOURCE_LEGACY = RuleSource::Legacy;
     public const RULE_SOURCE_METADATA = RuleSource::Metadata;
 
+    /** Openapi-source aliases (the typed {@see OpenApiSource} enum). Kept for readable named construction
+     *  (`openApiSource: ApplicationContext::OPENAPI_SOURCE_METADATA`); they ARE the enum cases. */
+    public const OPENAPI_SOURCE_LEGACY = OpenApiSource::Legacy;
+    public const OPENAPI_SOURCE_METADATA = OpenApiSource::Metadata;
+
     /**
      * @param string $projectRoot
      * @param string $cachePath
@@ -98,6 +105,21 @@ final readonly class ApplicationContext
      *                               (default) emits the OA source byte-identically (pure rollback); Metadata emits the
      *                               DtoSchemaBuilder graph gated strict-=== against the legacy source. Recorded in the
      *                               fingerprint + manifest; NO env is read to resolve it (the caller resolves).
+     * @param OpenApiSource $openApiSource producer of the PRIMARY `.cache/swagger/openapi.yml` (Step 8 / M6) — a
+     *                                     FOURTH independent typed axis, resolved ONCE by the caller via
+     *                                     {@see OpenApiSource::fromString()} (invalid values throw there, never here).
+     *                                     Legacy (default) emits the legacy swagger-php spec byte-identically (pure
+     *                                     rollback, BC for every client); Metadata emits the metadata-graph document
+     *                                     merged with the narrow {@see $openApiEscapeHatch} and validated. Recorded in
+     *                                     the fingerprint (via `openapi_source` in recordedConfig) + manifest; NO env is
+     *                                     read to resolve it (the caller resolves). The graph is built ONCE under both
+     *                                     modes; the SECONDARY openapi.generated.yml is always the pure graph.
+     * @param ?OpenApiEscapeHatch $openApiEscapeHatch the narrow OA escape hatch (Step 8 / M6) — schemas-only fragments
+     *                                                merged into the graph doc under Metadata. A FIRST-CLASS input (not
+     *                                                hidden in configInputs); null normalizes to an empty hatch. The
+     *                                                config FILE path is recorded separately in {@see $configFiles};
+     *                                                the RESOLVED hatch feeds the fingerprint via the Fingerprinter's
+     *                                                single canonical representation (no absolute deploy paths/content).
      */
     public function __construct(
         public string $projectRoot,
@@ -112,6 +134,8 @@ final readonly class ApplicationContext
         public float $lockTimeoutSec = 0.0,
         public array $legacyOpenApiScanPaths = [],
         public RuleSource $ruleSource = self::RULE_SOURCE_LEGACY,
+        public OpenApiSource $openApiSource = self::OPENAPI_SOURCE_LEGACY,
+        public ?OpenApiEscapeHatch $openApiEscapeHatch = null,
     ) {
         // Ownership mode needs no validation here: it is a typed CompileMode, so only valid cases can exist; an
         // invalid ENV/CLI value already threw during resolution ({@see CompileMode::fromString()}).
@@ -132,5 +156,15 @@ final readonly class ApplicationContext
     public function warningsBlock(): bool
     {
         return $this->diagnosticPolicy === self::POLICY_STRICT;
+    }
+
+    /**
+     * The escape hatch, normalized to a non-null VO (null ⇒ empty). The Coordinator / Fingerprinter consume
+     * the hatch through this accessor so a default-constructed ApplicationContext (no hatch) behaves as an
+     * empty hatch — the common Legacy-mode / no-fragment case.
+     */
+    public function escapeHatch(): OpenApiEscapeHatch
+    {
+        return $this->openApiEscapeHatch ?? OpenApiEscapeHatch::empty();
     }
 }

@@ -554,6 +554,86 @@ preemptively называть их «N-bugs» было ошибкой.
 Step 6b — только реальные дефекты N:** (а) развести intra-controller path-коллизию `EmployeeDocumentsController`;
 (б) разрешить `CreateNewsDto` schema-name collision (переименовать один из DTO / добавить явное schema-имя).
 6 Core↔Next auth-перекрытий — это **конфигурация** (`routeOverrideMap`), а не дефект. Шаг 6 не начат.
+
+### 4.13 OpenAPI-source parity + escape hatch (Step 8 / M6, dev-only probe) — engine capability complete; N activation pending M7/M8
+
+**Capability (F, Step 8 / M6):** the PRIMARY `.cache/swagger/openapi.yml` producer is now switchable behind a new
+4th independent `ApplicationContext` axis — `OpenApiSource` (enum, mirrors `RuleSource`):
+- `Legacy` (default) — byte-compat swagger-php via `DocsUtil::produceLegacyOpenApiYaml()`; PURE rollback for every
+  client; the full swagger-php scan runs ONLY in this branch (skipped under `Metadata`).
+- `Metadata` (opt-in) — the graph document (built ONCE by `OpenApiEmitter::emit()`) merged with the narrow OA
+  escape hatch, then re-validated, then dumped; the SECONDARY `openapi.generated.yml` stays the pure graph under
+  BOTH modes.
+
+`OpenApiSource` reaches the fingerprint via `recordedConfig()` → `config` (single source; NOT passed twice); the
+escape hatch has ONE canonical representation in `Fingerprinter` (`class:<FQCN>` / `file:<project-relative-path>`
+keys + content md5; no absolute deploy paths; a file outside projectRoot is the `out-of-root` sentinel — already
+FATALed by the merger upstream); the manifest carries ONLY the `escape_hatch_hash` md5. `COMPILER_VERSION` bumped
+`spsfw-compile-3` → `spsfw-compile-4` (the emitted PRIMARY set changed shape, so the fingerprint invalidates).
+
+**Rollback:** flip `SPSFW_OPENAPI_SOURCE` back to `legacy` (or unset). The axis is recorded in fingerprint +
+manifest, so the flip deterministically invalidates the cache; default `Legacy` is a pure no-op vs today.
+
+**Escape-hatch contract (exact):** `OpenApiEscapeHatch` VO (scan targets + requested schema keys; validates +
+dedupes + sorts). Config shape (`next/config/openapi_escape_hatch.php`, N-owned, empty default):
+`['scan' => [...class-strings/relative-paths...], 'schemas' => [...requested component keys...]]`. TWO forbidden-
+content guards: (a) an annotation-level allowlist guard on the swagger-php `Analysis` (only
+`Schema/Property/Items/Discriminator/AdditionalProperties/ExternalDocumentation/Xml` + root `OpenApi`; ANY
+operation/path/parameter/request-body/response/security annotation → FATAL) — catches `#[OA\Get]` even though the
+schema-preserving pipeline drops `BuildPaths`; (b) an exact-shape guard (only `openapi/info/components.schemas`;
+`paths` empty; any other root section or `components` key → FATAL). Provenance: resolved files deduped + sorted
+(same file via FQCN and path scans once), scanned separately, duplicate fragment key across targets → FATAL,
+requested key missing → FATAL, graph↔fragment collision → FATAL (graph wins). External `$ref` policy: any `$ref`
+not starting with `#/` → FATAL (the validator would otherwise accept external refs).
+
+**F test results (composer test, 46 files, all green):** characterization-FIRST
+(`EscapeHatchPipelineCharacterizationTest` — polymorphic schema survives + forbidden `#[OA\Get]` detected without
+`BuildPaths`); `OpenApiEscapeHatchMergerTest` (11 cases — empty no-op, whitelist extraction, missing/collision/
+forbidden/dup-key FATALs, same-file dedup, refs resolve, external-ref FATAL, determinism, no x-fqcn/nullable);
+`OpenApiSourceTest`; `OpenApiPrimarySourceTest` (Coordinator-level — Legacy byte-identical to `DocsUtil`, Metadata
+== `dump(merge(emit()))`, secondary pure graph both modes, ERROR→not published, manifest `openapi_source` +
+`escape_hatch_hash`, fingerprint differs on flip); extended `FingerprinterTest` (openapi_source via config, escape-
+hatch content-change invalidation, manifest md5-only no-path-leak) + `OpenApiEmitterTest` (emit-once array-first
+contract: merge/validate on a built doc add no diagnostics). Emit-once is pinned by the array-first contract +
+single-`emit()`-call Coordinator code review, NOT by a diagnostic count (CompileDiagnostics dedups).
+`composer validate`: only the PRE-EXISTING `firebase/php-jwt` lock exit-2 (origin/master); NO new composer problems.
+
+**N Coordinator probe (`docs/metadata_compiler_audit/gen_n_openapi_source_parity.php`, both runs PASS):** drives the
+FULL Coordinator TWICE over N's real discovery tree — A=`OpenApiSource::Legacy`, B=`OpenApiSource::Metadata` —
+identical inputs (ruleSource=Metadata UNCHANGED, empty escape hatch, POLICY_PARITY, real operationIdMap/overrides/
+configFiles). Results:
+- `errors: A=0 B=0` (MANDATORY — both clean); `warnings: A=394 B=394` (IDENTICAL between modes → confirms the
+  switch is observably isolated to the PRIMARY openapi.yml; these are pre-existing migration-gap warnings, parity-
+  tolerated, reported separately);
+- `compiled_routes.php` / `compiled_di.php` / `job_registry.php` byte-identical A vs B (openapi-source-independent);
+- SECONDARY `openapi.generated.yml` byte-identical A vs B (pure graph never depends on the primary producer);
+- A PRIMARY byte-identical to `DocsUtil::produceLegacyOpenApiYaml(scanPaths)` (sanity — Legacy reproduces swagger-php);
+- B PRIMARY == B SECONDARY (empty hatch ⇒ Metadata primary IS the pure graph) and PASSES `OpenApiValidator`;
+- fingerprints differ (A `f89488bbebf2` vs B `5fabd01eadab`); manifests record `openapi_source=legacy|metadata`;
+  real `next/.cache` byte-unchanged before/after; no P/public_next files referenced.
+
+**New normalized parity baseline (M7–M9 backlog — NOT auto-failure, structurally valid):** the legacy swagger-php
+projection and the graph emitter are DIFFERENT projections of the same app. Counts (PRIMARY openapi.yml):
+- A (legacy swagger-php): 301 paths / 348 operations / 341 schemas;
+- B (graph): 333 paths / 380 operations / 151 schemas.
+Divergence drivers (known): (i) swagger-php scans ALL `#[OA\Schema]` in the framework tree (incl. unreferenced) →
+more schemas; the graph emits only schemas referenced by operations; (ii) the graph emits operations from `Route`
+attributes that lack `#[OA\Get]` (swagger-php skips those) → more paths/operations; (iii) response/error-shape,
+security, and standard-error policy differences. These close as Step 9 (clean controllers of OA) + Step 10 (clean
+DTOs) + rule-graph/standard-error parity land — at which point the N production flip to `metadata` becomes safe.
+
+**Why N stays `Legacy` primary default in M6:** flipping to `Metadata` changes the PRIMARY spec Orval reads
+(301 vs 333 paths etc.); the divergence backlog is unresolved, so a flip would change the generated client without
+a coordinated regen. M6 ships the ENGINE CAPABILITY + the narrow escape hatch + a proven, isolated, reversible
+switch; the N production activation is deferred to M7/M8 (after Step 9 + the parity backlog closes).
+
+**Live FPM smoke deferred:** the probe is a CLI throwaway-cache run, NOT a live PHP-FPM preload. Live FPM smoke
+(`SPSFW_OPENAPI_SOURCE=metadata` through the real preload → Orval regen → tsc) is a pre-merge/pre-deploy gate,
+deferred until the divergence backlog closes.
+
+**Integration caveat:** N's `feature/metadata-compiler-step6b` is BEHIND `origin/main` — it needs an `origin/main`
+merge + this probe re-run before final integration (the worktree `.wt/lk-step6b` was used for the N-side changes).
+
 ---
 
 ## 5. Deploy / Docker / cache-volume audit

@@ -13,6 +13,8 @@ use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Attributes\Validation\JsonBody;
 use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\OpenApi\OpenApiEmitter;
+use SpsFW\Core\Compile\OpenApi\OpenApiEscapeHatch;
+use SpsFW\Core\Compile\OpenApi\OpenApiEscapeHatchMerger;
 use SpsFW\Core\Compile\OpenApi\OpenApiValidator;
 use SpsFW\Core\Compile\OpenApi\SchemaNameResolver;
 use SpsFW\Core\Compile\Route\RouteMetadataCompiler;
@@ -261,6 +263,21 @@ assert_true(!$validDiag->hasErrors(), 'fixture document passes structural valida
 $reparsed = Yaml::parse($yaml);
 assert_same($doc, $reparsed, 'YAML round-trip is lossless — dump→parse reproduces the array exactly');
 assert_same($yaml, $emitter->toYaml($operations, title: 'Test API', version: '1.2.3'), 'toYaml() convenience path == dump(emit())');
+
+// --- Step 8 / M6 emit-once array-first contract: merge() + a second validate() on the ALREADY-BUILT graph
+//     document add NO new diagnostics. The Coordinator relies on this under Metadata: it builds the graph ONCE
+//     (emit()), then runs OpenApiEscapeHatchMerger::merge() + OpenApiValidator::validate() on the result WITHOUT
+//     re-emitting. CompileDiagnostics DEDUPS by signature, so a diagnostic COUNT cannot prove single-emission —
+//     this pins the behavioral contract instead (the single emit() call site is verified in Coordinator by review).
+$onceDiag = new CompileDiagnostics();
+$onceEmitter = new OpenApiEmitter($onceDiag);
+$onceDoc = $onceEmitter->emit($operations, title: 'Test API', version: '1.2.3');
+$onceCountAfterEmit = $onceDiag->count();
+$onceMerged = (new OpenApiEscapeHatchMerger($onceDiag, dirname(__DIR__, 2)))->merge($onceDoc, OpenApiEscapeHatch::empty());
+assert_same($onceDoc, $onceMerged, 'an empty hatch merge is a no-op (returns the built doc unchanged)');
+assert_same($onceCountAfterEmit, $onceDiag->count(), 'merge() on the built graph doc adds no diagnostics (array-first, no re-emit)');
+(new OpenApiValidator($onceDiag))->validate($onceMerged);
+assert_same($onceCountAfterEmit, $onceDiag->count(), 'a second validate() on the built graph doc adds no diagnostics');
 
 // ============================================================================
 // Operation normalization (prereq 1): two operations on the same METHOD:path collapse last-wins, and each

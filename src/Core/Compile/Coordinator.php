@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace SpsFW\Core\Compile;
 
 use SpsFW\Core\Compile\OpenApi\OpenApiEmitter;
+use SpsFW\Core\Compile\OpenApi\OpenApiEscapeHatch;
+use SpsFW\Core\Compile\OpenApi\OpenApiEscapeHatchMerger;
 use SpsFW\Core\Compile\OpenApi\OpenApiValidator;
 use SpsFW\Core\Compile\Publication\CompileLock;
 use SpsFW\Core\Compile\Publication\Fingerprinter;
@@ -130,15 +132,35 @@ final class Coordinator
                 $ctx->operationIdMap,
                 $ctx->routeOverrideMap,
                 $legacyScanPaths,
+                $ctx->escapeHatch(),
             );
 
-            // ---- PRIMARY OpenAPI parity producer (plan §11.2, Step 6b #5). Until M6 the spec Orval reads is the
-            //      legacy swagger-php .cache/swagger/openapi.yml, NOT the new emitter's openapi.generated.yml. So the
-            //      Coordinator keeps the PRIMARY spec fresh by building the SAME legacy document here (DocsUtil's
-            //      generator + the historical [src, libraryRoot] scan set), staged for publication alongside the
-            //      secondary emitter output. It does NOT call DocsUtil::updateDocs() (gated in managed, and it writes
-            //      the live cache directly, bypassing staging); the PRIMARY spec must never be left stale.
-            $legacyOpenApiYaml = DocsUtil::produceLegacyOpenApiYaml($legacyScanPaths);
+            // ---- PRIMARY OpenAPI producer is now switchable via the 4th independent OpenApiSource axis (Step 8 / M6).
+            //      The GRAPH is built ONCE above ($emitter->emit) and feeds the SECONDARY openapi.generated.yml under
+            //      BOTH modes (always pure graph — no escape hatch). The PRIMARY .cache/swagger/openapi.yml differs:
+            //        - Legacy (default): the byte-compat swagger-php spec via DocsUtil::produceLegacyOpenApiYaml(),
+            //          the historical behavior — pure rollback for every client. The full swagger-php scan runs ONLY
+            //          in this branch (it is skipped under Metadata).
+            //        - Metadata: the graph document merged with the narrow OA escape hatch (schemas-only fragments),
+            //          then re-validated, then dumped. Any merge/shape/provenance/external-ref ERROR is fatal and
+            //          blocks publication like any other ERROR (the gate below honors it).
+            //      The graph is NEVER re-emitted: under Metadata the merger works on the COPY of the already-built
+            //      $document (array-first contract — emit() runs once; validate/merge/dump add no new diagnostics).
+            $legacyScanPathsYaml = null;
+            $metadataPrimaryYaml = null;
+            if ($ctx->openApiSource->isMetadata()) {
+                $primaryDoc = (new OpenApiEscapeHatchMerger($this->diagnostics, $ctx->projectRoot))
+                    ->merge($document, $ctx->escapeHatch());
+                (new OpenApiValidator($this->diagnostics))->validate($primaryDoc);
+                $metadataPrimaryYaml = $emitter->dump($primaryDoc);
+            } else {
+                // Legacy parity producer (plan §11.2, Step 6b #5): the historical swagger-php spec via DocsUtil's
+                // generator + the [src, libraryRoot] scan set. It does NOT call DocsUtil::updateDocs() (gated in
+                // managed, and it writes the live cache directly, bypassing staging); the PRIMARY spec must never
+                // be left stale. The SECONDARY stays the pure graph (openapi.generated.yml).
+                $legacyScanPathsYaml = DocsUtil::produceLegacyOpenApiYaml($legacyScanPaths);
+            }
+            $primaryYaml = $ctx->openApiSource->isMetadata() ? $metadataPrimaryYaml : $legacyScanPathsYaml;
 
             // ---- Publication gate: ERROR always blocks; a WARNING blocks only under the strict policy.
             $errors = $this->diagnostics->hasErrors();
@@ -154,7 +176,7 @@ final class Coordinator
                 return CompileResult::notPublished(false, $this->diagnostics->errorCount(), $this->diagnostics->warningCount(), $fingerprint, $reason, $overrides);
             }
 
-            return $this->stageAndPublish($ctx, $fingerprinter, $fingerprint, $emitter, $document, $di, $routes, $overrides, $legacyOpenApiYaml, $publishFaultHook);
+            return $this->stageAndPublish($ctx, $fingerprinter, $fingerprint, $emitter, $document, $di, $routes, $overrides, $primaryYaml, $ctx->escapeHatch(), $publishFaultHook);
         };
 
         // Dry-run: read-only, lock-free, write-free.
@@ -192,7 +214,8 @@ final class Coordinator
         array $di,
         array $routes,
         array $overrides,
-        string $legacyOpenApiYaml,
+        ?string $primaryYaml,
+        OpenApiEscapeHatch $escapeHatch,
         ?\Closure $publishFaultHook = null,
     ): CompileResult {
         $publisher = new StagingPublisher($ctx->cachePath);
@@ -205,9 +228,10 @@ final class Coordinator
             'compiled_routes.php' => (new RouteCacheEmitter())->emitSource($routes),
             'compiled_di.php' => $this->varExportSource($di['compiled']),
             'job_registry.php' => $this->varExportSource($di['jobs']),
-            // PRIMARY openapi.yml (legacy swagger-php parity — what Orval reads) comes BEFORE the SECONDARY
-            // openapi.generated.yml (new graph emitter). Both are staged + published per-file atomically.
-            'swagger/openapi.yml' => $legacyOpenApiYaml,
+            // PRIMARY openapi.yml — the chosen primary producer's output (Legacy swagger-php parity OR Metadata
+            // graph+escape-hatch, decided in compile()) — comes BEFORE the SECONDARY openapi.generated.yml (the
+            // PURE graph emitter under BOTH modes). Both are staged + published per-file atomically.
+            'swagger/openapi.yml' => (string) $primaryYaml,
             'swagger/openapi.generated.yml' => $emitter->dump($document),
         ];
 
@@ -227,6 +251,7 @@ final class Coordinator
         }
 
         // Manifest last: compiler version, fingerprint, scalar config, config-file content hashes, map hashes,
+        // escape-hatch hash (single canonical representation; md5 only — no targets/absolute paths/content),
         // applied overrides, artifact hashes, built_at.
         $manifest = $fingerprinter->manifest(
             $fingerprint,
@@ -237,6 +262,8 @@ final class Coordinator
             $ctx->routeOverrideMap,
             $overrides,
             date('c'),
+            $ctx->projectRoot,
+            $escapeHatch,
         );
         $manifestRelative = '.compile_manifest.php';
         $manifestStaging = $stagingDir . '/' . $manifestRelative;
@@ -278,7 +305,15 @@ final class Coordinator
     {
         return array_merge(
             $ctx->configInputs,
-            ['mode' => $ctx->mode->value, 'diagnostic_policy' => $ctx->diagnosticPolicy, 'rule_source' => $ctx->ruleSource->value],
+            [
+                'mode' => $ctx->mode->value,
+                'diagnostic_policy' => $ctx->diagnosticPolicy,
+                'rule_source' => $ctx->ruleSource->value,
+                // The PRIMARY openapi.yml producer (Step 8 / M6) — a 4th independent typed axis. Recorded here so it
+                // feeds the fingerprint + manifest via ONE config source; it is NOT passed a second time to the
+                // Fingerprinter (the escape hatch has its own dedicated canonical representation).
+                'openapi_source' => $ctx->openApiSource->value,
+            ],
         );
     }
 

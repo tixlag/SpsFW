@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use SpsFW\Core\Compile\OpenApi\OpenApiEscapeHatch;
 use SpsFW\Core\Compile\Publication\Fingerprinter;
 
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
@@ -153,6 +154,76 @@ $manifestScanSerialized = var_export($manifestScan, true);
 assert_true(!str_contains($manifestScanSerialized, $appScan) && !str_contains($manifestScanSerialized, $libScan), 'the manifest does NOT carry the absolute scan paths');
 assert_true(!str_contains($manifestScanSerialized, 'scan_app') && !str_contains($manifestScanSerialized, 'scan_lib'), 'the manifest does NOT carry the relative scan paths either');
 
+// ============================================================================
+// Step 8 / M6: OpenApiSource participates via the RECORDED CONFIG (`openapi_source`), flipping it fires a
+// fingerprint change with IDENTICAL sources — and OpenApiSource is NOT passed a second time to fingerprint()
+// (it reaches the payload ONLY through configInputs: the single source of truth; the escape hatch has its own
+// dedicated canonical representation below).
+// ============================================================================
+$srcRoot8 = sys_get_temp_dir() . '/spsfw_oasrc_' . bin2hex(random_bytes(4));
+mkdir($srcRoot8, 0777, true);
+file_put_contents($srcRoot8 . '/X.php', "<?php\n// src\n");
+$srcFiles8 = $fingerprinter->sourceFiles([$srcRoot8]);
+
+// openapi_source=legacy vs openapi_source=metadata ⇒ different fingerprint, same source files.
+$fpOaLegacy = $fingerprinter->fingerprint($srcFiles8, ['openapi_source' => 'legacy'], $srcRoot8);
+$fpOaMetadata = $fingerprinter->fingerprint($srcFiles8, ['openapi_source' => 'metadata'], $srcRoot8);
+assert_true($fpOaLegacy !== $fpOaMetadata, 'an openapi_source flip fires a fingerprint change (identical sources)');
+
+// config key order is irrelevant (openapi_source composes canonically with other keys).
+$fpOaOrderA = $fingerprinter->fingerprint($srcFiles8, ['openapi_source' => 'legacy', 'mode' => 'managed'], $srcRoot8);
+$fpOaOrderB = $fingerprinter->fingerprint($srcFiles8, ['mode' => 'managed', 'openapi_source' => 'legacy'], $srcRoot8);
+assert_same($fpOaOrderA, $fpOaOrderB, 'openapi_source composes canonically (order-irrelevant)');
+
+// ============================================================================
+// Step 8 / M6: the escape hatch feeds the fingerprint via ONE canonical representation (the SAME representation
+// the manifest hashes). A scan-target CONTENT change fires invalidation; the manifest carries ONLY
+// escape_hatch_hash (md5) — never scan targets, absolute paths, or file content (no leak).
+// ============================================================================
+
+// (1) A CLASS-string scan target: stable by FQCN; participates (non-empty ≠ empty); deterministic.
+$hatchClass = new OpenApiEscapeHatch([Fingerprinter::class], ['AnySchema']);
+$fpHatchClass = $fingerprinter->fingerprint($srcFiles8, [], $srcRoot8, [], [], [], [], $hatchClass);
+$fpHatchClass2 = $fingerprinter->fingerprint($srcFiles8, [], $srcRoot8, [], [], [], [], $hatchClass);
+assert_same($fpHatchClass, $fpHatchClass2, 'a class-string escape hatch is deterministic');
+$fpHatchEmpty = $fingerprinter->fingerprint($srcFiles8, [], $srcRoot8, [], [], [], [], OpenApiEscapeHatch::empty());
+assert_true($fpHatchClass !== $fpHatchEmpty, 'a non-empty escape hatch participates in the fingerprint');
+
+// (2) A FILE scan target under a temp project root: its CONTENT change fires invalidation.
+$hatchRoot = sys_get_temp_dir() . '/spsfw_hatch_' . bin2hex(random_bytes(4));
+mkdir($hatchRoot, 0777, true);
+$hatchFile = $hatchRoot . '/frag.php';
+file_put_contents($hatchFile, "<?php\n// fragment one\n");
+$hatchFiles = $fingerprinter->sourceFiles([$hatchRoot]);
+$hatchFileTarget = new OpenApiEscapeHatch(['frag.php'], ['CompA']);
+$fpHatchFile1 = $fingerprinter->fingerprint($hatchFiles, [], $hatchRoot, [], [], [], [], $hatchFileTarget);
+file_put_contents($hatchFile, "<?php\n// fragment TWO\n");
+$fpHatchFile2 = $fingerprinter->fingerprint($hatchFiles, [], $hatchRoot, [], [], [], [], $hatchFileTarget);
+assert_true($fpHatchFile1 !== $fpHatchFile2, 'an escape-hatch scan-target content change fires a fingerprint change');
+
+// (3) The manifest carries ONLY escape_hatch_hash (md5) — no scan targets, no absolute paths, no content.
+$manifestHatch = $fingerprinter->manifest($fpHatchFile1, [], [], [], [], [], [], '2020-01-01T00:00:00+00:00', $hatchRoot, $hatchFileTarget);
+assert_true(array_key_exists('escape_hatch_hash', $manifestHatch), 'manifest carries escape_hatch_hash');
+assert_same(32, strlen($manifestHatch['escape_hatch_hash']), 'escape_hatch_hash is a 32-char md5');
+$hatchSerialized = var_export($manifestHatch, true);
+assert_true(!str_contains($hatchSerialized, $hatchRoot), 'the manifest does NOT leak the absolute hatch project root');
+assert_true(!str_contains($hatchSerialized, 'frag.php'), 'the manifest does NOT leak the hatch file path (relative key md5-only)');
+assert_true(!str_contains($hatchSerialized, 'fragment one') && !str_contains($hatchSerialized, 'fragment TWO'), 'the manifest does NOT leak the hatch file content');
+assert_true(!str_contains($hatchSerialized, Fingerprinter::class), 'the manifest does NOT leak the class-string hatch FQCN either (md5 only)');
+
+// (4) An empty hatch (null default) yields a stable escape_hatch_hash; null and empty() are the same canonical form.
+$manifestNullHatch = $fingerprinter->manifest($fpHatchEmpty, [], [], [], [], [], [], '2020-01-01T00:00:00+00:00', $srcRoot8, null);
+$manifestEmptyHatch = $fingerprinter->manifest($fpHatchEmpty, [], [], [], [], [], [], '2020-01-01T00:00:00+00:00', $srcRoot8, OpenApiEscapeHatch::empty());
+assert_same(32, strlen($manifestNullHatch['escape_hatch_hash']), 'an empty hatch yields a 32-char md5 escape_hatch_hash');
+assert_same($manifestNullHatch['escape_hatch_hash'], $manifestEmptyHatch['escape_hatch_hash'], 'null hatch and empty() hatch produce the same escape_hatch_hash (one canonical form)');
+
+// (5) Single source of truth: escape_hatch_hash == md5 of the SAME canonical that feeds the fingerprint payload.
+//     (Fingerprinter::escapeHatchHash is private, but it is literally md5(json_encode(canonical)) — verify the
+//      manifest hash changes iff the hatch changes, which only holds if it is the SAME canonical form.)
+$manifestNoHatch = $fingerprinter->manifest($fpHatchEmpty, [], [], [], [], [], [], '2020-01-01T00:00:00+00:00', $srcRoot8, OpenApiEscapeHatch::empty());
+$manifestWithHatch = $fingerprinter->manifest($fpHatchEmpty, [], [], [], [], [], [], '2020-01-01T00:00:00+00:00', $srcRoot8, $hatchClass);
+assert_true($manifestNoHatch['escape_hatch_hash'] !== $manifestWithHatch['escape_hatch_hash'], 'escape_hatch_hash tracks the hatch (single canonical source of truth)');
+
 // cleanup
 $rrm = static function (string $dir) use (&$rrm): void {
     if (!is_dir($dir)) {
@@ -173,4 +244,6 @@ $rrm($rootB);
 $rrm($cfgRoot);
 $rrm($scanRoot);
 $rrm($scanRoot2);
+$rrm($srcRoot8);
+$rrm($hatchRoot);
 echo "Fingerprinter passed\n";

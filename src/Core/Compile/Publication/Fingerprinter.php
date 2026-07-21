@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace SpsFW\Core\Compile\Publication;
 
+use SpsFW\Core\Compile\OpenApi\OpenApiEscapeHatch;
+
 /**
  * Builds the deterministic source+config fingerprint and the publication manifest (plan §11.5, Step 5 fix-pass).
  *
@@ -28,10 +30,12 @@ namespace SpsFW\Core\Compile\Publication;
 final class Fingerprinter
 {
     /** Bumped on any change to the emitted artifact shapes; part of the fingerprint so a new engine invalidates.
-     *  spsfw-compile-3: the PRIMARY openapi.yml parity producer now scans a dedicated, caller-supplied
-     *  legacyOpenApiScanPaths (historical [src, libraryRoot] order) instead of reusing route discovery order — a
-     *  behavior change to the emitted spec, so the fingerprint invalidates the prior set. */
-    public const COMPILER_VERSION = 'spsfw-compile-3';
+     *  spsfw-compile-3: the PRIMARY openapi.yml parity producer scans a dedicated, caller-supplied
+     *  legacyOpenApiScanPaths (historical [src, libraryRoot] order) instead of reusing route discovery order.
+     *  spsfw-compile-4 (Step 8 / M6): the PRIMARY openapi.yml PRODUCER is now switchable via OpenApiSource
+     *  (Legacy swagger-php vs Metadata graph + escape hatch), and the escape hatch feeds the fingerprint via a
+     *  canonical representation — a behavior change to the emitted spec set, so the fingerprint invalidates. */
+    public const COMPILER_VERSION = 'spsfw-compile-4';
 
     /**
      * Recursively gather every .php source file under the discovery dirs (controllers, DTOs, …), deterministically
@@ -84,6 +88,7 @@ final class Fingerprinter
         array $operationIdMap = [],
         array $routeOverrideMap = [],
         array $legacyOpenApiScanPaths = [],
+        ?OpenApiEscapeHatch $escapeHatch = null,
     ): string {
         $sources = [];
         foreach ($sourceFiles as $path) {
@@ -112,6 +117,10 @@ final class Fingerprinter
                 'route_override_map' => $this->hashMap($routeOverrideMap),
             ],
             'legacy_openapi_scan_paths' => $legacyScanRelative,
+            // The escape hatch (Step 8 / M6) participates via ONE canonical representation — also the source
+            // of the manifest escape_hatch_hash. Deploy-path-stable keys only (class:<FQCN> / file:<relative>);
+            // content is a separate md5. No absolute deploy paths ever reach the payload or the manifest.
+            'escape_hatch' => $this->escapeHatchCanonical($escapeHatch, $projectRoot),
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
         return md5($payload);
@@ -137,6 +146,8 @@ final class Fingerprinter
         array $routeOverrideMap,
         array $appliedOverrides,
         string $builtAt,
+        string $projectRoot = '',
+        ?OpenApiEscapeHatch $escapeHatch = null,
     ): array {
         ksort($artifactHashes);
         return [
@@ -148,6 +159,10 @@ final class Fingerprinter
                 'operation_id_map' => $this->hashMap($operationIdMap),
                 'route_override_map' => $this->hashMap($routeOverrideMap),
             ],
+            // md5 of the SAME canonical representation that feeds the fingerprint payload — single source of
+            // truth (the Coordinator passes the hatch + projectRoot; it never computes its own hash). md5 ONLY:
+            // no scan targets, no absolute paths, no file content in the manifest.
+            'escape_hatch_hash' => $this->escapeHatchHash($escapeHatch, $projectRoot),
             'overrides_applied' => array_values($appliedOverrides),
             'artifact_hashes' => $artifactHashes,
             'built_at' => $builtAt,
@@ -208,6 +223,64 @@ final class Fingerprinter
     private function hashMap(array $map): string
     {
         return md5(json_encode($this->canonicalizeConfig($map), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * The md5 of the canonical escape-hatch representation — used for BOTH the fingerprint payload's
+     * escape_hatch section AND the manifest's escape_hatch_hash (single source of truth). The Coordinator
+     * passes the hatch + projectRoot and NEVER computes its own hash.
+     */
+    private function escapeHatchHash(?OpenApiEscapeHatch $hatch, string $projectRoot): string
+    {
+        return md5(json_encode($this->escapeHatchCanonical($hatch, $projectRoot), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * The canonical, DEPLOY-PATH-INDEPENDENT representation of the escape hatch. Scan targets use STABLE keys:
+     * a class-string target ⇒ `class:<FQCN>`; a file target ⇒ `file:<project-relative-path>`. The resolved
+     * file's CONTENT is a separate md5 (so a content change invalidates without leaking the path). A file that
+     * resolves OUTSIDE projectRoot is represented as `file:out-of-root` (no absolute path is ever emitted) — the
+     * merger already rejects such a target with a FATAL, so this representation is leak-free even pre-block.
+     * Schema keys are already deduped+sorted by the VO. null ⇒ an empty hatch canonical form.
+     *
+     * @return array<string, mixed>
+     */
+    private function escapeHatchCanonical(?OpenApiEscapeHatch $hatch, string $projectRoot): array
+    {
+        $hatch ??= OpenApiEscapeHatch::empty();
+
+        $targets = [];
+        foreach ($hatch->scanTargets as $target) {
+            $file = OpenApiEscapeHatch::resolveScanFile($target, $projectRoot);
+            $content = ($file !== null && is_file($file)) ? md5_file($file) : 'missing';
+            if (class_exists($target)) {
+                // A class-string target: stable by FQCN. The KEY (`class:<FQCN>`) is the deploy-path-stable identity;
+                // the file's CONTENT (md5) drives invalidation. The file PATH is deliberately NOT recorded here: a class
+                // file may live outside projectRoot (e.g. a framework class scanned by the app), in which case
+                // relativeTo() would fall back to an absolute path and break deploy-path-independence. FQCN + content
+                // are sufficient and never leak a deploy path.
+                $targets['class:' . $target] = [
+                    'kind' => 'class',
+                    'fqcn' => $target,
+                    'content' => $content,
+                ];
+                continue;
+            }
+            // A file target: stable by project-relative path (or the out-of-root sentinel — never absolute).
+            $relative = $file !== null ? $this->relativeTo($projectRoot, $file) : 'missing';
+            $leakSafe = ($relative === 'missing' || !str_starts_with($relative, '/')) ? $relative : 'out-of-root';
+            $targets['file:' . $leakSafe] = [
+                'kind' => 'file',
+                'path' => $leakSafe,
+                'content' => $content,
+            ];
+        }
+        ksort($targets);
+
+        return [
+            'scan_targets' => $targets,
+            'schema_keys' => $hatch->schemaKeys,
+        ];
     }
 
     /**
