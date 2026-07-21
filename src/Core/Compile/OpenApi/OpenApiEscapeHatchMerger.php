@@ -36,8 +36,10 @@ use Symfony\Component\Yaml\Yaml;
  *     `paths` must be absent or empty; any other root section (`webhooks`/`security`/`tags`/`servers`/…), and
  *     ANY `components` key other than `schemas`, is a FATAL.
  *
- * Plus: a requested schema key missing from the partial → FATAL; a graph↔fragment key collision → FATAL (graph
- * wins); an EXTERNAL `$ref` (http/https/file/relative) in a fragment → FATAL (the OpenApiValidator treats
+ * Plus: a requested schema key missing from the partial → FATAL; ONLY the declared `schemaKeys` are published —
+ * any other #[OA\Schema] the fragments declare is dropped before provenance/merge; a graph↔fragment key
+ * collision → FATAL (graph wins); an EXTERNAL `$ref` (http/https/file/relative) in a fragment → FATAL (the
+ * OpenApiValidator treats
  * external refs as resolved, so this narrow hatch forbids them — only local `#/components/schemas/…` is
  * allowed). A scan target that is unresolvable, or a file OUTSIDE projectRoot, is a FATAL (no absolute
  * deploy-path fallback). Diagnostics flow into the shared collector that blocks publication on any ERROR.
@@ -118,15 +120,22 @@ final class OpenApiEscapeHatchMerger
 
     /**
      * Resolve + dedup + sort the scan-target files, scan each separately, enforce the two shape guards, and
-     * return the surviving fragment schemas keyed by component name. Records FATATs for unresolvable targets,
-     * out-of-root files, forbidden annotations (via the guard), bad partial shape, cross-target key
-     * duplication, and requested-but-missing keys.
+     * return the surviving fragment schemas keyed by component name. Only keys in {@see OpenApiEscapeHatch::
+     * $schemaKeys} survive — every other #[OA\Schema] the fragments declare is dropped before provenance/merge
+     * (a whitelisted file may legitimately carry undeclared schemas; they are simply not published). Records
+     * FATATs for unresolvable targets, out-of-root files, forbidden annotations (via the guard), bad partial
+     * shape, cross-target key duplication (of REQUESTED keys), and requested-but-missing keys.
      *
      * @return array<string, array<string, mixed>>
      */
     private function extractFragmentSchemas(OpenApiEscapeHatch $hatch): array
     {
         $files = $this->resolveFiles($hatch);
+
+        // Only the declared schema keys ($hatch->schemaKeys) are EVER published. Filter the partial schemas
+        // down to those keys BEFORE provenance/merge so an undeclared #[OA\Schema] in a whitelisted file is
+        // dropped silently rather than leaked into the merged document.
+        $requested = array_fill_keys($hatch->schemaKeys, true);
 
         $keyToSource = [];
         $fragmentSchemas = [];
@@ -150,6 +159,9 @@ final class OpenApiEscapeHatchMerger
                 continue;
             }
             foreach ($schemas as $key => $schema) {
+                if (!isset($requested[$key])) {
+                    continue; // undeclared schema — fragments publish only requested keys.
+                }
                 if (isset($keyToSource[$key])) {
                     $this->diagnostics->error(
                         controller: null,

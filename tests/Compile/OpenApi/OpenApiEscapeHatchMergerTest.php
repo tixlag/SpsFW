@@ -193,4 +193,24 @@ array_walk_recursive($okMerged, static function (mixed $v, mixed $k) use (&$hasX
 assert_true(!$hasXfqcn, 'no x-fqcn vendor key is published by the merge');
 assert_true(!$hasNullableTrue, 'no legacy nullable:true is introduced by the merge');
 
+// ============================================================================
+// Whitelist FILTER: a fragment file may declare MORE schemas than requested. Only the declared
+// schemaKeys are published — undeclared fragment schemas are dropped, not leaked. Regression for the
+// latent bug where the merger added every #[OA\Schema] from a whitelisted file. PolymorphicFragment
+// carries PolymorphicThing + ConcreteA + ConcreteB; we request ONLY ConcreteA (a leaf, no inbound refs)
+// → the merged document must contain ConcreteA and neither of the other two.
+// ============================================================================
+$filterDiag = new CompileDiagnostics();
+$filterMerger = new OpenApiEscapeHatchMerger($filterDiag, $root);
+$filterMerged = $filterMerger->merge(
+    escapeHatchGraphDocument(),
+    new OpenApiEscapeHatch([\SpsOaTest\EscapeHatch\PolymorphicThing::class], ['ConcreteA']),
+);
+assert_true(!$filterDiag->hasErrors(), 'whitelist filter: a subset request is valid (no errors)');
+assert_same(
+    ['ConcreteA'],
+    array_keys($filterMerged['components']['schemas']),
+    'only the requested schema is published (undeclared fragment schemas are dropped, not leaked)',
+);
+
 echo "OpenApiEscapeHatchMerger passed\n";
