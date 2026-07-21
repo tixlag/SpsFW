@@ -11,6 +11,7 @@ use SpsFW\Core\Auth\Dto\AccessRulesArrayDto;
 use SpsFW\Core\Auth\Instances\UserAbstract;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Validation\Enum\ParamsIn;
+use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 
 class AccessRuleController extends RestController
 {
@@ -58,6 +59,7 @@ class AccessRuleController extends RestController
     )]
     #[Route('/api/auth/add-access-rules', ['PATCH'])]
     #[Validate(ParamsIn::Json, AccessRulesArrayDto::class)]
+    #[ApiResponse(status: 200, description: 'OK')]
     public function addAccessRules(AccessRulesArrayDto $accessRulesDto): UserAbstract
     {
         return $this->accessRulesService->addAccessRules($accessRulesDto);
@@ -96,6 +98,7 @@ class AccessRuleController extends RestController
         ]
     )]
     #[Route('/api/auth/set-access-rules', ['POST'])]
+    #[ApiResponse(status: 200, description: 'OK')]
     public function setAccessRules(#[JsonBody] AccessRulesArrayDto $accessRulesDto): UserAbstract
     {
         return $this->accessRulesService->setAccessRules($accessRulesDto);
