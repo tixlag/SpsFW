@@ -12,7 +12,6 @@ use SpsFW\Core\Exceptions\BaseException;
 use SpsFW\Core\Route\RestController;
 use SpsFW\Core\Router\DICacheBuilder;
 use SpsFW\Core\Router\Router;
-use SpsFW\Core\Attributes\OpenApi\Operation;
 use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 
 #[Controller]
@@ -52,9 +51,8 @@ class CoreUtilController extends RestController
         return ['result' => 'ok'];
     }
 
-    #[Route(path: '/test')]
+    #[Route(path: '/test', documented: false)]
     #[NoAuthAccess]
-    #[Operation(exclude: true)]
     public function test(): string
     {
         return 'Lumen (10.0.4) (Laravel Components ^10.0)';
@@ -64,8 +62,7 @@ class CoreUtilController extends RestController
      * @throws BaseException
      * @throws ReflectionException
      */
-    #[Route(path: '/core/update', httpMethods: ['POST'])]
-    #[Operation(exclude: true)]
+    #[Route(path: '/core/update', httpMethods: ['POST'], documented: false)]
     public function coreUpdate(): string
     {
         RuntimeCompileGate::assertAllowed('route, DI and OpenAPI documentation');
