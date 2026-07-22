@@ -336,52 +336,51 @@ final class DtoSchemaBuilder
             ? $type->getName()
             : ($type !== null ? (string) $type : null);
 
-        // Legacy OA items/ref fallback (schema parity, pre-M7/M8 OA cleanup): a typed #[Items] wins; otherwise
-        // the array element / nested ref is resolved from the legacy #[OA\Property(items:)/ref:] so the schema
-        // projection matches today's swagger-php output until the OA source is removed. This feeds ONLY the
-        // schema projection — the rule graph (oaTaggedProperties) replays OA verbatim and is untouched.
+        // Resolve the array element / single-object ref from EXPLICIT signals only — never from the absence of
+        // a signal. A typed #[Items] wins; otherwise a legacy OA `items:` element or `type:'array'` declares a
+        // LIST, and a legacy OA `type:object` / `additionalProperties` / inline `properties` declares an OBJECT.
+        // This feeds ONLY the schema projection — the rule graph (oaTaggedProperties) replays OA verbatim.
         $itemType = $this->itemsType($items);
-        $resolvedRefClass = $refClass;
+        $resolvedRefClass = $refClass; // reflection class type (a non-array class) — a sound single-object ref
         $oaItemType = $this->oaItemsType($oaArgs);
         if ($itemType === null && $oaItemType !== null) {
             $itemType = $oaItemType;
         }
-        if ($resolvedRefClass === null && $oaRef !== null && class_exists($oaRef)) {
-            $resolvedRefClass = $oaRef;
-        }
-
-        // M8a: a PHP `array` is a LIST only when it carries a list signal — #[Items], a legacy OA `items:`
-        // element, or OA `type:'array'`. Without one, the JSON value is an OBJECT/map (an opaque bag), and the
-        // honest encoding is `type: object` (objectMap), NOT a list with a guessed element. That covers three
-        // real shapes the inventory surfaces: (1) OA explicitly declares the property an object
-        // (`type:'object'` / `additionalProperties` / inline `properties`), (2) OA points at a single object
-        // via `$ref` (resolved to a real class ⇒ a `{$ref}` below; an unresolvable schema-name ref ⇒ an opaque
-        // object), and (3) an untyped array with no OA at all ⇒ a map. The fallback deliberately does NOT fire
-        // when `#[Items]` is present: a broken/ambiguous item declaration (neither/nor) is diagnosed as such,
-        // not silently folded into an object.
         $oaType = $oaArgs['type'] ?? null;
         $oaObjectSignal = $oaType === 'object'
             || array_key_exists('additionalProperties', $oaArgs)
             || array_key_exists('properties', $oaArgs);
-        $isFreeFormObject = $items === null
-            && $phpType === 'array'
+
+        // objectMap = an array that is EXPLICITLY declared an OBJECT/map. Permitted sources ONLY: a
+        // #[Field(objectMap: true)] flag, or a legacy OA object declaration (type:object / additionalProperties
+        // / inline properties) carried as a transitional parity signal. The compiler NEVER infers object-map
+        // from a bare array or a bare $ref — those are ambiguous (list vs map vs single object) — so they warn
+        // (below) until the developer classifies them explicitly.
+        $objectMap = $phpType === 'array'
             && $itemType === null
             && $resolvedRefClass === null
-            && ($oaObjectSignal || $oaRef !== null || ($oaType === null && $oaItemType === null));
+            && ($field?->objectMap === true || $oaObjectSignal);
 
-        // An array with no derivable element type is a migration gap ONLY when it is genuinely a list the
-        // developer neither itemized (`#[Items]`/OA items) nor declared an object/map, and that does not
-        // resolve to a single-object ref. Free-form objects and resolvable refs have honest encodings and
-        // surface no warning; a declared-but-itemless list (`type:'array'` with no items) still warns.
+        // A single-object ref for an array is honored ONLY once the developer has explicitly confirmed the
+        // object shape (objectMap). A bare OA $ref on an array does NOT silently become a single object — it
+        // warns until marked #[Field(objectMap: true)] (keeping the OA ref for its type ⇒ a typed {$ref}) or
+        // #[Items(class: ...)] (if it is in fact a list).
+        if ($objectMap && $resolvedRefClass === null && $oaRef !== null && class_exists($oaRef)) {
+            $resolvedRefClass = $oaRef;
+        }
+
+        // An array with no derivable element type AND no explicit object declaration is a genuine gap: the
+        // developer neither itemized it (#[Items]/OA items) nor declared it an object/map (#[Field(objectMap:true)]/
+        // OA object). It is diagnosed — never silently folded into a free-form object just to close the warning.
         $isArray = $phpType === 'array' || $oaType === 'array' || $oaItemType !== null;
-        if ($isArray && $itemType === null && $resolvedRefClass === null && !$isFreeFormObject) {
+        if ($isArray && $itemType === null && $resolvedRefClass === null && !$objectMap) {
             $this->diagnostics->warning(
                 controller: null,
                 method: null,
                 dto: $declaringClass,
                 field: $realName,
-                cause: sprintf('array property %s::$%s has no derivable item type', $declaringClass, $realName),
-                fix: "declare the element shape with #[Items(class: \ExampleDto::class)] or #[Items(type: 'integer')]",
+                cause: sprintf('array property %s::$%s has no derivable item type or object declaration', $declaringClass, $realName),
+                fix: "declare the element shape with #[Items(class: \ExampleDto::class)] / #[Items(type: 'integer')], or mark it a free-form object/map with #[Field(objectMap: true)]",
             );
         }
 
@@ -400,7 +399,7 @@ final class DtoSchemaBuilder
             ref: $resolvedRefClass ?? $oaRef,
             refClass: $resolvedRefClass,
             itemType: $itemType,
-            objectMap: $isFreeFormObject,
+            objectMap: $objectMap,
             format: $field?->format ?? ($oaArgs['format'] ?? null),
             nullable: $type?->allowsNull() ?? true, // untyped ⇒ optional (treated as nullable)
             hasDefault: $hasDefault,

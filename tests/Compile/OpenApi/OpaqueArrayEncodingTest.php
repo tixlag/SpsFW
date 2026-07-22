@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use OpenApi\Attributes as OA;
+use SpsFW\Core\Attributes\OpenApi\Field;
 use SpsFW\Core\Attributes\OpenApi\Items;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Compile\CompileDiagnostics;
@@ -14,12 +15,12 @@ use SpsFW\Core\Http\HttpMethod;
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
 
 /**
- * M8a: a PHP `array` is a LIST only when it carries a list signal (#[Items], legacy OA `items:`, or OA
- * `type:'array'`). Every other array-typed property is an opaque OBJECT/map and is encoded honestly as
- * `type: object` (objectMap) — or, when the OA points at a single class, a `{$ref}`. This closes the 26
- * "no derivable item type" warnings without fabricating element types: a genuine itemless LIST (OA
- * `type:'array'` with no items and no #[Items]) still warns, and a broken `#[Items]` (neither class nor
- * type) is still diagnosed (covered in DtoSchemaBuilderTest).
+ * objectMap is EXPLICIT-ONLY (fix-pass over M8a): a PHP `array` is ambiguous (list OR map), so the compiler
+ * NEVER infers an object/map from the absence of a list signal. objectMap is set ONLY by an explicit
+ * `#[Field(objectMap: true)]` flag or a legacy OA object declaration (`type:object` / `additionalProperties` /
+ * inline `properties`) carried as a transitional parity signal. A bare array, or an array + bare `$ref`
+ * without explicit cardinality, is NOT silently folded into an object or a single-object ref — it surfaces a
+ * warning until the developer classifies it. Lists stay honest via `#[Items]`.
  */
 
 final class OaeItemDto
@@ -36,18 +37,20 @@ final class OaeRefDto
 
 final class OaeDto
 {
-    // OA declares an object map ⇒ free-form object.
+    // (transitional parity) OA declares an object map ⇒ objectMap ⇒ free-form object. No warning.
     #[OA\Property(property: 'object_via_oa', type: 'object')]
     public array $objectViaOa;
 
-    // No OA at all, nullable ⇒ an untyped map ⇒ free-form object (nullable ⇒ type:[object,"null"]).
-    public ?array $mapNoOa;
+    // (explicit) #[Field(objectMap: true)] ⇒ objectMap ⇒ free-form object. No warning.
+    #[Field(objectMap: true)]
+    public array $fieldObjectMap;
 
-    // OA points at a single object via $ref (resolvable) ⇒ a {$ref}, NOT an array.
-    #[OA\Property(property: 'ref', ref: OaeRefDto::class)]
-    public array $ref;
+    // (explicit + typed) objectMap confirmed by the flag, type supplied by the OA ref ⇒ typed {$ref}. No warning.
+    #[Field(objectMap: true)]
+    #[OA\Property(property: 'ref_confirmed', ref: OaeRefDto::class)]
+    public array $refConfirmed;
 
-    // Real lists with explicit items.
+    // Real lists with explicit items. No warning.
     #[Items(type: 'object')]
     public array $itemsObject;
 
@@ -57,7 +60,14 @@ final class OaeDto
     #[Items(type: 'string')]
     public array $itemsScalar;
 
-    // A declared-but-itemless list (type:'array', no items, no #[Items]) ⇒ the ONE genuine gap that still warns.
+    // (ambiguous) no signal at all ⇒ NOT an object ⇒ warning. Emitted as a bare type:array.
+    public array $noSignal;
+
+    // (ambiguous) bare OA $ref with NO explicit cardinality ⇒ NOT a silent single object ⇒ warning.
+    #[OA\Property(property: 'bare_ref', ref: OaeRefDto::class)]
+    public array $bareRef;
+
+    // (genuine list gap) declared type:'array' with no items ⇒ warning.
     #[OA\Property(property: 'declared_list_no_items', type: 'array')]
     public array $declaredListNoItems;
 }
@@ -71,19 +81,21 @@ final class OaeController
     }
 }
 
-// --- DtoSchemaBuilder: the objectMap flag + the surviving itemless-list warning ---
+// --- DtoSchemaBuilder: objectMap is explicit-only; ambiguous arrays stay unresolved ---
 $builder = new DtoSchemaBuilder();
 $schema = $builder->build(OaeDto::class);
 $prop = static function (string $name) use ($schema): \SpsFW\Core\Compile\Metadata\PropertyMetadata {
     return $schema->property($name);
 };
 
-assert_true($prop('objectViaOa')->objectMap, 'OA type:object array ⇒ objectMap (free-form object)');
-assert_true($prop('mapNoOa')->objectMap, 'no-signal untyped array ⇒ objectMap (an opaque map)');
-assert_true(!$prop('ref')->objectMap && $prop('ref')->refClass === OaeRefDto::class, 'OA $ref on array ⇒ a single-object ref (not objectMap, not a list)');
+assert_true($prop('objectViaOa')->objectMap, 'OA type:object array ⇒ objectMap (transitional parity signal)');
+assert_true($prop('fieldObjectMap')->objectMap, '#[Field(objectMap:true)] ⇒ objectMap (explicit)');
+assert_true($prop('refConfirmed')->objectMap && $prop('refConfirmed')->refClass === OaeRefDto::class, 'objectMap + resolvable OA ref ⇒ typed single-object ref');
 assert_true(!$prop('itemsObject')->objectMap && $prop('itemsObject')->itemType === 'object', '#[Items(type:object)] ⇒ a list of free-form objects');
 assert_true(!$prop('itemsClass')->objectMap && $prop('itemsClass')->itemType === OaeItemDto::class, '#[Items(class)] ⇒ a typed list');
 assert_true(!$prop('itemsScalar')->objectMap && $prop('itemsScalar')->itemType === 'string', '#[Items(type:string)] ⇒ a scalar list');
+assert_true(!$prop('noSignal')->objectMap && $prop('noSignal')->itemType === null && $prop('noSignal')->refClass === null, 'bare array ⇒ NOT objectMap, NOT a ref ⇒ unresolved (ambiguous)');
+assert_true(!$prop('bareRef')->objectMap && $prop('bareRef')->refClass === null, 'array + bare $ref (no cardinality) ⇒ NOT a silent single-object ref');
 assert_true(!$prop('declaredListNoItems')->objectMap && $prop('declaredListNoItems')->itemType === null, 'OA type:array with no items ⇒ NOT folded into an object (stays a genuine list gap)');
 
 // --- the emitted OpenAPI shapes ---
@@ -95,18 +107,23 @@ $emitter = new OpenApiEmitter(new CompileDiagnostics());
 $doc = $emitter->emit($operations);
 $props = $doc['components']['schemas']['OaeDto']['properties'];
 
-assert_same(['type' => 'object'], $props['objectViaOa'], 'free-form object ⇒ {type: object} (no items, no guessed element)');
-assert_same(['type' => ['object', 'null']], $props['mapNoOa'], 'nullable untyped map ⇒ type:[object,"null"]');
-assert_same(['$ref' => '#/components/schemas/OaeRefDto'], $props['ref'], 'OA $ref on an array ⇒ a single-object {$ref}');
+assert_same(['type' => 'object'], $props['objectViaOa'], 'OA type:object ⇒ {type: object}');
+assert_same(['type' => 'object'], $props['fieldObjectMap'], '#[Field(objectMap:true)] ⇒ {type: object}');
+assert_same(['$ref' => '#/components/schemas/OaeRefDto'], $props['refConfirmed'], 'objectMap + OA ref ⇒ typed single-object {$ref}');
 assert_same(['type' => 'array', 'items' => ['type' => 'object']], $props['itemsObject'], '#[Items(type:object)] ⇒ array of free-form objects');
 assert_same(['type' => 'array', 'items' => ['$ref' => '#/components/schemas/OaeItemDto']], $props['itemsClass'], '#[Items(class)] ⇒ array of {$ref}');
 assert_same(['type' => 'array', 'items' => ['type' => 'string']], $props['itemsScalar'], '#[Items(type:string)] ⇒ array of strings');
-assert_same(['type' => 'array'], $props['declaredListNoItems'], 'itemless declared list ⇒ type:array with no items (the one remaining gap)');
+assert_same(['type' => 'array'], $props['noSignal'], 'bare array ⇒ emitted as a bare type:array (shape unresolved; warned)');
+assert_same(['type' => 'array'], $props['bareRef'], 'array + bare $ref ⇒ NOT a {$ref} (cardinality unconfirmed; warned)');
+assert_same(['type' => 'array'], $props['declaredListNoItems'], 'itemless declared list ⇒ type:array with no items (warned)');
 
-// --- warning inventory: ONLY the genuine itemless list surfaces a warning ---
+// --- warning inventory: the three ambiguous/gap arrays warn; every explicit object/list is silent ---
 $warnings = $diag->warnings();
-assert_same(1, count($warnings), 'only the declared-but-itemless list warns; every opaque map/ref/items array is silent');
-assert_true(str_contains($warnings[0]['cause'], 'no derivable item type'), 'the surviving warning is the itemless-list gap');
-assert_same('declaredListNoItems', $warnings[0]['field'], 'the surviving warning is attributed to the itemless list');
+$warnedFields = array_map(static fn(array $w): string => $w['field'], $warnings);
+sort($warnedFields);
+assert_same(['bareRef', 'declaredListNoItems', 'noSignal'], $warnedFields, 'only the ambiguous bare array, the bare-$ref array, and the itemless declared list warn');
+foreach ($warnings as $w) {
+    assert_true(str_contains($w['cause'], 'no derivable item type or object declaration'), "warning cause explains the gap: {$w['field']}");
+}
 
 echo "Opaque-array encoding passed\n";

@@ -8,6 +8,7 @@ use SpsFW\Core\Attributes\Validation\JsonBody;
 use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\Route\RouteMetadataCompiler;
 use SpsFW\Core\Http\HttpMethod;
+use SpsFW\Core\Http\Request;
 
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
 
@@ -105,3 +106,58 @@ assert_same('code_1c', $p->name, 'placeholder raw name');
 assert_same('string', $p->type, '{code_1c} ⇒ $code1c positionally; the #[JsonBody] DTO is appended after path values');
 
 echo "Path-param positional passed\n";
+
+/**
+ * Negative parity: the runtime binds args as matchParams ++ dtoParams and injects NO class-typed params, so a
+ * class-typed param or a DTO occupying a path-receiver slot is an incompatible contract — the Router would feed
+ * a raw path string into it. These must be DIAGNOSED, not masked by filtering the param away.
+ */
+final class PathParamBadContractController
+{
+    // A class-typed param at the path-receiver slot: the Router does not inject it, so {id} would be passed in
+    // as a raw string. Diagnosed; {id} is still documented as a required string path-param.
+    #[Route('/api/pp/badclass/{id}', [HttpMethod::GET])]
+    #[ApiResponse(status: 200, description: 'ok')]
+    public function badClass(Request $request): void
+    {
+    }
+
+    // A DTO declared BEFORE the scalar receiver: the runtime binds matchParams first, so {id} would land on the
+    // DTO. Diagnosed; {id} is still documented as a required string path-param.
+    #[Route('/api/pp/baddto/{id}', [HttpMethod::POST])]
+    #[ApiResponse(status: 200, description: 'ok')]
+    public function badDto(#[JsonBody] PathParamPositionalDto $dto, string $id): void
+    {
+    }
+}
+
+$badDiag = new CompileDiagnostics();
+$badOps = (new RouteMetadataCompiler($badDiag))->compileOperationClasses([PathParamBadContractController::class]);
+assert_same(0, $badDiag->errorCount(), 'bad-contract fixture: no fatal errors');
+assert_same(2, $badDiag->warningCount(), 'both incompatible signatures are diagnosed (class-typed receiver + DTO-before-path)');
+
+$badByMethod = [];
+foreach ($badOps as $op) {
+    $badByMethod[$op->method] = $op;
+}
+
+$byField = [];
+foreach ($badDiag->warnings() as $w) {
+    $byField[$w['method']] = $w;
+}
+
+// class-typed receiver ⇒ diagnostic names the slot + the class; {id} still documented as a required string.
+assert_true(str_contains($byField['badClass']['cause'], 'class-typed parameter'), 'class-typed receiver diagnosed');
+assert_true(str_contains($byField['badClass']['cause'], 'Request'), 'diagnostic names the class type');
+assert_true(str_contains($byField['badClass']['cause'], '{id}'), 'diagnostic names the path slot');
+assert_same(1, count($badByMethod['badClass']->pathParams), '{id} still documented despite the bad receiver');
+assert_same('id', $badByMethod['badClass']->pathParams[0]->name, 'placeholder raw name preserved');
+assert_true($badByMethod['badClass']->pathParams[0]->required, 'required path-param');
+
+// DTO before path scalar ⇒ diagnostic names the DTO + the slot; {id} still documented as a required string.
+assert_true(str_contains($byField['badDto']['cause'], 'DTO parameter'), 'DTO-before-path diagnosed');
+assert_true(str_contains($byField['badDto']['cause'], '{id}'), 'diagnostic names the path slot');
+assert_same(1, count($badByMethod['badDto']->pathParams), '{id} still documented despite the bad order');
+assert_same('id', $badByMethod['badDto']->pathParams[0]->name, 'placeholder raw name preserved');
+
+echo "Path-param negative parity passed\n";

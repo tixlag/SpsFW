@@ -19,10 +19,12 @@ use SpsFW\Core\Compile\Introspection\RequiredSource;
  *  - ref         : FQCN of a nested DTO the graph references; null for scalars / collections of scalars
  *  - refClass    : reflection-derived nested class (first non-builtin type member), the parity source for ref
  *  - itemType    : for arrays: the element PHP type / FQCN, else null (resolved via #[Items])
- *  - objectMap   : a PHP `array` that is semantically a free-form OBJECT/map (JSON object, not a list) —
- *                  encoded as `type: object` (M8a). Set when the array carries an object signal (legacy
- *                  `#[OA\Property(type:object|additionalProperties|properties|$ref)]`) or no list signal at
- *                  all, and has no derivable element type; a real list still uses itemType.
+ *  - objectMap   : a PHP `array` EXPLICITLY declared an OBJECT/map (a JSON object, not a sequence). Set ONLY
+ *                  by an explicit signal — `#[Field(objectMap: true)]` or a legacy OA object declaration
+ *                  (`type:object`/`additionalProperties`/inline `properties`). NEVER inferred from a bare array
+ *                  or a bare `$ref` (those are ambiguous and surface a warning instead). When objectMap is set
+ *                  AND a resolvable ref is present, the emitter renders the typed single object `{$ref}`;
+ *                  otherwise it renders free-form `{type: object}`. A real list still uses itemType.
  *  - format      : OpenAPI format hint (uuid, date, date-time, email, …) from #[Field(format)] or class type
  *  - constraints : minimum/maximum/minLength/maxLength/enum from #[Field]
  *  - nullable / hasDefault / defaultValue : the PHP-type optionality signals (post-OA required source)

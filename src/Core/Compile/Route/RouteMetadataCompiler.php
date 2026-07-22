@@ -869,58 +869,103 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Path parameters: each {name} placeholder crossed with the method signature POSITIONALLY — the same
-     * binding the runtime Router uses. Router::executeControllerMethod builds the action args as
-     * matchParams ++ dtoParams and invokes with `...$args`, so placeholder[i] lands on the i-th
-     * path-receiver parameter regardless of its NAME; the placeholder name is NEVER required to match a
-     * PHP parameter name (kebab→camel is a Router-internal concern, irrelevant to the positional binding).
-     * Accordingly:
-     *  - OpenAPI parameter.name is always the RAW placeholder;
-     *  - the PHP type is derived from the positionally-corresponding path-receiver — a scalar param with
-     *    NO #[JsonBody]/#[PostBody]/#[FormDataBody]/#[QueryParams] DTO marker (those are appended AFTER
-     *    the path values) and not a class-typed injection such as Request;
-     *  - a placeholder with no positional receiver (the method consumes it via Request, or it is unused)
-     *    is still documented as a valid required string path-param. No diagnostic: the metadata OpenAPI
-     *    stays correct and the runtime route resolves (matches the Router's positional semantics).
+     * Path parameters: each {name} placeholder mapped to the method signature POSITIONALLY, mirroring the
+     * runtime binding. Router::executeControllerMethod builds the action args as `matchParams` (the path
+     * values in placeholder order) ++ `dtoParams` (the ValidateAttr DTO params in declaration order) and
+     * invokes with `...$args`; it injects NO class-typed params (deps arrive via constructor DI /
+     * $this->request, and PHP silently ignores extra positional args). So the leading #placeholder params
+     * must be scalar path receivers in placeholder order; ValidateAttr DTO params follow and consume the
+     * post-placeholder slots.
+     *
+     *  - OpenAPI parameter.name is always the RAW placeholder (it need not match the PHP param name — kebab
+     *    →camel is a Router-internal concern, irrelevant to positional binding).
+     *  - A scalar path receiver ⇒ the PHP type (int/string/…) of the positionally-corresponding param.
+     *  - A ValidateAttr DTO param, or any class-typed param, that occupies a path-receiver slot is an
+     *    INCOMPATIBLE runtime contract: the Router would feed a raw path string into it (class-typed params
+     *    are not injected). Diagnosed explicitly — NOT masked by filtering the param away.
+     *  - A placeholder with no scalar receiver (consumed via Request, or unused) is still a valid required
+     *    string path-param. No diagnostic: the route resolves and reading a path value via Request is a
+     *    legitimate pattern (PHP ignores the extra positional arg).
      *
      * @return list<ParameterMetadata>
      */
     private function collectPathParams(ReflectionMethod $method, string $path): array
     {
-        $params = [];
         preg_match_all('/{([a-zA-Z0-9_-]+)}/', $path, $matches);
+        $placeholders = $matches[1];
+        $placeholderCount = count($placeholders);
+        $controller = $method->getDeclaringClass()->getName();
+        $methodName = $method->getName();
 
-        // Path-receiver candidates in declaration order: skip DTO-marker params (bound after the path
-        // values) and class-typed injections (Request/services — not scalar path receivers).
-        $candidates = [];
+        $params = [];
+        $cursor = 0;
         foreach ($method->getParameters() as $parameter) {
-            if ($parameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF) !== []) {
-                continue;
+            if ($cursor >= $placeholderCount) {
+                break; // remaining params are post-placeholder (DTOs / optional deps) — not path receivers
             }
+            $rawName = $placeholders[$cursor];
+            $isDtoParam = $parameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF) !== [];
             $type = $parameter->getType();
-            if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
+            $isClassTyped = $type instanceof ReflectionNamedType && !$type->isBuiltin();
+
+            if ($isDtoParam) {
+                // DTO in a path-receiver slot: the runtime binds matchParams BEFORE dtoParams, so a path
+                // string would land on the DTO. Diagnose (do not mask); still document the slot as a string.
+                $this->diagnostics->warning(
+                    controller: $controller,
+                    method: $methodName,
+                    dto: null,
+                    field: $rawName,
+                    cause: sprintf(
+                        'DTO parameter $%s occupies path-receiver slot {%s}; the Router binds matchParams positionally before dtoParams, so the path value would be passed into the DTO',
+                        $parameter->getName(),
+                        $rawName,
+                    ),
+                    fix: 'move scalar path parameters before any DTO parameter in the method signature',
+                );
+                $params[] = new ParameterMetadata($rawName, ParameterMetadata::IN_PATH, required: true);
+                $cursor++;
                 continue;
             }
-            $candidates[] = $parameter;
+            if ($isClassTyped) {
+                // The Router injects NO class-typed action params — a class-typed param in a path-receiver
+                // slot would receive a raw path string. Diagnose; still document the slot as a string.
+                $this->diagnostics->warning(
+                    controller: $controller,
+                    method: $methodName,
+                    dto: null,
+                    field: $rawName,
+                    cause: sprintf(
+                        'class-typed parameter $%s (%s) occupies path-receiver slot {%s}; the Router does not inject class-typed action parameters — a raw path string would be passed into it',
+                        $parameter->getName(),
+                        $type instanceof ReflectionNamedType ? $type->getName() : (string) $type,
+                        $rawName,
+                    ),
+                    fix: 'read the path value via Request, or declare a scalar (string/int) parameter',
+                );
+                $params[] = new ParameterMetadata($rawName, ParameterMetadata::IN_PATH, required: true);
+                $cursor++;
+                continue;
+            }
+
+            // Scalar path receiver — maps to this placeholder by positional order (name match is irrelevant).
+            $mapped = $this->typeMapper->map($type);
+            $params[] = new ParameterMetadata(
+                name: $rawName,
+                in: ParameterMetadata::IN_PATH,
+                required: true,
+                type: $mapped['type'],
+                format: $mapped['format'],
+            );
+            $cursor++;
         }
 
-        foreach ($matches[1] as $i => $rawName) {
-            $receiver = $candidates[$i] ?? null;
-            if ($receiver !== null) {
-                $mapped = $this->typeMapper->map($receiver->getType());
-                $params[] = new ParameterMetadata(
-                    name: $rawName,
-                    in: ParameterMetadata::IN_PATH,
-                    required: true,
-                    type: $mapped['type'],
-                    format: $mapped['format'],
-                );
-                continue;
-            }
-            // No positional receiver: consumed via Request (or unused). Document a valid required string
-            // path-param; emit no diagnostic (correct metadata OpenAPI, runtime route resolves).
-            $params[] = new ParameterMetadata($rawName, ParameterMetadata::IN_PATH, required: true);
+        // Placeholders beyond the scalar receivers (consumed via Request, or unused) remain valid required
+        // string path-params — no diagnostic (the runtime route resolves; PHP ignores the extra positional arg).
+        for (; $cursor < $placeholderCount; $cursor++) {
+            $params[] = new ParameterMetadata($placeholders[$cursor], ParameterMetadata::IN_PATH, required: true);
         }
+
         return $params;
     }
 

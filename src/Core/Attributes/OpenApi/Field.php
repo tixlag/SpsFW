@@ -20,6 +20,14 @@ use Attribute;
  * rule-graph correctness; targets property (incl. promoted constructor parameters). When applied to a DTO
  * CLASS, only `schema` is meaningful — it overrides the component name {@see \SpsFW\Core\Compile\OpenApi\SchemaNameResolver}
  * assigns the class (the disambiguation lever for short-name collisions).
+ *
+ * `objectMap` is the ONLY explicit way to tell the compiler a PHP `array` property serializes as a free-form
+ * OBJECT/map (a JSON object, not a sequence) when nothing else proves it. The compiler NEVER infers object-map
+ * shape from the absence of a list signal — a bare PHP `array` is ambiguous (it may be a list OR a map) — so
+ * the shape must be declared explicitly here, or carried by a legacy OA `type:object` / `additionalProperties`
+ * / inline-`properties` declaration. A `#[Field(objectMap: true)]` array that ALSO carries a resolvable
+ * `#[OA\Property(ref: X::class)]` renders as the typed single object `{$ref: X}` (the explicit flag confirms
+ * cardinality; the OA ref supplies the type); otherwise it renders as free-form `{type: object}`.
  */
 #[Attribute(Attribute::TARGET_PROPERTY | Attribute::TARGET_CLASS)]
 final readonly class Field
@@ -39,6 +47,7 @@ final readonly class Field
         public ?string $schema = null,
         public bool $readOnly = false,
         public bool $writeOnly = false,
+        public bool $objectMap = false,
     ) {
     }
 }

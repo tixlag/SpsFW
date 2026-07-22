@@ -506,11 +506,15 @@ final class OpenApiEmitter
      */
     private function renderProperty(PropertyMetadata $property, array &$componentsSchemas): array
     {
-        // A free-form object/map (M8a): a PHP `array` whose JSON value is an object, not a sequence. The
-        // compiler sets objectMap only for arrays with no list signal (an object-shaped OA decl, a single-
-        // object `$ref`, or an untyped map) — encoded honestly as `type: object` (nullability folds in "null").
+        // An explicitly-declared object/map (a PHP `array` whose JSON value is an object, not a sequence).
+        // objectMap is set ONLY by an explicit #[Field(objectMap: true)] or a legacy OA object declaration. When
+        // the developer also supplied a resolvable `$ref`, the explicit flag confirms cardinality and the ref
+        // supplies the type ⇒ render the typed single object `{$ref}`; otherwise render free-form `type: object`.
         if ($property->objectMap) {
-            return $this->withConstraints(['type' => 'object'], $property);
+            $schema = $property->refClass !== null
+                ? $this->classRefSchema($property->refClass, $componentsSchemas)
+                : ['type' => 'object'];
+            return $this->withConstraints($schema, $property);
         }
 
         // Array element (#[Items] / legacy OA items).
