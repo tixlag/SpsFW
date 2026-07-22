@@ -335,11 +335,14 @@ assert_true(isset($ex['/rca/explicitdoc']), 'explicit documented:true beats Oper
 assert_same(201, $ex['/rca/explicitstatus']->responses[0]->status, 'explicit successStatus:201 beats the AST-inferred default status');
 
 // ============================================================================
-// 12. D3 — success branches with the SAME schema but DIFFERENT statuses do not collapse to the last branch.
+// 12. Success-status inference: without explicit markup, conflicting OR non-literal statuses are compile
+//     ERRORs (not a silent 200); an explicit multi-success #[ApiResponse] contract satisfies the requirement
+//     and the AST status then adds NO spurious diagnostic.
 // ============================================================================
-final class RcaStatusConflictController
+final class RcaStatusInferenceController
 {
-    #[Route('/rca/statusconflict', [HttpMethod::GET])]
+    // different literal success statuses, no markup ⇒ ERROR (the single-status model cannot represent them).
+    #[Route('/rca/si/conflict', [HttpMethod::GET])]
     public function conflict(bool $ok): Response
     {
         if ($ok) {
@@ -347,12 +350,41 @@ final class RcaStatusConflictController
         }
         return Response::json(new RcaUserDto(), 200);
     }
+
+    // a NON-LITERAL status expression ⇒ ERROR (NOT silently 200); the schema is still derivable.
+    #[Route('/rca/si/dynamic', [HttpMethod::GET])]
+    public function dynamic(int $status): Response
+    {
+        return Response::json(new RcaUserDto(), $status);
+    }
+
+    // an explicit multi-success #[ApiResponse] contract ⇒ the AST status does NOT add a spurious diagnostic.
+    #[Route('/rca/si/multimark', [HttpMethod::GET])]
+    #[ApiResponse(RcaUserDto::class, 200)]
+    #[ApiResponse(RcaUserDto::class, 201)]
+    public function multiMarked(bool $ok): Response
+    {
+        if ($ok) {
+            return Response::json(new RcaUserDto(), 201);
+        }
+        return Response::json(new RcaUserDto(), 200);
+    }
 }
-$scd = new CompileDiagnostics();
-$scop = rcaCompile(RcaStatusConflictController::class, $scd)[0];
-assert_same(RcaUserDto::class, $scop->responses[0]->schema->className, 'same-DTO branches ⇒ definite schema regardless of status');
-assert_same(200, $scop->responses[0]->status, 'differing branch statuses do NOT collapse to the last branch (201) — fall back to 200');
-assert_true($scd->hasWarnings(), 'differing success statuses surface a diagnostic');
+$sid = new CompileDiagnostics();
+$sibyPath = [];
+foreach (rcaCompile(RcaStatusInferenceController::class, $sid) as $op) {
+    $sibyPath[$op->path] = $op;
+}
+// conflict: schema still definite; status falls back to 200 (does NOT collapse to the last branch, 201).
+assert_same(RcaUserDto::class, $sibyPath['/rca/si/conflict']->responses[0]->schema->className, 'conflict: same-DTO branches ⇒ definite schema regardless of status');
+assert_same(200, $sibyPath['/rca/si/conflict']->responses[0]->status, 'conflict: differing statuses do NOT collapse to the last branch (201) — fall back to 200');
+// dynamic: the schema is still derivable; the non-literal status does NOT become 200.
+assert_same(RcaUserDto::class, $sibyPath['/rca/si/dynamic']->responses[0]->schema->className, 'dynamic: Response::json(new Dto(), $status) schema is still derivable');
+// exactly the two status ERRORs (conflict + dynamic); multimark adds none; there are no warnings.
+assert_same(2, $sid->errorCount(), 'conflict + dynamic each surface one successStatus ERROR; the multi-success markup adds none');
+assert_true(!$sid->hasWarnings(), 'conflicting / non-literal statuses are ERRORs, not warnings; the explicit multi-success contract is clean');
+// multimark: the explicit contract keeps BOTH declared responses verbatim.
+assert_same([200, 201], array_map(static fn ($r): int => $r->status, $sibyPath['/rca/si/multimark']->responses), 'multimark: both declared success statuses (200 + 201) preserved');
 
 // ============================================================================
 // 13. D4 — a success body at status 204 is an ERROR regardless of its source (returns / native / AST / ApiResponse).
@@ -381,6 +413,30 @@ final class RcaNoBody204Controller
 $nd = new CompileDiagnostics();
 rcaCompile(RcaNoBody204Controller::class, $nd);
 assert_same(4, $nd->errorCount(), 'a body at status 204 is an ERROR from every source (returns/native/AST/ApiResponse)');
+
+// ============================================================================
+// 13b. D4 (universal across multi-success): EVERY declared 2xx ApiResponse is checked for a 204+body BEFORE the
+//      multi-success early-return — two success ApiResponses where one is 204-with-schema is a compile ERROR.
+// ============================================================================
+final class RcaMultiSuccess204Controller
+{
+    #[Route('/rca/ms204', [HttpMethod::GET])]
+    #[ApiResponse(RcaUserDto::class, 200)]
+    #[ApiResponse(RcaUserDto::class, 204)]
+    public function oneIs204() {}
+
+    #[Route('/rca/ms204clean', [HttpMethod::GET])]
+    #[ApiResponse(RcaUserDto::class, 200)]
+    #[ApiResponse(null, 204)]
+    public function clean204() {}
+}
+$m24d = new CompileDiagnostics();
+$m24byPath = [];
+foreach (rcaCompile(RcaMultiSuccess204Controller::class, $m24d) as $op) {
+    $m24byPath[$op->path] = $op;
+}
+assert_same(1, $m24d->errorCount(), 'a 2xx ApiResponse carrying a body at 204 is an ERROR even alongside another success ApiResponse');
+assert_true(isset($m24byPath['/rca/ms204clean']), 'a bodyless 204 next to a 200 success is valid (no error from the clean case)');
 
 // ============================================================================
 // 14. Inferred + explicit merge; same-status different-schema is an ERROR.
@@ -413,5 +469,42 @@ final class RcaConflictRespController
 $cd = new CompileDiagnostics();
 rcaCompile(RcaConflictRespController::class, $cd);
 assert_true($cd->hasErrors(), 'a declared ApiResponse redeclaring the success status with a different schema is a compile ERROR');
+
+// ============================================================================
+// 15. Explicit Route scalar/array fields are canonical — an explicitly passed null/[] (distinguished from the
+//     constructor default via getArguments) wins over #[Operation] and does NOT fall back. Mirrors deprecated.
+// ============================================================================
+final class RcaExplicitScalarController
+{
+    // summary: null explicit ⇒ Route canonical (no Operation fallback); the clashing Operation summary warns.
+    #[Route('/rca/ex/nullsummary', [HttpMethod::GET], summary: null)]
+    #[Operation(summary: 'FromOp')]
+    public function nullSummary() {}
+
+    // operationId: null explicit ⇒ Route canonical ⇒ convention id; Operation id is NOT used (clash warns).
+    #[Route('/rca/ex/nulloid', [HttpMethod::GET], operationId: null)]
+    #[Operation(id: 'legacyId')]
+    public function nullId() {}
+
+    // tags: [] explicit ⇒ canonical [] (no Operation fallback, no controller-short default).
+    #[Route('/rca/ex/nulltags', [HttpMethod::GET], tags: [])]
+    public function nullTags() {}
+
+    // summary NOT passed ⇒ Operation fallback (BC) — the distinction from explicit null above.
+    #[Route('/rca/ex/fallback', [HttpMethod::GET])]
+    #[Operation(summary: 'FromOp')]
+    public function fallback() {}
+}
+$exd = new CompileDiagnostics();
+$exbyPath = [];
+foreach (rcaCompile(RcaExplicitScalarController::class, $exd) as $op) {
+    $exbyPath[$op->path] = $op;
+}
+assert_same(null, $exbyPath['/rca/ex/nullsummary']->summary, 'explicit summary:null is canonical — Operation summary is NOT the fallback');
+assert_true($exbyPath['/rca/ex/nulloid']->operationId !== 'legacyId', 'explicit operationId:null ⇒ convention id (Operation legacyId is NOT used)');
+assert_same([], $exbyPath['/rca/ex/nulltags']->tags, 'explicit tags:[] is canonical [] — no controller-short default');
+assert_same('FromOp', $exbyPath['/rca/ex/fallback']->summary, 'summary NOT passed ⇒ Operation fallback still works (distinct from explicit null)');
+$scalarConflicts = array_filter($exd->warnings(), static fn (array $w): bool => in_array($w['field'], ['summary', 'operationId'], true));
+assert_same(2, count($scalarConflicts), 'explicit null summary / operationId clashing with Operation each surface a conflict warning (Route wins)');
 
 echo "Route contract passed\n";

@@ -25,6 +25,10 @@ use SpsFW\Core\Compile\Metadata\SchemaMetadata;
  *                    single-status success model cannot represent this, so the compiler diagnoses it (asking
  *                    for an explicit multi-response declaration or successStatus) and falls back to 200. Order-
  *                    independent: `status` is null with statusConflict=true regardless of return order.
+ *  - statusIndeterminate: at least one success branch passes a NON-LITERAL status expression to
+ *                    Response::json (e.g. `Response::json($x, $code)`) — the status is known only at runtime.
+ *                    Such a status is NOT silently treated as 200; the compiler diagnoses it (asking for an
+ *                    explicit successStatus or multi-response markup) unless explicit markup already covers it.
  *  - reason        : why inference is non-definite (for diagnostics).
  *
  * Pure value object — building a {@see \SpsFW\Core\Compile\Metadata\ResponseMetadata} from it is the
@@ -40,6 +44,7 @@ final readonly class SuccessInference
         public bool $collection = false,
         public ?int $status = null,
         public bool $statusConflict = false,
+        public bool $statusIndeterminate = false,
         public ?string $reason = null,
     ) {
     }

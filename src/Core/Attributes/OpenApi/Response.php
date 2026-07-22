@@ -12,9 +12,10 @@ use Attribute;
  * Required whenever the success return type is NOT auto-derivable (plan §7): an opaque framework
  * {@see \SpsFW\Core\Http\Response}, a bare `array` without an item type, a non-eligible class (domain entity
  * that is not a `*Dto`), a union, or a non-200 success with headers. When the return IS derivable (a `*Dto`,
- * an enum, or an array-of-`*Dto` with {@see Items}), the compiler infers the 200 response and this attribute
- * is optional. Declaring any `#[Response]` takes the operation's responses over entirely (no 200 is then
- * auto-inferred) — declare the success response explicitly in that case.
+ * an enum, or an array-of-`*Dto` with {@see Items}), the compiler infers the 200 success response and a success
+ * `#[Response]` is optional. A 2xx `#[Response]` is the SUCCESS response (it supplies the success body/status,
+ * so no success is then auto-inferred); a non-2xx `#[Response]` SUPPLEMENTS the success alongside the standard
+ * errors rather than replacing them. Declare the success response explicitly when the body is not auto-derivable.
  *
  * `schema` is a class-string projected through DtoSchemaBuilder; it may name a `*Dto`, a backed enum, or an
  * entity whose JSON shape is otherwise described by its properties.

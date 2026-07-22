@@ -8,10 +8,10 @@ use PhpParser\Node;
 use PhpParser\NodeFinder;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\NameResolver;
+use PhpParser\NodeVisitorAbstract;
 use PhpParser\Parser;
 use PhpParser\ParserFactory;
 use ReflectionMethod;
-use ReflectionNamedType;
 
 /**
  * Conservative AST inference of a controller action's SUCCESS body (M8b + fix-pass).
@@ -27,23 +27,34 @@ use ReflectionNamedType;
  * FQCN/trait (from reflection) + the Reflection start/end line range — never by short name alone — so two
  * classes/traits defining a same-named method never mix.
  *
- * SUCCESS inference ({@see inferSuccess()}) walks `return` statements and recognizes, via the resolved
- * `Response` class, the success producers `Response::json($data, $status=200)` / `Response::created($data)`
+ * SUCCESS inference ({@see inferSuccess()}) walks the action's OWN `return` statements and recognizes, via the
+ * resolved `Response` class, the success producers `Response::json($data, $status=200)` / `Response::created($data)`
  * (201) / `Response::ok()` (200) / `Response::noContent()` (204). Recognized payload shapes:
  *   A. `Response::json(new Dto())`                       ⇒ Dto (single)
  *   B. `$d = new Dto(); … return Response::json($d);`    ⇒ Dto (single)
  *   C. `Response::json([new Dto(), …])` homogeneous      ⇒ [Dto]
  *   D. several success returns of the SAME Dto           ⇒ Dto
  *   E. `Response::error(...)` / `throw`                  ⇒ ignored (not a success body)
- *   F. `Response::json($this->method())`                 ⇒ the callee's declared single-class return type
- * Anything else (a loop-built/mutable array, divergent DTOs across branches, `array_map`, callbacks,
- * polymorphism, a bare non-Response return) ⇒ NON-DEFINITE (the compiler asks for `returns`).
+ * A callee resolved only through its return type (`Response::json($this->method())` / `Response::json(self::make())`)
+ * is NOT inferred — it stays NON-DEFINITE (no interprocedural data-flow). Anything else (a loop-built/mutable
+ * array, divergent DTOs across branches, `array_map`, callbacks, polymorphism, a bare non-Response return,
+ * a dynamic `Response::{$method}(...)` name) ⇒ NON-DEFINITE (the compiler asks for `returns`).
  *
- * STATUS is tracked INDEPENDENTLY of the body shape: every success branch contributes its literal status
- * (json's explicit/default status, created=201, ok=200, noContent=204). The reported `status` is the
- * UNAMBIGUOUS status — set only when all status-bearing branches agree — and `statusConflict` flags branches
- * that DISAGREE (the single-status model cannot represent them; the compiler then asks for an explicit
- * multi-response declaration). This is order-independent: it never collapses to the last branch's status.
+ * SCOPING: only the action's DIRECT body is analyzed. Returns and assignments nested inside a closure, an
+ * arrow function, or an anonymous class declared within the action are SEPARATE scopes and never collected —
+ * a helper closure's `return` or its `$x = new Dto()` is not the action's. {@see findInBody()} stops at those
+ * boundaries (NodeFinder would descend into them). A dynamic `Response` method name (`Response::{$m}()`) is
+ * detected before any `toString()` and treated as non-definite (it never crashes the compiler).
+ *
+ * STATUS is tracked INDEPENDENTLY of the body shape and is TRI-state per branch:
+ *   - `Response::json()` with no status argument ⇒ the 200 default (a known status);
+ *   - `Response::json($x, 201)` with a LITERAL int status ⇒ that status;
+ *   - `Response::json($x, $var)` with a NON-LITERAL status expression ⇒ INDETERMINATE (NOT 200).
+ * The reported `status` is the UNAMBIGUOUS status — set only when every status-bearing branch agrees — and
+ * `statusConflict` flags branches that DISAGREE. `statusIndeterminate` flags any branch whose status is a
+ * non-literal expression. `statusConflict`/`statusIndeterminate` are surfaced for the compiler to diagnose
+ * (asking for an explicit multi-response declaration or successStatus); this is order-independent — it never
+ * collapses to the last branch's status.
  *
  * ERROR inference was REMOVED in the fix-pass: literal `Response::error(...)` statuses are no longer inferred
  * and no OpenAPI `default` is synthesized from the method body. Standard 400/401/403/429/500 come from
@@ -74,24 +85,28 @@ final class ResponseAstAnalyzer
         }
         $varClasses = $this->collectVariableClasses($methodNode);
 
-        // Payloads come only from RESOLVED success branches; statuses come from EVERY success branch (a literal
-        // status is known even when the payload shape is not). $unresolvable marks a branch that carried a
-        // payload argument the analyzer could not resolve ⇒ non-definite (distinct from a genuine empty body).
+        // Payloads come only from RESOLVED success branches; statuses come from EVERY status-bearing branch (a
+        // literal status is known even when the payload shape is not). $unresolvable marks a branch that carried
+        // a payload argument the analyzer could not resolve ⇒ non-definite (distinct from a genuine empty body).
         $payloads = []; // list<array{0:?string, 1:bool}> — (?class, collection), resolved branches only
-        $statuses = []; // list<int> — every status-bearing success branch
+        $statuses = []; // list<int> — every status-bearing success branch (a literal/known status only)
         $hadSuccessReturn = false;
         $unresolvable = false;
+        $statusIndeterminate = false; // any branch carries a NON-LITERAL status expression
         foreach ($this->returns($methodNode) as $return) {
             $expr = $return->expr;
             if ($expr === null) {
                 continue; // bare `return;` — no body
             }
-            $classified = $this->classifySuccessReturn($expr, $varClasses, $method);
+            $classified = $this->classifySuccessReturn($expr, $varClasses);
             if ($classified === null) {
                 continue; // error/throw producer — ignored as success
             }
             $hadSuccessReturn = true;
-            [$class, $collection, $status, $emptyBody] = $classified;
+            [$class, $collection, $status, $emptyBody, $branchIndeterminate] = $classified;
+            if ($branchIndeterminate) {
+                $statusIndeterminate = true;
+            }
             if ($status !== null) {
                 $statuses[] = $status;
             }
@@ -109,23 +124,23 @@ final class ResponseAstAnalyzer
         $statusConflict = $this->statusConflicts($statuses);
 
         if (!$hadSuccessReturn) {
-            return new SuccessInference(definite: false, status: $status, statusConflict: $statusConflict, reason: 'no analyzable success return');
+            return new SuccessInference(definite: false, status: $status, statusConflict: $statusConflict, statusIndeterminate: $statusIndeterminate, reason: 'no analyzable success return');
         }
         if ($unresolvable) {
-            return new SuccessInference(definite: false, status: $status, statusConflict: $statusConflict, reason: 'at least one success return has a non-derivable payload');
+            return new SuccessInference(definite: false, status: $status, statusConflict: $statusConflict, statusIndeterminate: $statusIndeterminate, reason: 'at least one success return has a non-derivable payload');
         }
         if ($payloads === []) {
             // Every success branch was a genuine bodyless producer (Response::noContent()/ok()) ⇒ definite empty.
-            return new SuccessInference(definite: true, status: $status, statusConflict: $statusConflict);
+            return new SuccessInference(definite: true, status: $status, statusConflict: $statusConflict, statusIndeterminate: $statusIndeterminate);
         }
         $first = $payloads[0];
         foreach ($payloads as $p) {
             if ($p !== $first) {
-                return new SuccessInference(definite: false, status: $status, statusConflict: $statusConflict, reason: 'divergent success payloads across branches');
+                return new SuccessInference(definite: false, status: $status, statusConflict: $statusConflict, statusIndeterminate: $statusIndeterminate, reason: 'divergent success payloads across branches');
             }
         }
         [$class, $collection] = $first;
-        return new SuccessInference(definite: true, class: $class, collection: $collection, status: $status, statusConflict: $statusConflict);
+        return new SuccessInference(definite: true, class: $class, collection: $collection, status: $status, statusConflict: $statusConflict, statusIndeterminate: $statusIndeterminate);
     }
 
     /**
@@ -240,23 +255,21 @@ final class ResponseAstAnalyzer
      */
     private function returns(Node\Stmt\ClassMethod $method): array
     {
-        $finder = new NodeFinder();
         /** @var list<Node\Stmt\Return_> $out */
-        $out = $method->stmts === null ? [] : $finder->findInstanceOf($method, Node\Stmt\Return_::class);
-        return $out;
+        return $this->findInBody($method, [Node\Stmt\Return_::class]);
     }
 
     /**
-     * Map `$var = new Dto()` assignments in the method to their single class (case B). A variable ever assigned
-     * more than one distinct class (or a non-`new`) is excluded (conservative).
+     * Map `$var = new Dto()` assignments in the method's OWN body to their single class (case B). A variable ever
+     * assigned more than one distinct class (or a non-`new`) is excluded (conservative). Assignments nested in a
+     * closure / arrow function / anonymous class belong to those separate scopes and are NOT collected.
      *
      * @return array<string, ?string> var name ⇒ class FQCN (null = ambiguous)
      */
     private function collectVariableClasses(Node\Stmt\ClassMethod $method): array
     {
-        $finder = new NodeFinder();
         /** @var list<Node\Expr\Assign> $assigns */
-        $assigns = $method->stmts === null ? [] : $finder->findInstanceOf($method, Node\Expr\Assign::class);
+        $assigns = $this->findInBody($method, [Node\Expr\Assign::class]);
         $classes = []; // var ⇒ list<?class>
         foreach ($assigns as $assign) {
             if (!$assign->var instanceof Node\Expr\Variable || !is_string($assign->var->name)) {
@@ -283,25 +296,75 @@ final class ResponseAstAnalyzer
     }
 
     /**
+     * Find nodes of the given types that belong DIRECTLY to the action's body — NOT those nested inside a
+     * closure, an arrow function, or an anonymous class declared within it. Those are separate scopes: a helper
+     * closure's `return` or its inner `$x = new Dto()` is not the action's own control flow / state, so it must
+     * never be collected. {@link NodeFinder::findInstanceOf} would descend into them; this walker returns
+     * {@see NodeTraverser::DONT_TRAVERSE_CHILDREN} at those boundaries. The root `ClassMethod` itself is never a
+     * nested scope, so its own statements ARE walked.
+     *
+     * @param list<class-string<Node>> $types
+     * @return list<Node>
+     */
+    private function findInBody(Node\Stmt\ClassMethod $method, array $types): array
+    {
+        if ($method->stmts === null) {
+            return [];
+        }
+        $visitor = new class($types) extends NodeVisitorAbstract {
+            /** @var list<class-string<Node>> */
+            private array $types;
+            /** @var list<Node> */
+            public array $found = [];
+            public function __construct(array $types) { $this->types = $types; }
+            public function enterNode(Node $node)
+            {
+                // A nested closure / arrow function / anonymous class is a SEPARATE scope — stop here.
+                if ($node instanceof Node\Expr\Closure
+                    || $node instanceof Node\Expr\ArrowFunction
+                    || ($node instanceof Node\Stmt\Class_ && $node->name === null)) {
+                    return NodeTraverser::DONT_TRAVERSE_CHILDREN;
+                }
+                foreach ($this->types as $type) {
+                    if ($node instanceof $type) {
+                        $this->found[] = $node;
+                    }
+                }
+                return null;
+            }
+        };
+        $traverser = new NodeTraverser();
+        $traverser->addVisitor($visitor);
+        $traverser->traverse([$method]);
+        return $visitor->found;
+    }
+
+    /**
      * Classify one return expression as a success body.
      * Returns: null ⇒ error/throw producer (ignore);
-     *          array{0:?string, 1:bool, 2:?int, 3:bool} ⇒ [?class, collection, ?status, emptyBody] where
-     *          emptyBody=true marks a genuine bodyless producer and class=null+emptyBody=false marks an
-     *          unresolvable payload (non-definite).
+     *          array{0:?string, 1:bool, 2:?int, 3:bool, 4:bool} ⇒
+     *          [?class, collection, ?status, emptyBody, statusIndeterminate] where emptyBody=true marks a genuine
+     *          bodyless producer, class=null+emptyBody=false marks an unresolvable payload (non-definite), and
+     *          statusIndeterminate=true marks a branch whose status is a non-literal expression (status is then
+     *          null and the compiler must diagnose it).
      *
      * @param array<string, ?string> $varClasses
-     * @return null|array{0:?string, 1:bool, 2:?int, 3:bool}
+     * @return null|array{0:?string, 1:bool, 2:?int, 3:bool, 4:bool}
      */
     private function classifySuccessReturn(
         Node\Expr $expr,
         array $varClasses,
-        ReflectionMethod $caller,
     ): null|array {
         if (!$expr instanceof Node\Expr\StaticCall || !$expr->class instanceof Node\Name) {
-            return [null, false, null, false]; // a non-Response success return — unresolvable (non-definite)
+            return [null, false, null, false, false]; // a non-Response success return — unresolvable (non-definite)
         }
         if (self::resolvedFqcn($expr->class) !== self::RESPONSE_FQCN) {
-            return [null, false, null, false];
+            return [null, false, null, false, false];
+        }
+        // A dynamic method name (Response::{$method}(), Response::$method()) is not an Identifier ⇒ unresolvable.
+        // Checked BEFORE toString() so it never crashes the compiler.
+        if (!$expr->name instanceof Node\Identifier) {
+            return [null, false, null, false, false];
         }
         $name = strtolower($expr->name->toString());
 
@@ -310,7 +373,7 @@ final class ResponseAstAnalyzer
         }
 
         // Resolve a payload expression to [?class, collection]; null = unresolvable.
-        $payloadOf = static function (Node\Expr $payload) use ($varClasses, $caller): ?array {
+        $payloadOf = static function (Node\Expr $payload) use ($varClasses): ?array {
             if ($payload instanceof Node\Expr\New_ && $payload->class instanceof Node\Name) {
                 $cls = self::resolvedFqcn($payload->class);
                 return $cls === null ? null : [$cls, false]; // case A
@@ -337,86 +400,98 @@ final class ResponseAstAnalyzer
                 $unique = array_values(array_unique($items));
                 return count($unique) === 1 ? [$unique[0], true] : null; // case C (homogeneous) else unresolvable
             }
-            // case F: a same-class method call with a single-class declared return type.
-            if ($payload instanceof Node\Expr\MethodCall && $payload->var instanceof Node\Expr\Variable
-                && is_string($payload->var->name) && $payload->var->name === 'this'
-                && $payload->name instanceof Node\Identifier) {
-                $cls = self::calleeReturnClass($caller->getDeclaringClass()->getName(), $payload->name->toString());
-                return $cls === null ? null : [$cls, false];
-            }
-            if ($payload instanceof Node\Expr\StaticCall && $payload->class instanceof Node\Name
-                && in_array(strtolower($payload->class->getFirst()), ['self', 'static'], true)
-                && $payload->name instanceof Node\Identifier) {
-                $cls = self::calleeReturnClass($caller->getDeclaringClass()->getName(), $payload->name->toString());
-                return $cls === null ? null : [$cls, false];
-            }
-            return null; // dynamic / array_map / callback / polymorphism ⇒ unresolvable
+            return null; // $this->method() / self::method() / array_map / callback / polymorphism ⇒ unresolvable
         };
 
         switch ($name) {
             case 'json':
                 $args = $expr->getArgs();
-                $status = $this->statusOf($args, 'status', 1) ?? 200; // Response::json defaults to 200
-                if (!isset($args[0])) {
-                    return [null, false, $status, true]; // json() with no payload ⇒ empty body
+                [$status, $statusIndeterminate] = $this->jsonStatus($args);
+                $payloadArg = $this->findPayloadArg($args);
+                if ($payloadArg === null) {
+                    return [null, false, $status, true, $statusIndeterminate]; // json() with no payload ⇒ empty body
                 }
-                $res = $payloadOf($args[0]->value);
+                $res = $payloadOf($payloadArg->value);
                 return $res === null
-                    ? [null, false, $status, false] // unresolvable payload
-                    : [$res[0], $res[1], $status, false];
+                    ? [null, false, $status, false, $statusIndeterminate] // unresolvable payload
+                    : [$res[0], $res[1], $status, false, $statusIndeterminate];
             case 'created':
-                $status = 201;
                 $args = $expr->getArgs();
-                if (!isset($args[0])) {
-                    return [null, false, $status, true]; // 201 with no body
+                $payloadArg = $this->findPayloadArg($args);
+                if ($payloadArg === null) {
+                    return [null, false, 201, true, false]; // 201 with no body
                 }
-                $res = $payloadOf($args[0]->value);
-                return $res === null ? [null, false, $status, false] : [$res[0], $res[1], $status, false];
+                $res = $payloadOf($payloadArg->value);
+                return $res === null ? [null, false, 201, false, false] : [$res[0], $res[1], 201, false, false];
             case 'ok':
-                return [null, false, 200, true]; // Response::ok() carries no body
+                return [null, false, 200, true, false]; // Response::ok() carries no body
             case 'nocontent':
-                return [null, false, 204, true];
+                return [null, false, 204, true, false];
             default:
-                return [null, false, null, false]; // some other Response helper — unresolvable
+                return [null, false, null, false, false]; // some other Response helper — unresolvable
         }
     }
 
     /**
-     * The declared single-class return type of a same-class method (case F), or null when not a single eligible
-     * class (union/none/builtin). Single hop only — no interprocedural data-flow.
+     * The success status of a `Response::json(...)` call as a TRI-state:
+     *   - no status argument passed ⇒ [200, false] (Response::json's default — a KNOWN status);
+     *   - a LITERAL int status ⇒ [that int, false];
+     *   - a present-but-NON-LITERAL status expression ⇒ [null, true] (INDETERMINATE — NOT silently 200).
+     *
+     * @param list<Node\Arg> $args
+     * @return array{0: ?int, 1: bool} [?literal status, indeterminate]
      */
-    private static function calleeReturnClass(string $class, string $method): ?string
+    private function jsonStatus(array $args): array
     {
-        if (!method_exists($class, $method)) {
-            return null;
+        $statusArg = $this->findStatusArg($args);
+        if ($statusArg === null) {
+            return [200, false]; // absent ⇒ the Response::json default
         }
-        try {
-            $type = (new \ReflectionMethod($class, $method))->getReturnType();
-        } catch (\ReflectionException) {
-            return null;
-        }
-        if (!$type instanceof ReflectionNamedType || $type->isBuiltin()) {
-            return null;
-        }
-        return $type->getName();
+        $literal = $this->intOf($statusArg);
+        return $literal === null ? [null, true] : [$literal, false];
     }
 
     /**
-     * A literal integer from the named `$name` argument, falling back to the positional `$posIndex` argument;
-     * null if absent OR present-but-non-literal. Name-agnostic of present-but-non-literal vs absent — the
-     * caller (success status only) treats both as "use the default".
+     * The payload argument (`data`, the first param of Response::json/created): the NAMED `data` argument when
+     * present, else the first POSITIONAL argument. null when neither is passed (e.g. `Response::json(status: 201)`).
      *
      * @param list<Node\Arg> $args
      */
-    private function statusOf(array $args, string $name, int $posIndex): ?int
+    private function findPayloadArg(array $args): ?Node\Arg
     {
         foreach ($args as $arg) {
-            if ($arg->name !== null && $arg->name->toString() === $name) {
-                return $this->intOf($arg);
+            if ($arg->name !== null && $arg->name->toString() === 'data') {
+                return $arg;
             }
         }
+        return self::positionalArg($args, 0);
+    }
+
+    /**
+     * The status argument (`status`, the second param of Response::json): the NAMED `status` argument when
+     * present, else the SECOND positional argument. null when no status argument was passed.
+     *
+     * @param list<Node\Arg> $args
+     */
+    private function findStatusArg(array $args): ?Node\Arg
+    {
+        foreach ($args as $arg) {
+            if ($arg->name !== null && $arg->name->toString() === 'status') {
+                return $arg;
+            }
+        }
+        return self::positionalArg($args, 1);
+    }
+
+    /**
+     * The positional-only argument at `$index` (named arguments skipped), or null.
+     *
+     * @param list<Node\Arg> $args
+     */
+    private static function positionalArg(array $args, int $index): ?Node\Arg
+    {
         $positional = array_values(array_filter($args, static fn (Node\Arg $a): bool => $a->name === null));
-        return isset($positional[$posIndex]) ? $this->intOf($positional[$posIndex]) : null;
+        return $positional[$index] ?? null;
     }
 
     /**

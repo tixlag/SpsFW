@@ -884,20 +884,27 @@ final class RouteMetadataCompiler
         // resolveId (PURE) — the id is stored on the VO, but NOT recorded for the uniqueness check yet. The
         // caller (compileOperationClasses for the legacy path, compileEndpointSet for the unified path) records
         // exactly the operations it wants in the uniqueness check — so a shadowed override never collides.
-        // Explicit operationId = Route override, falling back to the legacy #[Operation] id; otherwise the
-        // lockfile/convention resolves it (operationId stays lockfile-derived by default — M8b decision).
-        if ($route->operationId !== null && $operation?->id !== null && $route->operationId !== $operation->id) {
-            $this->diagnostics->warning(
-                controller: $controller,
-                method: $method->getName(),
-                dto: null,
-                field: 'operationId',
-                cause: sprintf('#[Route(operationId:)] %s and #[Operation(id:)] %s disagree; Route wins', $route->operationId, $operation->id),
-                fix: 'declare operationId on only one attribute (prefer #[Route])',
-            );
+        // An EXPLICITLY passed operationId (incl. null) is canonical — #[Operation] id is a fallback used ONLY
+        // when operationId is genuinely not passed on Route; otherwise the lockfile/convention resolves it
+        // (operationId stays lockfile-derived by default — M8b decision).
+        $routeIdExplicit = array_key_exists('operationId', $explicit);
+        if ($routeIdExplicit) {
+            if ($operation?->id !== null && $route->operationId !== $operation->id) {
+                $this->diagnostics->warning(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'operationId',
+                    cause: sprintf('#[Route(operationId:)] %s and #[Operation(id:)] %s disagree; Route wins', var_export($route->operationId, true), $operation->id),
+                    fix: 'declare operationId on only one attribute (prefer #[Route])',
+                );
+            }
+            $effectiveId = $route->operationId; // canonical — including explicit null (no Operation fallback)
+        } else {
+            $effectiveId = $operation?->id; // not passed on Route ⇒ Operation fallback
         }
-        $operationId = $this->operationIds->resolveId($controller, $method->getName(), $route->operationId ?? $operation?->id);
-        $tags = $this->mergedTags($controller, $route, $operation);
+        $operationId = $this->operationIds->resolveId($controller, $method->getName(), $effectiveId);
+        $tags = $this->mergedTags($controller, $route, $operation, array_key_exists('tags', $explicit));
         [$summary, $description, $deprecated] = $this->mergedScalarFields($controller, $method, $route, $operation, $explicit);
 
         return new OperationMetadata(
@@ -922,13 +929,15 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * tags: Route wins; #[Operation] is the fallback; the controller short name is the default.
+     * tags: an EXPLICITLY passed Route value (incl. `[]`) is canonical — #[Operation] is a fallback used ONLY
+     * when `tags` is genuinely not passed on Route, and the controller short name is the default otherwise. An
+     * explicit Route value clashing with Operation is surfaced (Route wins). Mirrors {@see mergedDeprecated()}.
      *
      * @return list<string>
      */
-    private function mergedTags(string $controller, Route $route, ?Operation $operation): array
+    private function mergedTags(string $controller, Route $route, ?Operation $operation, bool $routeExplicit): array
     {
-        if ($route->tags !== []) {
+        if ($routeExplicit) {
             if ($operation !== null && $operation->tags !== [] && $operation->tags !== $route->tags) {
                 $this->diagnostics->warning(
                     controller: $controller,
@@ -939,7 +948,7 @@ final class RouteMetadataCompiler
                     fix: 'declare tags only on #[Route] (Operation is a BC fallback)',
                 );
             }
-            return $route->tags;
+            return $route->tags; // canonical — including explicit [] (no Operation fallback, no controller-short default)
         }
         return $operation !== null && $operation->tags !== []
             ? $operation->tags
@@ -953,8 +962,8 @@ final class RouteMetadataCompiler
     private function mergedScalarFields(string $controller, ReflectionMethod $method, Route $route, ?Operation $operation, array $explicit): array
     {
         return [
-            $this->mergeStringField($controller, $method, 'summary', $route->summary, $operation?->summary),
-            $this->mergeStringField($controller, $method, 'description', $route->description, $operation?->description),
+            $this->mergeStringField($controller, $method, 'summary', $route->summary, $operation?->summary, array_key_exists('summary', $explicit)),
+            $this->mergeStringField($controller, $method, 'description', $route->description, $operation?->description, array_key_exists('description', $explicit)),
             $this->mergedDeprecated($controller, $method, $route, $operation, $explicit),
         ];
     }
@@ -1016,22 +1025,27 @@ final class RouteMetadataCompiler
         return $explicit;
     }
 
-    private function mergeStringField(string $controller, ReflectionMethod $method, string $field, ?string $routeValue, ?string $operationValue): ?string
+    /**
+     * A scalar Route field (summary/description): an EXPLICITLY passed value (incl. `null`) is canonical —
+     * #[Operation] is a fallback used ONLY when the field is genuinely not passed on Route. An explicit Route
+     * value clashing with Operation is surfaced (Route wins). Mirrors {@see mergedDeprecated()}.
+     */
+    private function mergeStringField(string $controller, ReflectionMethod $method, string $field, ?string $routeValue, ?string $operationValue, bool $routeExplicit): ?string
     {
-        if ($routeValue !== null) {
+        if ($routeExplicit) {
             if ($operationValue !== null && $operationValue !== $routeValue) {
                 $this->diagnostics->warning(
                     controller: $controller,
                     method: $method->getName(),
                     dto: null,
                     field: $field,
-                    cause: sprintf('#[Route] %s and #[Operation] %s disagree (%s vs %s); Route wins', $field, $field, $routeValue, $operationValue),
+                    cause: sprintf('#[Route] %s and #[Operation] %s disagree (%s vs %s); Route wins', $field, $field, var_export($routeValue, true), $operationValue),
                     fix: 'declare ' . $field . ' only on #[Route] (Operation is a BC fallback)',
                 );
             }
-            return $routeValue;
+            return $routeValue; // canonical — including explicit null (no Operation fallback)
         }
-        return $operationValue;
+        return $operationValue; // not passed on Route ⇒ Operation fallback
     }
 
     /**
@@ -1254,6 +1268,26 @@ final class RouteMetadataCompiler
             static fn (ApiResponse $r): bool => $r->status >= 200 && $r->status < 300,
         ));
 
+        // D4 (universal across multi-success): the multi-success early-return below bypasses the single-status
+        // 204 check ({@see assertSuccessBodyAllowedForStatus()}, which only sees the resolved success). So when
+        // MORE THAN ONE 2xx ApiResponse is declared, check EACH for a 204+body here, before that early-return —
+        // two success ApiResponses where one is 204+schema is then caught. (The single-success and zero-success
+        // cases are still handled by the per-status check / the returns/native/AST path.)
+        if (count($successApiResponses) > 1) {
+            foreach ($successApiResponses as $response) {
+                if ($response->status === 204 && $response->schema !== null) {
+                    $this->diagnostics->error(
+                        controller: $method->getDeclaringClass()->getName(),
+                        method: $method->getName(),
+                        dto: null,
+                        field: 'return',
+                        cause: sprintf('#[Response] declares a body (schema) at status %d; No Content (204) carries no body', $response->status),
+                        fix: 'drop the schema for the 204 response, or use a 200/201 status',
+                    );
+                }
+            }
+        }
+
         // The AST success inference feeds BOTH the schema fallback (priority 4) and the status fallback (priority
         // 3 of the status chain). Computed once; never throws.
         $astInf = $this->ast->inferSuccess($method);
@@ -1310,8 +1344,15 @@ final class RouteMetadataCompiler
 
     /**
      * Resolve the success STATUS by its own priority chain (D3): explicit `Route::successStatus` (canonical —
-     * D1) → a single declared 2xx ApiResponse's status → an UNAMBIGUOUS AST-inferred status → 200. Branches that
-     * DISAGREE on the status (statusConflict) cannot collapse to a single status: diagnose and fall back to 200.
+     * D1) → explicit #[ApiResponse] markup (single OR multi declares the success-status contract; the AST status
+     * is then irrelevant and creates NO diagnostic) → an UNAMBIGUOUS AST-inferred status → 200.
+     *
+     * When there is NO explicit successStatus AND NO explicit ApiResponse markup, the AST status is the sole
+     * signal, and the two unrepresentable cases are compile ERRORs (not warnings + a silent 200):
+     *   - statusConflict    : branches carry DIFFERENT literal statuses (200/201);
+     *   - statusIndeterminate: a branch carries a NON-LITERAL status expression (Response::json($x, $code)).
+     * An explicit multi-success #[ApiResponse] contract satisfies both — it already describes the multi-response
+     * shape, so the AST status must NOT add a spurious diagnostic.
      *
      * @param array<string, true> $explicit
      * @param list<ApiResponse> $successApiResponses
@@ -1321,20 +1362,35 @@ final class RouteMetadataCompiler
         if (array_key_exists('successStatus', $explicit)) {
             return $route->successStatus; // explicitly passed ⇒ canonical
         }
-        if (count($successApiResponses) === 1) {
-            return $successApiResponses[0]->status; // an explicit declared success status
+        if (count($successApiResponses) >= 1) {
+            // Explicit ApiResponse markup declares the success-status contract — single or multi. The AST status
+            // is irrelevant here and must NOT surface a diagnostic (a multi-success contract in particular already
+            // describes the multi-response shape). The multi-success path in collectResponses() keeps every
+            // declared response verbatim, so the value returned here only matters for the single-success path.
+            return count($successApiResponses) === 1 ? $successApiResponses[0]->status : 200;
         }
-        if ($astInf->status !== null) {
-            return $astInf->status; // an unambiguous AST-inferred status (all success branches agree)
+        if ($astInf->status !== null && !$astInf->statusConflict && !$astInf->statusIndeterminate) {
+            return $astInf->status; // an unambiguous AST-inferred status (every success branch agrees, all literal)
         }
+        $controller = $reflection->getName();
+        $method0 = $method->getName();
         if ($astInf->statusConflict) {
-            $this->diagnostics->warning(
-                controller: $reflection->getName(),
-                method: $method->getName(),
+            $this->diagnostics->error(
+                controller: $controller,
+                method: $method0,
                 dto: null,
                 field: 'successStatus',
-                cause: 'the success branches return different HTTP statuses; a single success response cannot represent them',
+                cause: 'the success branches return different HTTP statuses; without an explicit successStatus or #[Response] markup a single success response cannot represent them',
                 fix: 'declare successStatus on #[Route] for the canonical status, or add explicit #[Response] entries for each success status',
+            );
+        } elseif ($astInf->statusIndeterminate) {
+            $this->diagnostics->error(
+                controller: $controller,
+                method: $method0,
+                dto: null,
+                field: 'successStatus',
+                cause: 'a success branch returns a non-literal HTTP status (Response::json($x, $code)); the status is known only at runtime — it is not silently treated as 200',
+                fix: 'declare successStatus on #[Route] for the canonical status, or add explicit #[Response] entries',
             );
         }
         return 200;

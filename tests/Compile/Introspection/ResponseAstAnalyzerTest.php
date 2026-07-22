@@ -15,9 +15,11 @@ require_once __DIR__ . '/fixtures/ResponseAstAliasFixtureController.php';
 
 /**
  * M8b + fix-pass: ResponseAstAnalyzer — conservative AST inference of the SUCCESS body from a controller action.
- * One assertion per case A–F, plus the non-definite guards (divergent / opaque / mapped), literal success
- * statuses (201 positional & named, 204), the statusConflict guard (same DTO, different statuses — D3), and the
- * D5 location guarantees (same-named method in a different class, a trait-defined method, and a Response alias).
+ * One assertion per payload case A–E, case F now NON-definite (a callee return type is no longer inferred), the
+ * non-definite guards (divergent / opaque / mapped), BODY SCOPING (returns/assignments in nested closures and
+ * arrow functions are separate scopes), literal success statuses (201 positional & named, 204), the statusConflict
+ * guard (same DTO, different statuses — D3) and the statusIndeterminate guard (a non-literal status is NOT 200),
+ * plus the D5 location guarantees (same-named method in a different class, a trait-defined method, a Response alias).
  */
 $analyzer = new ResponseAstAnalyzer();
 $fixture = ResponseAstFixtureController::class;
@@ -59,10 +61,33 @@ $e = $fixSuccess('caseE');
 assert_true($e->definite, 'E: error branch ignored, success still definite');
 assert_same($user, $e->class, 'E: resolves AstUserDto past the Response::error branch');
 
-// F — callee return type (single hop, same class).
+// F — a callee resolved only through its return type is NOT inferred ($this->method() / self::method() stay
+// non-definite — no interprocedural data-flow).
 $f = $fixSuccess('caseF');
-assert_true($f->definite, 'F: callee declared return type inferred');
-assert_same($user, $f->class, 'F: resolves AstUserDto via makeUser(): AstUserDto');
+assert_true(!$f->definite, 'F: $this->method() payload is non-definite (not inferred via the callee return type)');
+assert_same(null, $f->class, 'F: no class resolved from $this->makeUser()');
+$fs = $fixSuccess('caseFStatic');
+assert_true(!$fs->definite, 'F (static): self::method() payload is non-definite');
+
+// SCOPING — only the action's DIRECT body is analyzed; nested closures / arrow functions are separate scopes.
+$ncr = $fixSuccess('nestedClosureReturn');
+assert_same(204, $ncr->status, 'scoping: a return nested in a closure is ignored — the action\'s noContent() (204) is the only status');
+assert_same(null, $ncr->class, 'scoping: the closure\'s AstUserDto return is not collected');
+assert_true($ncr->definite, 'scoping: the action\'s own 204 return is definite empty');
+$nca = $fixSuccess('nestedClosureAssign');
+assert_true($nca->definite && $nca->class === $user, 'scoping: the action\'s $user=AstUserDto wins; the closure\'s conflicting assignment is ignored');
+$naa = $fixSuccess('nestedArrowAssign');
+assert_true($naa->definite && $naa->class === $user, 'scoping: an arrow function\'s same-name assignment is ignored; the action\'s AstUserDto stands');
+
+// Dynamic method name / named arguments / non-literal status.
+assert_true(!$fixSuccess('dynamicName')->definite, 'a dynamic Response::{$method}() name is non-definite (no crash)');
+assert_true(!$fixSuccess('dynamicName')->status, 'a dynamic name yields no status (non-definite)');
+$named = $fixSuccess('namedArgs');
+assert_true($named->definite && $named->class === $user && $named->status === 201, 'payload resolved by the named `data` arg; status by the named `status` arg');
+$dyn = $fixSuccess('dynamicStatus');
+assert_true($dyn->definite && $dyn->class === $user, 'dynamicStatus: schema still definite');
+assert_same(null, $dyn->status, 'dynamicStatus: a non-literal status is NOT 200 (status is null)');
+assert_true($dyn->statusIndeterminate, 'dynamicStatus: statusIndeterminate=true for a non-literal status');
 
 // Non-definite guards.
 assert_true(!$fixSuccess('divergent')->definite, 'divergent success branches ⇒ non-definite');

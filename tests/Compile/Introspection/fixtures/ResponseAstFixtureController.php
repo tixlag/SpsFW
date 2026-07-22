@@ -63,10 +63,17 @@ class ResponseAstFixtureController
         return Response::json(new AstUserDto());
     }
 
-    // F — callee inferred via its declared single-class return type (same-class method, single hop).
+    // F — a callee resolved only via its return type is NOT inferred (no interprocedural data-flow): the
+    // $this->method() payload stays non-definite even though makeUser() declares AstUserDto.
     public function caseF(): Response
     {
         return Response::json($this->makeUser());
+    }
+
+    // F (static variant) — self::method() is likewise NOT inferred; non-definite.
+    public function caseFStatic(): Response
+    {
+        return Response::json(self::makeUser());
     }
 
     public function makeUser(): AstUserDto
@@ -132,6 +139,57 @@ class ResponseAstFixtureController
             return Response::json(new AstUserDto(), 201);
         }
         return Response::json(new AstUserDto(), 200);
+    }
+
+    // a NON-LITERAL status expression ⇒ statusIndeterminate=true (status is null; NOT silently 200). The schema
+    // (AstUserDto) is still definite.
+    public function dynamicStatus(int $status): Response
+    {
+        return Response::json(new AstUserDto(), $status);
+    }
+
+    // a status + payload passed as NAMED arguments (status:, data:) — payload resolved by the `data` name, not
+    // args[0]; status 201 from the named `status` arg.
+    public function namedArgs(int $status): Response
+    {
+        return Response::json(status: 201, data: new AstUserDto());
+    }
+
+    // a dynamic Response method name (Response::{$method}()) is NOT an Identifier ⇒ non-definite, no crash.
+    public function dynamicName(string $method): Response
+    {
+        return Response::{$method}(new AstUserDto());
+    }
+
+    // a `return` nested inside a CLOSURE is a SEPARATE scope — only the action's own noContent() return is
+    // analyzed (204, empty); the closure's AstUserDto return is ignored.
+    public function nestedClosureReturn(): Response
+    {
+        $closure = static function (): Response {
+            return Response::json(new AstUserDto());
+        };
+        return Response::noContent();
+    }
+
+    // an assignment nested inside a CLOSURE seeds the CLOSURE's scope, not the action's — the action's own
+    // `$user = new AstUserDto()` wins; the closure's conflicting AstItemDto assignment is ignored.
+    public function nestedClosureAssign(): Response
+    {
+        $user = new AstUserDto();
+        $closure = static function () {
+            $user = new AstItemDto();
+            return $user;
+        };
+        return Response::json($user);
+    }
+
+    // an assignment nested inside an ARROW FUNCTION is a separate scope — the action's $user stays AstUserDto
+    // even though the arrow assigns AstItemDto to the SAME variable name.
+    public function nestedArrowAssign(): Response
+    {
+        $user = new AstUserDto();
+        $transform = static fn() => ($user = new AstItemDto());
+        return Response::json($user);
     }
 }
 
