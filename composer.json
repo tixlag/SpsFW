@@ -16,7 +16,8 @@
     "ext-posix": "*",
     "monolog/monolog": "^3.10",
     "firebase/php-jwt": "^7.0",
-    "symfony/yaml": "^7.0"
+    "symfony/yaml": "^7.0",
+    "nikic/php-parser": "^5.0"
   },
   "autoload": {
     "psr-4": {

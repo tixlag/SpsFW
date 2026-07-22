@@ -30,8 +30,11 @@ use SpsFW\Core\Compile\RuleSource;
 use SpsFW\Core\Compile\Introspection\AttributeReader;
 use SpsFW\Core\Compile\Introspection\DtoEligibility;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
+use SpsFW\Core\Compile\Introspection\ErrorInference;
 use SpsFW\Core\Compile\Introspection\OperationIdResolver;
 use SpsFW\Core\Compile\Introspection\RequiredSource;
+use SpsFW\Core\Compile\Introspection\ResponseAstAnalyzer;
+use SpsFW\Core\Compile\Introspection\SuccessInference;
 use SpsFW\Core\Compile\Introspection\TypeMapper;
 use SpsFW\Core\Compile\Metadata\OperationMetadata;
 use SpsFW\Core\Compile\Metadata\ParameterMetadata;
@@ -69,6 +72,12 @@ final class RouteMetadataCompiler
 
     private readonly OperationIdResolver $operationIds;
 
+    /**
+     * Conservative AST inference of `Response::json(...)` success bodies and `Response::error(...)` statuses
+     * (M8b). Injected for testability; defaults to a stateless analyzer. File-level parse cache ⇒ cheap.
+     */
+    private readonly ResponseAstAnalyzer $ast;
+
     public function __construct(
         private readonly CompileDiagnostics $diagnostics,
         ?DtoSchemaBuilder $schemas = null,
@@ -79,10 +88,12 @@ final class RouteMetadataCompiler
         array $operationIdMap = [],
         private readonly RuleSource $ruleSource = RuleSource::Legacy,
         private readonly ?\Closure $legacyRuleSource = null,
+        ?ResponseAstAnalyzer $astAnalyzer = null,
     ) {
         // Share diagnostics so a cyclic/missing DTO surfaces on the SAME collector that halts the build,
         // instead of the throwaway CompileDiagnostics a default-constructed builder would carry.
         $this->schemas = $schemas ?? new DtoSchemaBuilder($this->diagnostics);
+        $this->ast = $astAnalyzer ?? new ResponseAstAnalyzer();
         // The tri-state operationId lockfile (plan §19): the materialized inventory — 39 preserved ids + 306
         // nulls — so legacy ops keep their id (or stay id-less) and only NEW route-only ops get the convention.
         // An empty map (default) assigns the convention to everything — correct for unit tests / a fresh app,
@@ -573,8 +584,12 @@ final class RouteMetadataCompiler
             $methodRoute = $routeAttributes[0]->newInstance();
 
             $operation = $this->attributeReader->firstInstance($method, Operation::class);
-            if ($operation?->exclude === true) {
-                continue; // #[Operation(exclude: true)] — reachable at runtime, hidden from the spec.
+            // Effective exclude (M8b): Route is canonical, so `documented:false` hides the operation; the
+            // legacy #[Operation(exclude:true)] still works as a BC fallback. Either ⇒ reachable at runtime,
+            // hidden from the spec. The codemod migrates exclude:true ⇒ documented:false and drops Operation,
+            // so the two never coexist in migrated controllers.
+            if ($methodRoute->documented === false || $operation?->exclude === true) {
+                continue;
             }
 
             $httpMethods = $methodRoute->getHttpMethods();
@@ -584,7 +599,7 @@ final class RouteMetadataCompiler
 
             foreach ($httpMethods as $httpMethod) {
                 $httpMethodString = is_string($httpMethod) ? $httpMethod : $httpMethod->value;
-                $operations[] = $this->buildOperation($reflection, $method, $httpMethodString, $methodRoute->getPath(), $operation);
+                $operations[] = $this->buildOperation($reflection, $method, $httpMethodString, $methodRoute, $operation);
             }
         }
 
@@ -824,29 +839,46 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Assemble one OperationMetadata from the method reflection + the declared #[Operation] override.
+     * Assemble one OperationMetadata from the method reflection + the canonical #[Route] (+ BC #[Operation]).
+     *
+     * Route is the canonical operation source (M8b); #[Operation] is a BC fallback read ONLY where the matching
+     * Route field is unset. A field set on BOTH that disagrees is a warning diagnostic (Route wins) — surfacing
+     * the duplication so the codemod can collapse Operation into Route. The two never coexist in migrated code.
      */
     private function buildOperation(
         ReflectionClass $reflection,
         ReflectionMethod $method,
         string $httpMethod,
-        string $path,
+        Route $route,
         ?Operation $operation,
     ): OperationMetadata {
         $controller = $reflection->getName();
+        $path = $route->getPath();
 
         $pathParams = $this->collectPathParams($method, $path);
         [$requestBody, $queryParams] = $this->collectRequestProjection($reflection, $method);
-        $responses = $this->collectResponses($reflection, $method);
+        $responses = $this->collectResponses($reflection, $method, $route);
         $security = $this->collectSecurity($method);
+        [$routeErrors, $hasDynamicError] = $this->collectErrorProjection($route, $method);
 
         // resolveId (PURE) — the id is stored on the VO, but NOT recorded for the uniqueness check yet. The
         // caller (compileOperationClasses for the legacy path, compileEndpointSet for the unified path) records
         // exactly the operations it wants in the uniqueness check — so a shadowed override never collides.
-        $operationId = $this->operationIds->resolveId($controller, $method->getName(), $operation?->id);
-        $tags = $operation !== null && $operation->tags !== []
-            ? $operation->tags
-            : [$this->operationIds->controllerShort($controller)];
+        // Explicit operationId = Route override, falling back to the legacy #[Operation] id; otherwise the
+        // lockfile/convention resolves it (operationId stays lockfile-derived by default — M8b decision).
+        if ($route->operationId !== null && $operation?->id !== null && $route->operationId !== $operation->id) {
+            $this->diagnostics->warning(
+                controller: $controller,
+                method: $method->getName(),
+                dto: null,
+                field: 'operationId',
+                cause: sprintf('#[Route(operationId:)] %s and #[Operation(id:)] %s disagree; Route wins', $route->operationId, $operation->id),
+                fix: 'declare operationId on only one attribute (prefer #[Route])',
+            );
+        }
+        $operationId = $this->operationIds->resolveId($controller, $method->getName(), $route->operationId ?? $operation?->id);
+        $tags = $this->mergedTags($controller, $route, $operation);
+        [$summary, $description, $deprecated] = $this->mergedScalarFields($controller, $method, $route, $operation);
 
         return new OperationMetadata(
             httpMethod: $httpMethod,
@@ -858,14 +890,71 @@ final class RouteMetadataCompiler
             responses: $responses,
             security: $security,
             tags: $tags,
-            summary: $operation?->summary,
-            description: $operation?->description,
-            deprecated: $operation?->deprecated ?? false,
+            summary: $summary,
+            description: $description,
+            deprecated: $deprecated,
             controller: $controller,
             method: $method->getName(),
             rateLimited: $this->isRateLimited($method),
             accessGated: $this->isAccessGated($method),
+            routeErrors: $routeErrors,
+            hasDynamicError: $hasDynamicError,
         );
+    }
+
+    /**
+     * tags: Route wins; #[Operation] is the fallback; the controller short name is the default.
+     *
+     * @return list<string>
+     */
+    private function mergedTags(string $controller, Route $route, ?Operation $operation): array
+    {
+        if ($route->tags !== []) {
+            if ($operation !== null && $operation->tags !== [] && $operation->tags !== $route->tags) {
+                $this->diagnostics->warning(
+                    controller: $controller,
+                    method: null,
+                    dto: null,
+                    field: 'tags',
+                    cause: sprintf('#[Route] tags and #[Operation] tags disagree (Route=[%s], Operation=[%s]); Route wins', implode(',', $route->tags), implode(',', $operation->tags)),
+                    fix: 'declare tags only on #[Route] (Operation is a BC fallback)',
+                );
+            }
+            return $route->tags;
+        }
+        return $operation !== null && $operation->tags !== []
+            ? $operation->tags
+            : [$this->operationIds->controllerShort($controller)];
+    }
+
+    /**
+     * @return array{0: ?string, 1: ?string, 2: bool} [summary, description, deprecated]
+     */
+    private function mergedScalarFields(string $controller, ReflectionMethod $method, Route $route, ?Operation $operation): array
+    {
+        return [
+            $this->mergeStringField($controller, $method, 'summary', $route->summary, $operation?->summary),
+            $this->mergeStringField($controller, $method, 'description', $route->description, $operation?->description),
+            $route->deprecated || ($operation?->deprecated ?? false),
+        ];
+    }
+
+    private function mergeStringField(string $controller, ReflectionMethod $method, string $field, ?string $routeValue, ?string $operationValue): ?string
+    {
+        if ($routeValue !== null) {
+            if ($operationValue !== null && $operationValue !== $routeValue) {
+                $this->diagnostics->warning(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: $field,
+                    cause: sprintf('#[Route] %s and #[Operation] %s disagree (%s vs %s); Route wins', $field, $field, $routeValue, $operationValue),
+                    fix: 'declare ' . $field . ' only on #[Route] (Operation is a BC fallback)',
+                );
+            }
+            return $routeValue;
+        }
+        return $operationValue;
     }
 
     /**
@@ -1060,23 +1149,70 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Responses: declared #[Response] entries take over entirely; otherwise infer the 200 success response
-     * from the return type (DTO-eligible class / enum) — or surface a diagnostic when the return is opaque,
-     * a bare array, or a non-eligible class (plan §7).
+     * Responses (M8b: Route-first / inference-first). The SUCCESS response is resolved by priority:
+     *   1. `Route::returns` (validated shape; a definite native/AST inference that CONTRADICTS it is an ERROR);
+     *   2. a single 2xx `#[ApiResponse]` (the legacy/transitional success declaration);
+     *   3. the native return type (DTO/enum/scalar), then the conservative `Response::json()` AST;
+     *   4. a diagnostic suggesting `returns`, yielding an empty success body.
+     *
+     * Remaining declared `#[ApiResponse]`s now SUPPLEMENT the success (they no longer replace inference
+     * wholesale — §6): error-status responses, complex bodies (headers / non-JSON), and the rare
+     * multi-success-schema cases stay. An `#[ApiResponse]` redeclaring the success status with a DIFFERENT
+     * schema is an ERROR. `Route::errors` + inferred error codes are projected separately (collectErrorProjection).
      *
      * @return list<ResponseMetadata>
      */
-    private function collectResponses(ReflectionClass $reflection, ReflectionMethod $method): array
+    private function collectResponses(ReflectionClass $reflection, ReflectionMethod $method, Route $route): array
     {
         $declared = $this->attributeReader->getInstances($method, ApiResponse::class);
-        if ($declared !== []) {
-            $responses = [];
-            foreach ($declared as $response) {
-                $responses[] = $this->responseFromAttribute($method, $response);
+
+        // --- resolve the SUCCESS response ---
+        $success = null;
+        if ($route->returns !== null) {
+            $success = $this->returnsResponseMetadata($route, $method);
+            $this->assertReturnsNotContradicted($method, $success);
+        } else {
+            $successCandidates = array_values(array_filter(
+                $declared,
+                static fn (ApiResponse $r): bool => $r->status >= 200 && $r->status < 300,
+            ));
+            if (count($successCandidates) === 1) {
+                $success = $this->responseFromAttribute($method, $successCandidates[0]);
+            } elseif (count($successCandidates) > 1) {
+                // Multiple success schemas/statuses — the rare escape-hatch case (§6). Keep EVERY declared
+                // response verbatim (legacy full pass); do not collapse or infer.
+                $responses = [];
+                foreach ($declared as $response) {
+                    $responses[] = $this->responseFromAttribute($method, $response);
+                }
+                return $responses;
+            } else {
+                $success = $this->inferSuccess($reflection, $method, $route->successStatus);
             }
-            return $responses;
         }
-        return $this->inferSuccessResponse($reflection, $method);
+
+        // --- success + supplementary declared responses ---
+        $successBodySig = $this->responseBodySignature($success);
+        $responses = [$success];
+        foreach ($declared as $response) {
+            $rm = $this->responseFromAttribute($method, $response);
+            if ($rm->status === $success->status) {
+                if ($this->responseBodySignature($rm) === $successBodySig) {
+                    continue; // a redeclaration of the same success body — drop the duplicate.
+                }
+                $this->diagnostics->error(
+                    controller: $method->getDeclaringClass()->getName(),
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'return',
+                    cause: sprintf('#[Response] redeclares the success status %d with a different schema than the resolved success response', $rm->status),
+                    fix: 'declare the success body once (prefer #[Route(returns: …)]); use a different status for an alternate response',
+                );
+                continue;
+            }
+            $responses[] = $rm;
+        }
+        return $responses;
     }
 
     private function responseFromAttribute(
@@ -1132,111 +1268,296 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Infer the success (200) response from the return type, emitting a diagnostic when it cannot be derived.
-     *
-     *  - void/null/never              : empty body (no schema) — intentional, no diagnostic.
-     *  - missing return type / mixed  : opaque — diagnostic (cannot infer a schema).
-     *  - bare array                   : no derivable item type — diagnostic (use #[Response(collection: true, schema: …)]).
-     *  - union / intersection         : unsupported — diagnostic.
-     *  - non-eligible class           : entity/framework type — diagnostic (needs explicit #[Response]).
-     *  - JsonSerializable class       : custom serialization shape — diagnostic (needs explicit #[Response] contract).
-     *  - DTO-eligible class           : object schema (inferred).
-     *  - enum                         : enum schema fragment.
-     *  - scalar / DateTime / Uuid     : inline schema fragment {type, format}.
-     *
-     * @return list<ResponseMetadata>
+     * Infer the SUCCESS response (no `returns`, no single-2xx ApiResponse) by priority: native return type,
+     * then the conservative `Response::json()` AST. A non-derivable success yields ONE diagnostic suggesting
+     * `#[Route(returns: …)]` and an empty success body at $successStatus.
      */
-    private function inferSuccessResponse(ReflectionClass $reflection, ReflectionMethod $method): array
+    private function inferSuccess(ReflectionClass $reflection, ReflectionMethod $method, int $successStatus): ResponseMetadata
+    {
+        $native = $this->inferNativeSuccess($method);
+        if ($native->definite) {
+            return $this->responseMetadataFromInference($native, $native->status ?? $successStatus);
+        }
+        $ast = $this->ast->inferSuccess($method);
+        if ($ast->definite) {
+            return $this->responseMetadataFromInference($ast, $ast->status ?? $successStatus);
+        }
+        $this->diagnostics->warning(
+            controller: $reflection->getName(),
+            method: $method->getName(),
+            dto: $native->class ?? $ast->class,
+            field: 'return',
+            cause: 'the success response schema is not derivable from the return type or the response body (' . ($native->reason ?? $ast->reason ?? 'opaque') . ')',
+            fix: 'declare the success body with #[Route(returns: Dto::class)] (or returns: [Dto::class] for a list), or keep an explicit #[Response(schema: …)]',
+        );
+        return new ResponseMetadata($successStatus, schema: null, description: 'OK');
+    }
+
+    /**
+     * Native return-type success inference — the definite-flagged form of the old inferSuccessResponse.
+     * Definite ONLY for an unambiguous DTO/enum/scalar/DateTime, or an empty (void/null) body. Opaque returns
+     * (missing type / mixed / array / union / non-eligible class / JsonSerializable) are NON-definite — `returns`
+     * may then override them without contradiction.
+     */
+    private function inferNativeSuccess(ReflectionMethod $method): SuccessInference
     {
         $returnType = $method->getReturnType();
-
         if ($returnType === null) {
-            $this->diagnostics->warning(
-                controller: $reflection->getName(),
-                method: $method->getName(),
-                dto: null,
-                field: 'return',
-                cause: 'method declares no return type; the success response schema cannot be inferred',
-                fix: 'add a return type (a *Dto, an enum, a scalar), or declare the response explicitly with #[Response(schema: …)]',
-            );
-            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+            return new SuccessInference(definite: false, reason: 'method declares no return type');
         }
-
         [$inner] = $this->unwrapNullable($returnType);
 
         if ($this->isVoidType($inner)) {
-            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+            return new SuccessInference(definite: true, status: 200);
         }
-
         if ($this->isMixedType($inner)) {
-            $this->diagnostics->warning(
-                controller: $reflection->getName(),
-                method: $method->getName(),
-                dto: null,
-                field: 'return',
-                cause: 'mixed return type is not auto-derivable',
-                fix: 'narrow the return type, or declare the response explicitly with #[Response(schema: …)]',
-            );
-            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+            return new SuccessInference(definite: false, reason: 'mixed return type is not auto-derivable');
         }
-
         if ($this->isArrayType($inner)) {
-            $this->diagnostics->warning(
-                controller: $reflection->getName(),
-                method: $method->getName(),
-                dto: null,
-                field: 'return',
-                cause: 'array return type has no derivable item type',
-                fix: 'declare the response explicitly with #[Response(schema: ItemDto::class, collection: true)] (PHP arrays carry no element type)',
-            );
-            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+            return new SuccessInference(definite: false, reason: 'array return type has no derivable item type');
         }
 
         $mapped = $this->typeMapper->map($inner);
         if ($this->typeMapper->isUnsupported($mapped)) {
-            $this->diagnostics->warning(
-                controller: $reflection->getName(),
-                method: $method->getName(),
-                dto: null,
-                field: 'return',
-                cause: 'return type ' . $this->typeLabel($inner) . ' is not auto-derivable: ' . ($mapped['reason'] ?? 'unsupported'),
-                fix: 'declare the response explicitly with #[Response(schema: …)] or simplify the return type',
-            );
-            return [new ResponseMetadata(200, schema: null, description: 'OK')];
+            return new SuccessInference(definite: false, reason: 'return type ' . $this->typeLabel($inner) . ' is not auto-derivable: ' . ($mapped['reason'] ?? 'unsupported'));
         }
-
-        // A referenced class is auto-derived ONLY when it is DTO-eligible (plan §6); entities/Response need
-        // an explicit #[Response]. A class that customizes JSON via JsonSerializable likewise needs an explicit
-        // contract — its public properties are not its real JSON shape.
         if ($mapped['ref'] !== null) {
             if (!$this->eligibility->isEligible($mapped['ref'])) {
-                $this->diagnostics->warning(
-                    controller: $reflection->getName(),
-                    method: $method->getName(),
-                    dto: $mapped['ref'],
-                    field: 'return',
-                    cause: sprintf('return type %s is not a DTO-eligible class (entity/framework type)', $mapped['ref']),
-                    fix: 'declare the response explicitly with #[Response(schema: ' . $mapped['ref'] . '::class)] or return a *Dto',
-                );
-                return [new ResponseMetadata(200, schema: null, description: 'OK')];
+                return new SuccessInference(definite: false, class: $mapped['ref'], reason: $mapped['ref'] . ' is not a DTO-eligible class');
             }
             if ($this->declaresJsonSerializable($mapped['ref'])) {
-                $this->diagnostics->warning(
-                    controller: $reflection->getName(),
-                    method: $method->getName(),
-                    dto: $mapped['ref'],
-                    field: 'return',
-                    cause: sprintf('return type %s implements JsonSerializable; its JSON shape is custom and not derivable from public properties', $mapped['ref']),
-                    fix: 'declare the response explicitly with #[Response(schema: ' . $mapped['ref'] . '::class)] (the explicit contract), or drop JsonSerializable',
-                );
-                return [new ResponseMetadata(200, schema: null, description: 'OK')];
+                return new SuccessInference(definite: false, class: $mapped['ref'], reason: $mapped['ref'] . ' implements JsonSerializable');
             }
-            $schema = class_exists($mapped['ref']) ? $this->schemas->build($mapped['ref']) : null;
-            return [new ResponseMetadata(200, schema: $schema)];
+            return new SuccessInference(definite: true, class: $mapped['ref']);
+        }
+        // scalar / enum / DateTime / Uuid ⇒ inline schema fragment.
+        return new SuccessInference(definite: true, inlineSchema: $this->inlineSchema($mapped));
+    }
+
+    /**
+     * Materialize a success ResponseMetadata from a definite {@see SuccessInference}.
+     */
+    private function responseMetadataFromInference(SuccessInference $inf, int $status): ResponseMetadata
+    {
+        if ($inf->class !== null) {
+            $schema = class_exists($inf->class) ? $this->schemas->build($inf->class) : null;
+            return $inf->collection
+                ? new ResponseMetadata($status, schema: null, arrayItem: $schema)
+                : new ResponseMetadata($status, schema: $schema);
+        }
+        if ($inf->inlineSchema !== null) {
+            return $inf->collection
+                ? new ResponseMetadata($status, schema: null, arrayItem: $inf->inlineSchema)
+                : new ResponseMetadata($status, schema: $inf->inlineSchema);
+        }
+        // definite empty body (void / 204 / Response::noContent()).
+        return new ResponseMetadata($status, schema: null, description: 'OK');
+    }
+
+    /**
+     * Validate `Route::returns` and build the success ResponseMetadata from it (M8b §1).
+     *   - `Dto::class`                     ⇒ single object;
+     *   - `[Dto::class]`                   ⇒ list of that object;
+     *   - `'string'|'integer'|'number'|'boolean'|'object'` ⇒ scalar/object body;
+     *   - `['string']` etc.                ⇒ list of that scalar.
+     * Forbidden (ERROR, empty success body): `[]`, >1 element, nested arrays, an unknown scalar type, a body
+     * at successStatus 204, or a nonexistent/unfit class.
+     */
+    private function returnsResponseMetadata(Route $route, ReflectionMethod $method): ResponseMetadata
+    {
+        $controller = $method->getDeclaringClass()->getName();
+        $method0 = $method->getName();
+        $status = $route->successStatus;
+
+        $collection = false;
+        $element = $route->returns;
+        if (is_array($route->returns)) {
+            if ($route->returns === []) {
+                $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: '#[Route(returns: [])] is empty; declare a DTO/scalar or omit returns to infer it', fix: "use returns: Dto::class / returns: [Dto::class] / returns: 'string', or remove returns to infer");
+                return new ResponseMetadata($status, schema: null, description: 'OK');
+            }
+            if (count($route->returns) > 1) {
+                $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: '#[Route(returns: …)] has more than one element; a list is expressed by wrapping a SINGLE element in []', fix: 'use returns: [Dto::class] for a list, not returns: [A::class, B::class]');
+                return new ResponseMetadata($status, schema: null, description: 'OK');
+            }
+            $element = $route->returns[0];
+            if (is_array($element)) {
+                $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: '#[Route(returns: …)] is nested; cardinality is single-level only', fix: 'use returns: [Dto::class] (one level of nesting)');
+                return new ResponseMetadata($status, schema: null, description: 'OK');
+            }
+            $collection = true;
         }
 
-        // Scalar / enum / DateTime / Uuid → inline schema fragment {type, format, enum?}.
-        return [new ResponseMetadata(200, schema: $this->inlineSchema($mapped))];
+        $schema = $this->returnsElementSchema(is_string($element) ? $element : null, $controller, $method0, $status);
+        if ($schema === null) {
+            return new ResponseMetadata($status, schema: null, description: 'OK');
+        }
+        return $collection
+            ? new ResponseMetadata($status, schema: null, arrayItem: $schema)
+            : new ResponseMetadata($status, schema: $schema);
+    }
+
+    /**
+     * Build the element SchemaMetadata for a `returns` declaration (a scalar/object name or a DTO/enum class).
+     * Returns null (after a fatal diagnostic) when the element is invalid.
+     */
+    private function returnsElementSchema(?string $element, string $controller, string $method, int $status): ?SchemaMetadata
+    {
+        if ($element !== null && in_array($type = strtolower($element), ['string', 'integer', 'number', 'boolean', 'object'], true)) {
+            $this->assertReturnsBodyAllowed($status, $controller, $method);
+            return new SchemaMetadata(name: '', type: $type);
+        }
+        if ($element === null || !class_exists($element)) {
+            $this->diagnostics->error(controller: $controller, method: $method, dto: $element, field: 'returns', cause: sprintf('#[Route(returns: …)] names a nonexistent class %s', var_export($element, true)), fix: 'point returns at a loadable DTO/enum class, or a scalar type name (string/integer/number/boolean/object)');
+            return null;
+        }
+        $mapped = $this->typeMapper->mapClass($element);
+        if ($mapped['ref'] !== null) {
+            if (!$this->eligibility->isEligible($element)) {
+                $this->diagnostics->error(controller: $controller, method: $method, dto: $element, field: 'returns', cause: sprintf('#[Route(returns: %s)] is not a DTO-eligible class', $element), fix: 'point returns at a *Dto (or an enum / scalar type name)');
+                return null;
+            }
+            $this->assertReturnsBodyAllowed($status, $controller, $method);
+            return $this->schemas->build($element);
+        }
+        if ($mapped['type'] !== null || $mapped['enum'] !== null) {
+            $this->assertReturnsBodyAllowed($status, $controller, $method);
+            return $this->inlineSchema($mapped);
+        }
+        $this->diagnostics->error(controller: $controller, method: $method, dto: $element, field: 'returns', cause: sprintf('#[Route(returns: %s)] is not a valid schema class', $element), fix: 'point returns at a *Dto, an enum, or a scalar type name');
+        return null;
+    }
+
+    private function assertReturnsBodyAllowed(int $status, string $controller, string $method): void
+    {
+        if ($status === 204) {
+            $this->diagnostics->error(controller: $controller, method: $method, dto: null, field: 'returns', cause: '#[Route(returns: …)] declares a success body but successStatus is 204 (No Content carries no body)', fix: 'drop returns for a 204, or set successStatus to 200/201');
+        }
+    }
+
+    /**
+     * A DEFINITE native / AST success inference that CONTRADICTS `Route::returns` is a compile ERROR (§1).
+     * Non-definite inferences never contradict — `returns` may override them freely.
+     */
+    private function assertReturnsNotContradicted(ReflectionMethod $method, ResponseMetadata $declared): void
+    {
+        $declaredSig = $this->responseBodySignature($declared);
+        $controller = $method->getDeclaringClass()->getName();
+        $method0 = $method->getName();
+
+        $native = $this->inferNativeSuccess($method);
+        if ($native->definite && $native->signature() !== $declaredSig) {
+            $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: sprintf('#[Route(returns: …)] (%s) contradicts the definite native return-type inference (%s)', $declaredSig, $native->signature()), fix: 'align returns with the return type, or widen the return type so it is non-definite');
+        }
+        $ast = $this->ast->inferSuccess($method);
+        if ($ast->definite && $ast->signature() !== $declaredSig) {
+            $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: sprintf('#[Route(returns: …)] (%s) contradicts the definite Response::json() body inference (%s)', $declaredSig, $ast->signature()), fix: 'align returns with the response body, or change the body so it is non-definite');
+        }
+    }
+
+    /**
+     * The endpoint-specific error projection (M8b §5): `Route::errors` (validated list-or-map) MERGED with the
+     * AST-inferred literal error statuses (`Response::error(..., 404)`), each a [code, ?description] carried on
+     * the operation for the emitter to render as an Error-schema response. `hasDynamic` (a computed error
+     * status) ⇒ the emitter adds an OpenAPI `default`. Standard 400/401/403/429/500 come from the policy and are
+     * NOT part of this projection — declaring one here only overrides its description.
+     *
+     * @return array{0: list<array{int, ?string}>, 1: bool}
+     */
+    private function collectErrorProjection(Route $route, ReflectionMethod $method): array
+    {
+        $byCode = []; // int ⇒ ?string (an explicit description wins over an inferred one).
+        foreach ($this->normalizeRouteErrors($route, $method) as [$code, $description]) {
+            $byCode[$code] = $description;
+        }
+        $ast = $this->ast->inferErrors($method);
+        foreach ($ast->literalStatuses as $code) {
+            $byCode[$code] ??= null;
+        }
+        $merged = [];
+        foreach ($byCode as $code => $description) {
+            $merged[] = [(int) $code, $description];
+        }
+        usort($merged, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
+        return [$merged, $ast->hasDynamic];
+    }
+
+    /**
+     * Validate `Route::errors` to a list of [code, ?description]. STRICT list-or-map only (§5): a list of int
+     * codes `[404, 409]` or a code⇒description map `[404 => '…']`; a mixed form is rejected. Only HTTP 400–599.
+     *
+     * @return list<array{int, ?string}>
+     */
+    private function normalizeRouteErrors(Route $route, ReflectionMethod $method): array
+    {
+        $errors = $route->errors;
+        if ($errors === []) {
+            return [];
+        }
+        $controller = $method->getDeclaringClass()->getName();
+        $method0 = $method->getName();
+
+        $allIntValues = true;
+        $allStringValues = true;
+        $allIntKeys = true;
+        foreach ($errors as $value) {
+            if (!is_int($value)) {
+                $allIntValues = false;
+            }
+            if (!is_string($value)) {
+                $allStringValues = false;
+            }
+        }
+        foreach (array_keys($errors) as $key) {
+            if (!is_int($key)) {
+                $allIntKeys = false;
+            }
+        }
+        $isList = array_is_list($errors) && $allIntValues;
+        $isMap = $allIntKeys && $allStringValues;
+        if (!$isList && !$isMap) {
+            $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'errors', cause: "#[Route(errors: …)] must be a list of codes ([404, 409]) or a code⇒description map ([404 => '…']); a mixed form is rejected", fix: 'use one form consistently — all int codes, or all int⇒string pairs');
+            return [];
+        }
+
+        $out = [];
+        foreach ($errors as $key => $value) {
+            $code = $isList ? $value : $key;
+            $description = $isList ? null : $value;
+            if ($code < 400 || $code > 599) {
+                $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'errors', cause: sprintf('#[Route(errors: …)] code %s is outside the HTTP error range 400–599', var_export($code, true)), fix: 'use an HTTP error status (400–599)');
+                continue;
+            }
+            $out[] = [(int) $code, $description];
+        }
+        return $out;
+    }
+
+    /**
+     * A stable BODY-shape identity for a ResponseMetadata — mirrors {@see SuccessInference::signature()}
+     * (`ref:<fqcn>` / `inline:<type>:<format>` / `none`, suffixed `[]` for a collection), WITHOUT the status.
+     * Used both to drop a redeclared success duplicate and to compare a definite inference against `returns`.
+     */
+    private function responseBodySignature(ResponseMetadata $response): string
+    {
+        $body = 'none';
+        if ($response->schema !== null) {
+            $body = $this->schemaSignature($response->schema);
+        } elseif ($response->arrayItem !== null) {
+            $body = $this->schemaSignature($response->arrayItem) . '[]';
+        }
+        return $body;
+    }
+
+    private function schemaSignature(SchemaMetadata $schema): string
+    {
+        if ($schema->className !== null) {
+            return 'ref:' . $schema->className;
+        }
+        if ($schema->isEnum) {
+            return 'inline:' . ($schema->enumType ?? '') . ':' . ($schema->format ?? '');
+        }
+        return $schema->type !== null ? 'inline:' . $schema->type . ':' . ($schema->format ?? '') : 'none';
     }
 
     /**

@@ -17,6 +17,8 @@ final readonly class OperationMetadata
      * @param list<ParameterMetadata> $queryParams
      * @param list<ResponseMetadata> $responses
      * @param list<string> $tags
+     * @param list<array{int, ?string}> $routeErrors normalized `Route::errors` (code ⇒ ?description);
+     *     the emitter merges these with the auto-derived standard errors (override-or-add)
      */
     public function __construct(
         public string $httpMethod,
@@ -36,6 +38,8 @@ final readonly class OperationMetadata
         public ?string $method = null,
         public bool $rateLimited = false,
         public bool $accessGated = false,
+        public array $routeErrors = [],
+        public bool $hasDynamicError = false,
     ) {
     }
 

@@ -345,8 +345,16 @@ final class OpenApiEmitter
     }
 
     /**
-     * Merge the operation's declared responses with the standard error responses. A declared status always
-     * wins (never duplicated); standard errors $ref the shared Error component.
+     * Assemble the responses map (M8b: success + supplements → standard errors → Route::errors → default).
+     *
+     *  1. the operation's resolved responses (success + supplementary declared #[ApiResponse]s);
+     *  2. the standard error policy (400/401/403/429/500), each $ref-ing the shared Error component — a status
+     *     already present (declared) wins and is never duplicated;
+     *  3. `Route::errors` / AST-inferred error codes: a code already present keeps its schema (description
+     *     overridden when given); a new code is added with the Error $ref. A code already filled by a declared
+     *     response with a NON-Error schema is a structural ERROR (same status, different schema — §5/§6);
+     *  4. an OpenAPI `default` (Error schema) ONLY when the operation has a computed (non-literal) error status;
+     *  5. ksort SORT_STRING ⇒ numeric statuses ordered, `default` last.
      *
      * @param array<string, array<string, mixed>> $componentsSchemas
      * @return array<string, array<string, mixed>> keyed by status (string)
@@ -364,16 +372,69 @@ final class OpenApiEmitter
             if (array_key_exists($key, $responses)) {
                 continue; // a declared #[Response] for this status wins.
             }
-            $responses[$key] = [
-                'description' => $description,
-                'content' => [
-                    'application/json' => ['schema' => $errorRef],
-                ],
-            ];
+            $responses[$key] = $this->errorResponse($description);
         }
 
-        ksort($responses);
+        // Route::errors / inferred codes: override description or add an Error-schema response.
+        foreach ($operation->routeErrors as [$code, $description]) {
+            $key = (string) $code;
+            if (array_key_exists($key, $responses)) {
+                if (!$this->isErrorOrDefaultResponse($responses[$key])) {
+                    // A declared non-Error schema already occupies this status — §6 conflict.
+                    $this->diagnostics->error(
+                        controller: $operation->controller,
+                        method: $operation->method,
+                        dto: null,
+                        field: 'errors',
+                        cause: sprintf('#[Route(errors: …)] claims status %d, but a declared #[Response] already fills it with a different schema', $code),
+                        fix: 'drop the conflicting #[Route(errors)] entry or the declared #[Response] for this status',
+                    );
+                    continue;
+                }
+                if ($description !== null && $description !== '') {
+                    $responses[$key]['description'] = $description;
+                }
+                continue;
+            }
+            $responses[$key] = $this->errorResponse($description ?? sprintf('Error %d', $code));
+        }
+
+        if ($operation->hasDynamicError) {
+            $responses['default'] = $this->errorResponse('Error');
+        }
+
+        ksort($responses, SORT_STRING);
         return $responses;
+    }
+
+    /**
+     * A standard error response object: description + the shared Error envelope under application/json.
+     *
+     * @return array<string, mixed>
+     */
+    private function errorResponse(string $description): array
+    {
+        return [
+            'description' => $description,
+            'content' => [
+                'application/json' => ['schema' => ['$ref' => $this->refTo($this->errors::ERROR_SCHEMA_NAME)]],
+            ],
+        ];
+    }
+
+    /**
+     * Whether a rendered response is the Error envelope (or an empty body) — i.e. compatible with a
+     * `Route::errors` claim at the same status. A response carrying any OTHER schema is a §6 conflict.
+     *
+     * @param array<string, mixed> $response
+     */
+    private function isErrorOrDefaultResponse(array $response): bool
+    {
+        $schema = $response['content']['application/json']['schema'] ?? null;
+        if ($schema === null) {
+            return true; // empty body — no conflicting schema.
+        }
+        return ($schema['$ref'] ?? null) === $this->refTo($this->errors::ERROR_SCHEMA_NAME);
     }
 
     /**
