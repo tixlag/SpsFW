@@ -185,7 +185,8 @@ assert_same(RcaUserDto::class, $nop->responses[0]->schema->className, 'native DT
 assert_true(!$nd->hasWarnings(), 'a definite native DTO inference emits no diagnostic');
 
 // ============================================================================
-// 7. Dto|Response union is NON-definite (returns may override without contradiction).
+// 7. Dto|Response union resolves to the DTO (D2): Response is a transport branch, excluded; the remaining DTO
+//    is the definite success body. Multiple different DTOs in the union stay ambiguous (non-definite).
 // ============================================================================
 final class RcaUnionController
 {
@@ -194,11 +195,29 @@ final class RcaUnionController
     {
         return new RcaUserDto();
     }
+
+    #[Route('/rca/unionnull', [HttpMethod::GET])]
+    public function unionNull(): RcaUserDto|Response|null
+    {
+        return new RcaUserDto();
+    }
+
+    #[Route('/rca/unionambiguous', [HttpMethod::GET])]
+    public function unionAmbiguous(): RcaUserDto|RcaItemDto|null
+    {
+        return new RcaUserDto();
+    }
 }
 $ud = new CompileDiagnostics();
-$uop = rcaCompile(RcaUnionController::class, $ud)[0];
-assert_true($ud->hasWarnings(), 'Dto|Response union is non-derivable ⇒ diagnostic suggesting returns');
-assert_same(null, $uop->responses[0]->schema, 'non-derivable union ⇒ empty success body');
+$ubyPath = [];
+foreach (rcaCompile(RcaUnionController::class, $ud) as $op) {
+    $ubyPath[$op->path] = $op;
+}
+assert_true(!$ud->hasErrors(), 'Dto|Response(|null) unions are derivable (no errors; the ambiguous multi-DTO union warns separately)');
+assert_same(RcaUserDto::class, $ubyPath['/rca/union']->responses[0]->schema->className, 'Dto|Response ⇒ the DTO after excluding the Response transport');
+assert_same(RcaUserDto::class, $ubyPath['/rca/unionnull']->responses[0]->schema->className, 'Dto|Response|null ⇒ the DTO after excluding Response and null');
+assert_same(null, $ubyPath['/rca/unionambiguous']->responses[0]->schema, 'two different DTOs in the union ⇒ ambiguous, empty body');
+assert_true($ud->hasWarnings(), 'the ambiguous multi-DTO union surfaces a diagnostic suggesting returns');
 
 // ============================================================================
 // 8. AST inference: `: Response` + `Response::json(new Dto())` ⇒ AST-derived schema.
@@ -235,7 +254,8 @@ assert_same(201, $byPath['/rca/ast201']->responses[0]->status, 'AST literal 201 
 assert_true(!$ad->hasWarnings(), 'definite AST inference emits no diagnostic');
 
 // ============================================================================
-// 9. Response::error is ignored as a success body; the error status is projected.
+// 9. Response::error is ignored as a success body; it is NO LONGER projected as an error status (the fix-pass
+//    removed AST error inference — endpoint-specific codes come only from Route::errors / explicit #[ApiResponse]).
 // ============================================================================
 final class RcaErrorController
 {
@@ -248,8 +268,7 @@ final class RcaErrorController
 $ed = new CompileDiagnostics();
 $eop = rcaCompile(RcaErrorController::class, $ed)[0];
 assert_same(RcaUserDto::class, $eop->responses[0]->schema->className, 'returns defines the success; Response::error does not replace it');
-$errCodes = array_map(static fn(array $e): int => $e[0], $eop->routeErrors);
-assert_true(in_array(404, $errCodes, true), 'the AST-inferred 404 is projected into routeErrors');
+assert_same([], $eop->routeErrors, 'a literal Response::error status is NOT projected into routeErrors (no AST error inference)');
 assert_true(!$ed->hasErrors(), 'no contradiction: returns + a Response::error body');
 
 // ============================================================================
@@ -285,23 +304,86 @@ assert_same([500], array_map(static fn(array $x): int => $x[0], $byPath['/rca/er
 assert_same(2, $erd->errorCount(), 'mixed form and out-of-range code are each compile ERRORs');
 
 // ============================================================================
-// 11. Dynamic error status ⇒ hasDynamicError (the emitter adds an OpenAPI `default`).
+// 11. Explicit #[Route] fields are canonical (D1): an explicitly passed bool/int — even one equal to the
+//     default — wins over #[Operation], and is NOT treated as a fallback. The getArguments distinction is what
+//     lets `deprecated:false` / `documented:true` / `successStatus:201` take effect.
 // ============================================================================
-final class RcaDynamicController
+final class RcaExplicitController
 {
-    #[Route('/rca/dyn', [HttpMethod::GET], returns: RcaUserDto::class)]
-    public function dyn(): Response
+    #[Route('/rca/explicitdep', [HttpMethod::GET], deprecated: false)]
+    #[Operation(deprecated: true)]
+    public function explicitDeprecated() {}
+
+    #[Route('/rca/explicitdoc', [HttpMethod::GET], documented: true)]
+    #[Operation(exclude: true)]
+    public function explicitDocumented() {}
+
+    #[Route('/rca/explicitstatus', [HttpMethod::GET], successStatus: 201)]
+    public function explicitStatus(): Response
     {
-        $code = 404;
-        return Response::error(null, statusCode: $code);
+        return Response::json(new RcaUserDto());
     }
 }
-$dd = new CompileDiagnostics();
-$dop = rcaCompile(RcaDynamicController::class, $dd)[0];
-assert_true($dop->hasDynamicError, 'a computed error status sets hasDynamicError');
+$exd = new CompileDiagnostics();
+$ex = [];
+foreach (rcaCompile(RcaExplicitController::class, $exd) as $op) {
+    $ex[$op->path] = $op;
+}
+assert_true(!$ex['/rca/explicitdep']->deprecated, 'explicit deprecated:false beats Operation(deprecated:true) (Route canonical, no fallback)');
+assert_same(1, count(array_filter($exd->warnings(), static fn (array $w): bool => $w['field'] === 'deprecated')), 'the deprecated:false vs Operation(deprecated:true) conflict is surfaced');
+assert_true(isset($ex['/rca/explicitdoc']), 'explicit documented:true beats Operation(exclude:true) — the operation stays documented (NOT excluded)');
+assert_same(201, $ex['/rca/explicitstatus']->responses[0]->status, 'explicit successStatus:201 beats the AST-inferred default status');
 
 // ============================================================================
-// 12. Inferred + explicit merge; same-status different-schema is an ERROR.
+// 12. D3 — success branches with the SAME schema but DIFFERENT statuses do not collapse to the last branch.
+// ============================================================================
+final class RcaStatusConflictController
+{
+    #[Route('/rca/statusconflict', [HttpMethod::GET])]
+    public function conflict(bool $ok): Response
+    {
+        if ($ok) {
+            return Response::json(new RcaUserDto(), 201);
+        }
+        return Response::json(new RcaUserDto(), 200);
+    }
+}
+$scd = new CompileDiagnostics();
+$scop = rcaCompile(RcaStatusConflictController::class, $scd)[0];
+assert_same(RcaUserDto::class, $scop->responses[0]->schema->className, 'same-DTO branches ⇒ definite schema regardless of status');
+assert_same(200, $scop->responses[0]->status, 'differing branch statuses do NOT collapse to the last branch (201) — fall back to 200');
+assert_true($scd->hasWarnings(), 'differing success statuses surface a diagnostic');
+
+// ============================================================================
+// 13. D4 — a success body at status 204 is an ERROR regardless of its source (returns / native / AST / ApiResponse).
+// ============================================================================
+final class RcaNoBody204Controller
+{
+    #[Route('/rca/204returns', [HttpMethod::GET], returns: RcaUserDto::class, successStatus: 204)]
+    public function fromReturns() {}
+
+    #[Route('/rca/204native', [HttpMethod::GET], successStatus: 204)]
+    public function fromNative(): RcaUserDto
+    {
+        return new RcaUserDto();
+    }
+
+    #[Route('/rca/204ast', [HttpMethod::GET], successStatus: 204)]
+    public function fromAst(): Response
+    {
+        return Response::json(new RcaUserDto());
+    }
+
+    #[Route('/rca/204api', [HttpMethod::GET], successStatus: 204)]
+    #[ApiResponse(RcaUserDto::class, 204)]
+    public function fromApiResponse() {}
+}
+$nd = new CompileDiagnostics();
+rcaCompile(RcaNoBody204Controller::class, $nd);
+assert_same(4, $nd->errorCount(), 'a body at status 204 is an ERROR from every source (returns/native/AST/ApiResponse)');
+
+// ============================================================================
+// 14. Inferred + explicit merge; same-status different-schema is an ERROR.
 // ============================================================================
 final class RcaMergeController
 {

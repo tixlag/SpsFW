@@ -348,7 +348,7 @@ assert_same(3, $fieldCounts['return'], 'three return-field warnings (entity / ar
 $causes = implode("\n", array_map(static fn(array $e): string => $e['cause'], $diag->warnings()));
 assert_true(str_contains($causes, 'not a DTO-eligible class'), 'non-eligible class warning present');
 assert_true(str_contains($causes, 'array return type has no derivable item type'), 'itemless array warning present');
-assert_true(str_contains($causes, 'is not auto-derivable: union'), 'union return warning present (member order is PHP-normalized)');
+assert_true(str_contains($causes, 'multiple schema types in the union are ambiguous'), 'genuine scalar union (int|string) is ambiguous and surfaces a return warning');
 
 // the entity warning carries the entity FQCN in its `dto` slot
 $entityErr = null;

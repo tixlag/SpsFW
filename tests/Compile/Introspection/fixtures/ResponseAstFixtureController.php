@@ -5,7 +5,9 @@ declare(strict_types=1);
 /**
  * M8b fixture for {@see \SpsFW\Core\Compile\Introspection\ResponseAstAnalyzerTest}: one method per inference
  * case. The DTOs live in THIS file's namespace so the analyzer resolves `new FooDto()` to a real FQCN through
- * the file's namespace + use map. Only the analyzer reads these (no routing / no schema eligibility assumed).
+ * NameResolver (file parsed + resolved once). Only the analyzer reads these (no routing / no schema eligibility
+ * assumed). A second controller and a trait consumer exercise FQCN/trait-based method location (D5): two
+ * same-named methods in different classes, and a method defined in a used trait, must never mix.
  */
 
 namespace SpsFW\Tests\Compile\Introspection\Fixtures;
@@ -122,15 +124,38 @@ class ResponseAstFixtureController
         return Response::error(null, statusCode: 404);
     }
 
-    // a computed (dynamic) error status.
-    public function dynamicError(int $code): Response
+    // the SAME DTO across branches but DIFFERENT success statuses (200/201) — schema is definite, status is NOT
+    // (statusConflict=true; the single-status model cannot represent it).
+    public function sameDtoDifferentStatus(bool $ok): Response
     {
-        return Response::error(null, statusCode: $code);
+        if ($ok) {
+            return Response::json(new AstUserDto(), 201);
+        }
+        return Response::json(new AstUserDto(), 200);
     }
+}
 
-    // errorMessage with a literal status.
-    public function errorMessageLiteral(): Response
+// A second controller defining a SAME-NAMED method (caseA) over a DIFFERENT DTO — the analyzer must locate the
+// method by the declaring-class FQCN, never by short name, so the two never mix (D5).
+class ResponseAstAltController
+{
+    public function caseA(): Response
     {
-        return Response::errorMessage('nope', 409);
+        return Response::json(new AstItemDto());
     }
+}
+
+// A method defined in a trait and consumed via `use` — reflection reports the TRAIT as the declaring class, so
+// the analyzer must locate the method in the Trait_ node by its FQCN (D5).
+trait AstTraitFixture
+{
+    public function traitMethod(): Response
+    {
+        return Response::json(new AstUserDto());
+    }
+}
+
+class ResponseAstTraitConsumer
+{
+    use AstTraitFixture;
 }

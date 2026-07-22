@@ -345,16 +345,18 @@ final class OpenApiEmitter
     }
 
     /**
-     * Assemble the responses map (M8b: success + supplements → standard errors → Route::errors → default).
+     * Assemble the responses map (M8b: success + supplements → standard errors → Route::errors).
      *
      *  1. the operation's resolved responses (success + supplementary declared #[ApiResponse]s);
      *  2. the standard error policy (400/401/403/429/500), each $ref-ing the shared Error component — a status
      *     already present (declared) wins and is never duplicated;
-     *  3. `Route::errors` / AST-inferred error codes: a code already present keeps its schema (description
-     *     overridden when given); a new code is added with the Error $ref. A code already filled by a declared
-     *     response with a NON-Error schema is a structural ERROR (same status, different schema — §5/§6);
-     *  4. an OpenAPI `default` (Error schema) ONLY when the operation has a computed (non-literal) error status;
-     *  5. ksort SORT_STRING ⇒ numeric statuses ordered, `default` last.
+     *  3. `Route::errors` codes: a code already present keeps its schema (description overridden when given); a
+     *     new code is added with the Error $ref. A code already filled by a declared response with a NON-Error
+     *     schema is a structural ERROR (same status, different schema — §5/§6);
+     *  4. ksort SORT_STRING ⇒ numeric statuses ordered.
+     *
+     * No `default` is synthesized from the method body (the fix-pass removed AST error inference): non-standard
+     * error responses come only from StandardErrorPolicy, `Route::errors`, and explicit #[ApiResponse]s.
      *
      * @param array<string, array<string, mixed>> $componentsSchemas
      * @return array<string, array<string, mixed>> keyed by status (string)
@@ -366,7 +368,6 @@ final class OpenApiEmitter
             $responses[(string) $response->status] = $this->buildResponse($response, $componentsSchemas);
         }
 
-        $errorRef = ['$ref' => $this->refTo($this->errors::ERROR_SCHEMA_NAME)];
         foreach ($this->errors->responsesFor($operation) as $status => $description) {
             $key = (string) $status;
             if (array_key_exists($key, $responses)) {
@@ -375,7 +376,7 @@ final class OpenApiEmitter
             $responses[$key] = $this->errorResponse($description);
         }
 
-        // Route::errors / inferred codes: override description or add an Error-schema response.
+        // Route::errors: override description or add an Error-schema response.
         foreach ($operation->routeErrors as [$code, $description]) {
             $key = (string) $code;
             if (array_key_exists($key, $responses)) {
@@ -397,10 +398,6 @@ final class OpenApiEmitter
                 continue;
             }
             $responses[$key] = $this->errorResponse($description ?? sprintf('Error %d', $code));
-        }
-
-        if ($operation->hasDynamicError) {
-            $responses['default'] = $this->errorResponse('Error');
         }
 
         ksort($responses, SORT_STRING);

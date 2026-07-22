@@ -39,7 +39,6 @@ final readonly class OperationMetadata
         public bool $rateLimited = false,
         public bool $accessGated = false,
         public array $routeErrors = [],
-        public bool $hasDynamicError = false,
     ) {
     }
 

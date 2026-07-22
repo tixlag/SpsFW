@@ -13,10 +13,10 @@ use SpsFW\Core\Http\Response;
 require_once dirname(__DIR__, 2) . '/bootstrap.php';
 
 /**
- * M8b: the OpenApiEmitter response map (buildResponses) — Route::errors description override, inferred error
- * codes added with the Error $ref (no duplication of policy codes), `default` last when a dynamic error path
- * exists, and numeric status ordering preserved. All cases use NoAuthAccess + no body so the standard policy
- * contributes ONLY 500 (clean isolation of the M8b behavior).
+ * M8b + fix-pass: the OpenApiEmitter response map (buildResponses) — Route::errors description override, a new
+ * code added with the Error $ref (no duplication of policy codes), numeric status ordering preserved, and NO
+ * `default` synthesized from a computed (dynamic) error status (the fix-pass removed AST error inference). All
+ * cases use NoAuthAccess + a returns body so the standard policy contributes ONLY 500 (clean isolation).
  */
 class RceDto
 {
@@ -67,14 +67,13 @@ assert_same('#/components/schemas/Error', $ad['409']['content']['application/jso
 assert_true(isset($ad['500']) && isset($ad['200']) && isset($ad['409']), 'success + standard 500 + added 409 all present');
 assert_same(3, count($ad), 'no duplicated status entries');
 
-// dyn: a dynamic error path ⇒ `default` (Error schema) is appended LAST. PHP coerces numeric-string status
-// keys to ints, so the ordered keys are [200, 500, 'default'].
+// dyn: a computed (dynamic) error status NO LONGER produces an OpenAPI `default` (the fix-pass removed AST error
+// inference). Only the success body (200) + the standard policy 500 remain.
 $dy = $responses('/rce/dyn');
-assert_true(isset($dy['default']), 'a dynamic error status produces an OpenAPI default response');
-assert_same('#/components/schemas/Error', $dy['default']['content']['application/json']['schema']['$ref'], 'default carries the Error schema');
-assert_same([200, 500, 'default'], array_keys($dy), 'default sorts last; numeric statuses stay ordered (ksort SORT_STRING)');
+assert_true(!isset($dy['default']), 'a dynamic error status no longer adds a default response');
+assert_same([200, 500], array_keys($dy), 'success + standard 500 only; numeric statuses ordered (ksort SORT_STRING)');
 
-// plain: no dynamic path ⇒ NO default key.
-assert_true(!isset($responses('/rce/plain')['default']), 'no dynamic error ⇒ no default response');
+// plain: no `default` key either.
+assert_true(!isset($responses('/rce/plain')['default']), 'no default response');
 
 echo "Route contract emitter passed\n";

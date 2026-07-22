@@ -30,7 +30,6 @@ use SpsFW\Core\Compile\RuleSource;
 use SpsFW\Core\Compile\Introspection\AttributeReader;
 use SpsFW\Core\Compile\Introspection\DtoEligibility;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
-use SpsFW\Core\Compile\Introspection\ErrorInference;
 use SpsFW\Core\Compile\Introspection\OperationIdResolver;
 use SpsFW\Core\Compile\Introspection\RequiredSource;
 use SpsFW\Core\Compile\Introspection\ResponseAstAnalyzer;
@@ -73,8 +72,10 @@ final class RouteMetadataCompiler
     private readonly OperationIdResolver $operationIds;
 
     /**
-     * Conservative AST inference of `Response::json(...)` success bodies and `Response::error(...)` statuses
-     * (M8b). Injected for testability; defaults to a stateless analyzer. File-level parse cache ⇒ cheap.
+     * Conservative AST inference of `Response::json(...)` success bodies (M8b + fix-pass). The error-status
+     * inference was removed — endpoint-specific codes now come only from `Route::errors` and explicit
+     * `#[ApiResponse]`s. Injected for testability; defaults to a stateless analyzer. File-level parse + resolve
+     * cache ⇒ cheap.
      */
     private readonly ResponseAstAnalyzer $ast;
 
@@ -584,12 +585,30 @@ final class RouteMetadataCompiler
             $methodRoute = $routeAttributes[0]->newInstance();
 
             $operation = $this->attributeReader->firstInstance($method, Operation::class);
-            // Effective exclude (M8b): Route is canonical, so `documented:false` hides the operation; the
-            // legacy #[Operation(exclude:true)] still works as a BC fallback. Either ⇒ reachable at runtime,
-            // hidden from the spec. The codemod migrates exclude:true ⇒ documented:false and drops Operation,
-            // so the two never coexist in migrated controllers.
-            if ($methodRoute->documented === false || $operation?->exclude === true) {
-                continue;
+            $explicit = $this->routeExplicitFields($routeAttributes[0]);
+
+            // Effective exclude (M8b + fix-pass): `documented` on #[Route] is CANONICAL — an explicitly passed
+            // value wins, so `documented:false` hides the operation regardless of #[Operation(exclude:true)], and
+            // an explicit `documented:true` keeps it documented even if Operation says exclude. Only when
+            // `documented` is NOT passed does the legacy #[Operation(exclude:true)] act as a BC fallback. An
+            // explicit `documented:true` clashing with `Operation(exclude:true)` is surfaced (Route wins). Bool
+            // fields need this getArguments distinction because `false` cannot be told apart from the default.
+            if (array_key_exists('documented', $explicit)) {
+                if ($methodRoute->documented === false) {
+                    continue; // canonical exclude
+                }
+                if ($operation?->exclude === true) {
+                    $this->diagnostics->warning(
+                        controller: $reflection->getName(),
+                        method: $method->getName(),
+                        dto: null,
+                        field: 'documented',
+                        cause: '#[Route(documented: true)] conflicts with #[Operation(exclude: true)]; Route documented wins (operation stays documented)',
+                        fix: 'declare exclusion on only one attribute (prefer #[Route(documented: false)])',
+                    );
+                }
+            } elseif ($operation?->exclude === true) {
+                continue; // legacy BC fallback
             }
 
             $httpMethods = $methodRoute->getHttpMethods();
@@ -599,7 +618,7 @@ final class RouteMetadataCompiler
 
             foreach ($httpMethods as $httpMethod) {
                 $httpMethodString = is_string($httpMethod) ? $httpMethod : $httpMethod->value;
-                $operations[] = $this->buildOperation($reflection, $method, $httpMethodString, $methodRoute, $operation);
+                $operations[] = $this->buildOperation($reflection, $method, $httpMethodString, $methodRoute, $operation, $explicit);
             }
         }
 
@@ -851,15 +870,16 @@ final class RouteMetadataCompiler
         string $httpMethod,
         Route $route,
         ?Operation $operation,
+        array $explicit,
     ): OperationMetadata {
         $controller = $reflection->getName();
         $path = $route->getPath();
 
         $pathParams = $this->collectPathParams($method, $path);
         [$requestBody, $queryParams] = $this->collectRequestProjection($reflection, $method);
-        $responses = $this->collectResponses($reflection, $method, $route);
+        $responses = $this->collectResponses($reflection, $method, $route, $explicit);
         $security = $this->collectSecurity($method);
-        [$routeErrors, $hasDynamicError] = $this->collectErrorProjection($route, $method);
+        $routeErrors = $this->collectErrorProjection($route, $method);
 
         // resolveId (PURE) — the id is stored on the VO, but NOT recorded for the uniqueness check yet. The
         // caller (compileOperationClasses for the legacy path, compileEndpointSet for the unified path) records
@@ -878,7 +898,7 @@ final class RouteMetadataCompiler
         }
         $operationId = $this->operationIds->resolveId($controller, $method->getName(), $route->operationId ?? $operation?->id);
         $tags = $this->mergedTags($controller, $route, $operation);
-        [$summary, $description, $deprecated] = $this->mergedScalarFields($controller, $method, $route, $operation);
+        [$summary, $description, $deprecated] = $this->mergedScalarFields($controller, $method, $route, $operation, $explicit);
 
         return new OperationMetadata(
             httpMethod: $httpMethod,
@@ -898,7 +918,6 @@ final class RouteMetadataCompiler
             rateLimited: $this->isRateLimited($method),
             accessGated: $this->isAccessGated($method),
             routeErrors: $routeErrors,
-            hasDynamicError: $hasDynamicError,
         );
     }
 
@@ -928,15 +947,73 @@ final class RouteMetadataCompiler
     }
 
     /**
+     * @param array<string, true> $explicit explicit #[Route] field names (named OR positional)
      * @return array{0: ?string, 1: ?string, 2: bool} [summary, description, deprecated]
      */
-    private function mergedScalarFields(string $controller, ReflectionMethod $method, Route $route, ?Operation $operation): array
+    private function mergedScalarFields(string $controller, ReflectionMethod $method, Route $route, ?Operation $operation, array $explicit): array
     {
         return [
             $this->mergeStringField($controller, $method, 'summary', $route->summary, $operation?->summary),
             $this->mergeStringField($controller, $method, 'description', $route->description, $operation?->description),
-            $route->deprecated || ($operation?->deprecated ?? false),
+            $this->mergedDeprecated($controller, $method, $route, $operation, $explicit),
         ];
+    }
+
+    /**
+     * deprecated (D1): an EXPLICITLY passed #[Route(deprecated: …)] is canonical — including `false`, which the
+     * old `||`-merge could not tell apart from the default. Route wins; #[Operation(deprecated:true)] is a BC
+     * fallback used only when `deprecated` is not passed on Route. An explicit Route value clashing with
+     * Operation is surfaced (Route wins).
+     *
+     * @param array<string, true> $explicit
+     */
+    private function mergedDeprecated(string $controller, ReflectionMethod $method, Route $route, ?Operation $operation, array $explicit): bool
+    {
+        if (array_key_exists('deprecated', $explicit)) {
+            if ($operation !== null && $operation->deprecated && !$route->deprecated) {
+                $this->diagnostics->warning(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'deprecated',
+                    cause: sprintf('#[Route(deprecated: %s]) conflicts with #[Operation(deprecated: true)]; Route wins', $route->deprecated ? 'true' : 'false'),
+                    fix: 'declare deprecated on only one attribute (prefer #[Route])',
+                );
+            }
+            return $route->deprecated;
+        }
+        return $route->deprecated || ($operation?->deprecated ?? false);
+    }
+
+    /**
+     * The set of #[Route] constructor arguments the caller passed EXPLICITLY (named OR positional), via
+     * ReflectionAttribute::getArguments(). Used to distinguish an explicit `false`/default-int value (documented,
+     * deprecated, successStatus) from the constructor default — the Route instance alone cannot tell them apart.
+     *
+     * @return array<string, true>
+     */
+    private function routeExplicitFields(ReflectionAttribute $routeAttribute): array
+    {
+        $arguments = $routeAttribute->getArguments();
+        $names = [];
+        try {
+            foreach ((new \ReflectionMethod(Route::class, '__construct'))->getParameters() as $index => $parameter) {
+                $names[$index] = $parameter->getName();
+            }
+        } catch (\ReflectionException) {
+            return []; // defensive — treat nothing as explicit
+        }
+        $explicit = [];
+        foreach ($arguments as $key => $_) {
+            if (is_int($key)) {
+                if (isset($names[$key])) {
+                    $explicit[$names[$key]] = true;
+                }
+            } else {
+                $explicit[$key] = true;
+            }
+        }
+        return $explicit;
     }
 
     private function mergeStringField(string $controller, ReflectionMethod $method, string $field, ?string $routeValue, ?string $operationValue): ?string
@@ -1158,38 +1235,54 @@ final class RouteMetadataCompiler
      * Remaining declared `#[ApiResponse]`s now SUPPLEMENT the success (they no longer replace inference
      * wholesale — §6): error-status responses, complex bodies (headers / non-JSON), and the rare
      * multi-success-schema cases stay. An `#[ApiResponse]` redeclaring the success status with a DIFFERENT
-     * schema is an ERROR. `Route::errors` + inferred error codes are projected separately (collectErrorProjection).
+     * schema is an ERROR. `Route::errors` codes are projected separately (collectErrorProjection).
      *
+     * SCHEMA and STATUS are resolved by INDEPENDENT priority chains (D3 fix-pass), so a definite schema never
+     * drags a wrong status and a known status never forces a schema:
+     *   schema  : returns → single 2xx ApiResponse → native return type → AST → diagnostic;
+     *   status  : explicit successStatus → single 2xx ApiResponse → unambiguous AST status → 200.
+     * A success body resolved at status 204 is a compile ERROR regardless of the body's source (D4 universal).
+     *
+     * @param array<string, true> $explicit explicit #[Route] field names (named OR positional)
      * @return list<ResponseMetadata>
      */
-    private function collectResponses(ReflectionClass $reflection, ReflectionMethod $method, Route $route): array
+    private function collectResponses(ReflectionClass $reflection, ReflectionMethod $method, Route $route, array $explicit): array
     {
         $declared = $this->attributeReader->getInstances($method, ApiResponse::class);
+        $successApiResponses = array_values(array_filter(
+            $declared,
+            static fn (ApiResponse $r): bool => $r->status >= 200 && $r->status < 300,
+        ));
 
-        // --- resolve the SUCCESS response ---
-        $success = null;
-        if ($route->returns !== null) {
-            $success = $this->returnsResponseMetadata($route, $method);
-            $this->assertReturnsNotContradicted($method, $success);
-        } else {
-            $successCandidates = array_values(array_filter(
-                $declared,
-                static fn (ApiResponse $r): bool => $r->status >= 200 && $r->status < 300,
-            ));
-            if (count($successCandidates) === 1) {
-                $success = $this->responseFromAttribute($method, $successCandidates[0]);
-            } elseif (count($successCandidates) > 1) {
-                // Multiple success schemas/statuses — the rare escape-hatch case (§6). Keep EVERY declared
-                // response verbatim (legacy full pass); do not collapse or infer.
-                $responses = [];
-                foreach ($declared as $response) {
-                    $responses[] = $this->responseFromAttribute($method, $response);
-                }
-                return $responses;
-            } else {
-                $success = $this->inferSuccess($reflection, $method, $route->successStatus);
+        // The AST success inference feeds BOTH the schema fallback (priority 4) and the status fallback (priority
+        // 3 of the status chain). Computed once; never throws.
+        $astInf = $this->ast->inferSuccess($method);
+
+        // --- STATUS (independent of schema) ---
+        $status = $this->resolveSuccessStatus($reflection, $method, $route, $explicit, $successApiResponses, $astInf);
+
+        // --- SCHEMA + the success ResponseMetadata at the resolved status ---
+        if ($route->returns === null && count($successApiResponses) > 1) {
+            // Multiple success schemas/statuses declared (the rare escape-hatch case, §6): keep EVERY declared
+            // response verbatim — do not collapse, infer, or re-statu.
+            $responses = [];
+            foreach ($declared as $response) {
+                $responses[] = $this->responseFromAttribute($method, $response);
             }
+            return $responses;
         }
+
+        if ($route->returns !== null) {
+            $success = $this->returnsResponseMetadata($route, $method, $status);
+            $this->assertReturnsNotContradicted($method, $success, $astInf);
+        } elseif (count($successApiResponses) === 1) {
+            $success = $this->responseFromAttribute($method, $successApiResponses[0])->withStatus($status);
+        } else {
+            $success = $this->inferSuccessResponseMetadata($reflection, $method, $astInf, $status);
+        }
+
+        // --- D4: a body at status 204 is an ERROR regardless of the body's source (returns/ApiResponse/native/AST) ---
+        $this->assertSuccessBodyAllowedForStatus($success, $method);
 
         // --- success + supplementary declared responses ---
         $successBodySig = $this->responseBodySignature($success);
@@ -1213,6 +1306,60 @@ final class RouteMetadataCompiler
             $responses[] = $rm;
         }
         return $responses;
+    }
+
+    /**
+     * Resolve the success STATUS by its own priority chain (D3): explicit `Route::successStatus` (canonical —
+     * D1) → a single declared 2xx ApiResponse's status → an UNAMBIGUOUS AST-inferred status → 200. Branches that
+     * DISAGREE on the status (statusConflict) cannot collapse to a single status: diagnose and fall back to 200.
+     *
+     * @param array<string, true> $explicit
+     * @param list<ApiResponse> $successApiResponses
+     */
+    private function resolveSuccessStatus(ReflectionClass $reflection, ReflectionMethod $method, Route $route, array $explicit, array $successApiResponses, SuccessInference $astInf): int
+    {
+        if (array_key_exists('successStatus', $explicit)) {
+            return $route->successStatus; // explicitly passed ⇒ canonical
+        }
+        if (count($successApiResponses) === 1) {
+            return $successApiResponses[0]->status; // an explicit declared success status
+        }
+        if ($astInf->status !== null) {
+            return $astInf->status; // an unambiguous AST-inferred status (all success branches agree)
+        }
+        if ($astInf->statusConflict) {
+            $this->diagnostics->warning(
+                controller: $reflection->getName(),
+                method: $method->getName(),
+                dto: null,
+                field: 'successStatus',
+                cause: 'the success branches return different HTTP statuses; a single success response cannot represent them',
+                fix: 'declare successStatus on #[Route] for the canonical status, or add explicit #[Response] entries for each success status',
+            );
+        }
+        return 200;
+    }
+
+    /**
+     * D4 (universal): a success response that carries a body at status 204 (No Content) is a compile ERROR,
+     * regardless of where the body came from — `Route::returns`, a single `#[ApiResponse]`, the native return
+     * type, or the AST body. No-content carries no body.
+     */
+    private function assertSuccessBodyAllowedForStatus(ResponseMetadata $success, ReflectionMethod $method): void
+    {
+        if ($success->status !== 204) {
+            return;
+        }
+        if ($success->schema !== null || $success->arrayItem !== null) {
+            $this->diagnostics->error(
+                controller: $method->getDeclaringClass()->getName(),
+                method: $method->getName(),
+                dto: null,
+                field: 'return',
+                cause: 'the success response declares a body but the success status is 204 (No Content carries no body)',
+                fix: 'drop the success body (returns / #[Response(schema:)] / the Response::json body) for a 204, or set successStatus to 200/201',
+            );
+        }
     }
 
     private function responseFromAttribute(
@@ -1268,36 +1415,40 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Infer the SUCCESS response (no `returns`, no single-2xx ApiResponse) by priority: native return type,
-     * then the conservative `Response::json()` AST. A non-derivable success yields ONE diagnostic suggesting
-     * `#[Route(returns: …)]` and an empty success body at $successStatus.
+     * Infer the success SCHEMA (no `returns`, no single-2xx ApiResponse) by priority: native return type, then
+     * the conservative `Response::json()` AST, then a diagnostic suggesting `#[Route(returns: …)]`. The STATUS is
+     * resolved independently by the caller and passed in — schema and status are decoupled (D3).
      */
-    private function inferSuccess(ReflectionClass $reflection, ReflectionMethod $method, int $successStatus): ResponseMetadata
+    private function inferSuccessResponseMetadata(ReflectionClass $reflection, ReflectionMethod $method, SuccessInference $astInf, int $status): ResponseMetadata
     {
         $native = $this->inferNativeSuccess($method);
         if ($native->definite) {
-            return $this->responseMetadataFromInference($native, $native->status ?? $successStatus);
+            return $this->responseMetadataFromInference($native, $status);
         }
-        $ast = $this->ast->inferSuccess($method);
-        if ($ast->definite) {
-            return $this->responseMetadataFromInference($ast, $ast->status ?? $successStatus);
+        if ($astInf->definite) {
+            return $this->responseMetadataFromInference($astInf, $status);
         }
         $this->diagnostics->warning(
             controller: $reflection->getName(),
             method: $method->getName(),
-            dto: $native->class ?? $ast->class,
+            dto: $native->class ?? $astInf->class,
             field: 'return',
-            cause: 'the success response schema is not derivable from the return type or the response body (' . ($native->reason ?? $ast->reason ?? 'opaque') . ')',
+            cause: 'the success response schema is not derivable from the return type or the response body (' . ($native->reason ?? $astInf->reason ?? 'opaque') . ')',
             fix: 'declare the success body with #[Route(returns: Dto::class)] (or returns: [Dto::class] for a list), or keep an explicit #[Response(schema: …)]',
         );
-        return new ResponseMetadata($successStatus, schema: null, description: 'OK');
+        return new ResponseMetadata($status, schema: null, description: 'OK');
     }
 
     /**
      * Native return-type success inference — the definite-flagged form of the old inferSuccessResponse.
      * Definite ONLY for an unambiguous DTO/enum/scalar/DateTime, or an empty (void/null) body. Opaque returns
-     * (missing type / mixed / array / union / non-eligible class / JsonSerializable) are NON-definite — `returns`
+     * (missing type / mixed / array / non-eligible class / JsonSerializable) are NON-definite — `returns`
      * may then override them without contradiction.
+     *
+     * D2 (fix-pass): a union like `Dto|Response|null` is now resolved — `SpsFW\Core\Http\Response` and `null` are
+     * transport / no-body branches, excluded; if EXACTLY ONE eligible schema type remains it is the definite
+     * success body; two or more DIFFERENT schema types remain ambiguous (non-definite). `T|null` still collapses
+     * to `T` via unwrapNullable before reaching here.
      */
     private function inferNativeSuccess(ReflectionMethod $method): SuccessInference
     {
@@ -1315,6 +1466,32 @@ final class RouteMetadataCompiler
         }
         if ($this->isArrayType($inner)) {
             return new SuccessInference(definite: false, reason: 'array return type has no derivable item type');
+        }
+        if ($inner instanceof ReflectionUnionType) {
+            // D2: exclude the Response transport and the null no-body branch; one remaining schema type ⇒ definite.
+            $remaining = [];
+            foreach ($inner->getTypes() as $member) {
+                if (!$member instanceof ReflectionNamedType) {
+                    return new SuccessInference(definite: false, reason: 'union with an intersection/non-named member is not auto-derivable');
+                }
+                if ($member->getName() === 'null') {
+                    continue;
+                }
+                if (!$member->isBuiltin() && is_a($member->getName(), \SpsFW\Core\Http\Response::class, true)) {
+                    continue;
+                }
+                $remaining[] = $member;
+            }
+            if (count($remaining) !== 1) {
+                $reason = $remaining === []
+                    ? 'union has no schema type after excluding Response/null'
+                    : 'multiple schema types in the union are ambiguous';
+                return new SuccessInference(definite: false, reason: $reason);
+            }
+            $inner = $remaining[0];
+        }
+        if (!$inner instanceof ReflectionNamedType) {
+            return new SuccessInference(definite: false, reason: 'return type ' . $this->typeLabel($inner) . ' is not auto-derivable');
         }
 
         $mapped = $this->typeMapper->map($inner);
@@ -1355,19 +1532,20 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Validate `Route::returns` and build the success ResponseMetadata from it (M8b §1).
+     * Validate `Route::returns` and build the success body from it (M8b §1). The STATUS is resolved by the caller
+     * and passed in (schema and status are decoupled — D3); a body at status 204 is caught by the universal D4
+     * check in {@see collectResponses()}, not here.
      *   - `Dto::class`                     ⇒ single object;
      *   - `[Dto::class]`                   ⇒ list of that object;
      *   - `'string'|'integer'|'number'|'boolean'|'object'` ⇒ scalar/object body;
      *   - `['string']` etc.                ⇒ list of that scalar.
-     * Forbidden (ERROR, empty success body): `[]`, >1 element, nested arrays, an unknown scalar type, a body
-     * at successStatus 204, or a nonexistent/unfit class.
+     * Forbidden (ERROR, empty success body): `[]`, >1 element, nested arrays, an unknown scalar type, or a
+     * nonexistent/unfit class.
      */
-    private function returnsResponseMetadata(Route $route, ReflectionMethod $method): ResponseMetadata
+    private function returnsResponseMetadata(Route $route, ReflectionMethod $method, int $status): ResponseMetadata
     {
         $controller = $method->getDeclaringClass()->getName();
         $method0 = $method->getName();
-        $status = $route->successStatus;
 
         $collection = false;
         $element = $route->returns;
@@ -1388,7 +1566,7 @@ final class RouteMetadataCompiler
             $collection = true;
         }
 
-        $schema = $this->returnsElementSchema(is_string($element) ? $element : null, $controller, $method0, $status);
+        $schema = $this->returnsElementSchema(is_string($element) ? $element : null, $controller, $method0);
         if ($schema === null) {
             return new ResponseMetadata($status, schema: null, description: 'OK');
         }
@@ -1399,12 +1577,11 @@ final class RouteMetadataCompiler
 
     /**
      * Build the element SchemaMetadata for a `returns` declaration (a scalar/object name or a DTO/enum class).
-     * Returns null (after a fatal diagnostic) when the element is invalid.
+     * Returns null (after a fatal diagnostic) when the element is invalid. (The 204+body check is universal — D4.)
      */
-    private function returnsElementSchema(?string $element, string $controller, string $method, int $status): ?SchemaMetadata
+    private function returnsElementSchema(?string $element, string $controller, string $method): ?SchemaMetadata
     {
         if ($element !== null && in_array($type = strtolower($element), ['string', 'integer', 'number', 'boolean', 'object'], true)) {
-            $this->assertReturnsBodyAllowed($status, $controller, $method);
             return new SchemaMetadata(name: '', type: $type);
         }
         if ($element === null || !class_exists($element)) {
@@ -1417,29 +1594,21 @@ final class RouteMetadataCompiler
                 $this->diagnostics->error(controller: $controller, method: $method, dto: $element, field: 'returns', cause: sprintf('#[Route(returns: %s)] is not a DTO-eligible class', $element), fix: 'point returns at a *Dto (or an enum / scalar type name)');
                 return null;
             }
-            $this->assertReturnsBodyAllowed($status, $controller, $method);
             return $this->schemas->build($element);
         }
         if ($mapped['type'] !== null || $mapped['enum'] !== null) {
-            $this->assertReturnsBodyAllowed($status, $controller, $method);
             return $this->inlineSchema($mapped);
         }
         $this->diagnostics->error(controller: $controller, method: $method, dto: $element, field: 'returns', cause: sprintf('#[Route(returns: %s)] is not a valid schema class', $element), fix: 'point returns at a *Dto, an enum, or a scalar type name');
         return null;
     }
 
-    private function assertReturnsBodyAllowed(int $status, string $controller, string $method): void
-    {
-        if ($status === 204) {
-            $this->diagnostics->error(controller: $controller, method: $method, dto: null, field: 'returns', cause: '#[Route(returns: …)] declares a success body but successStatus is 204 (No Content carries no body)', fix: 'drop returns for a 204, or set successStatus to 200/201');
-        }
-    }
-
     /**
      * A DEFINITE native / AST success inference that CONTRADICTS `Route::returns` is a compile ERROR (§1).
-     * Non-definite inferences never contradict — `returns` may override them freely.
+     * Non-definite inferences never contradict — `returns` may override them freely. The AST inference is passed
+     * in (already computed once per method) rather than re-queried.
      */
-    private function assertReturnsNotContradicted(ReflectionMethod $method, ResponseMetadata $declared): void
+    private function assertReturnsNotContradicted(ReflectionMethod $method, ResponseMetadata $declared, SuccessInference $astInf): void
     {
         $declaredSig = $this->responseBodySignature($declared);
         $controller = $method->getDeclaringClass()->getName();
@@ -1449,37 +1618,26 @@ final class RouteMetadataCompiler
         if ($native->definite && $native->signature() !== $declaredSig) {
             $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: sprintf('#[Route(returns: …)] (%s) contradicts the definite native return-type inference (%s)', $declaredSig, $native->signature()), fix: 'align returns with the return type, or widen the return type so it is non-definite');
         }
-        $ast = $this->ast->inferSuccess($method);
-        if ($ast->definite && $ast->signature() !== $declaredSig) {
-            $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: sprintf('#[Route(returns: …)] (%s) contradicts the definite Response::json() body inference (%s)', $declaredSig, $ast->signature()), fix: 'align returns with the response body, or change the body so it is non-definite');
+        if ($astInf->definite && $astInf->signature() !== $declaredSig) {
+            $this->diagnostics->error(controller: $controller, method: $method0, dto: null, field: 'returns', cause: sprintf('#[Route(returns: …)] (%s) contradicts the definite Response::json() body inference (%s)', $declaredSig, $astInf->signature()), fix: 'align returns with the response body, or change the body so it is non-definite');
         }
     }
 
     /**
-     * The endpoint-specific error projection (M8b §5): `Route::errors` (validated list-or-map) MERGED with the
-     * AST-inferred literal error statuses (`Response::error(..., 404)`), each a [code, ?description] carried on
-     * the operation for the emitter to render as an Error-schema response. `hasDynamic` (a computed error
-     * status) ⇒ the emitter adds an OpenAPI `default`. Standard 400/401/403/429/500 come from the policy and are
-     * NOT part of this projection — declaring one here only overrides its description.
+     * The endpoint-specific error projection: ONLY `Route::errors` (validated list-or-map), each a
+     * [code, ?description] carried on the operation for the emitter to render as an Error-schema response. Literal
+     * error statuses are NO LONGER inferred from the method body (the fix-pass removed AST error inference);
+     * declare endpoint-specific codes with `Route::errors` or an explicit `#[ApiResponse]`. Standard
+     * 400/401/403/429/500 come from the policy and are NOT part of this projection — declaring one here only
+     * overrides its description.
      *
-     * @return array{0: list<array{int, ?string}>, 1: bool}
+     * @return list<array{int, ?string}>
      */
     private function collectErrorProjection(Route $route, ReflectionMethod $method): array
     {
-        $byCode = []; // int ⇒ ?string (an explicit description wins over an inferred one).
-        foreach ($this->normalizeRouteErrors($route, $method) as [$code, $description]) {
-            $byCode[$code] = $description;
-        }
-        $ast = $this->ast->inferErrors($method);
-        foreach ($ast->literalStatuses as $code) {
-            $byCode[$code] ??= null;
-        }
-        $merged = [];
-        foreach ($byCode as $code => $description) {
-            $merged[] = [(int) $code, $description];
-        }
+        $merged = $this->normalizeRouteErrors($route, $method);
         usort($merged, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
-        return [$merged, $ast->hasDynamic];
+        return $merged;
     }
 
     /**

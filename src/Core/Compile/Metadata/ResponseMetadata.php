@@ -36,4 +36,21 @@ final readonly class ResponseMetadata
     {
         return $this->status >= 200 && $this->status < 300;
     }
+
+    /**
+     * A copy with a different status — used when the success BODY and its STATUS are resolved by independent
+     * priority chains (M8b fix-pass: schema = returns → ApiResponse → native → AST; status = successStatus →
+     * ApiResponse → AST → 200), then combined into one ResponseMetadata.
+     */
+    public function withStatus(int $status): self
+    {
+        return new self(
+            status: $status,
+            schema: $this->schema,
+            arrayItem: $this->arrayItem,
+            contentType: $this->contentType,
+            description: $this->description,
+            headers: $this->headers,
+        );
+    }
 }

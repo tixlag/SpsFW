@@ -17,8 +17,14 @@ use SpsFW\Core\Compile\Metadata\SchemaMetadata;
  *  - class         : the DTO/enum FQCN of an OBJECT body (mutually exclusive with `inlineSchema`).
  *  - inlineSchema  : a scalar/enum/DateTime/Uuid inline schema fragment (the non-object body case).
  *  - collection    : the body is a LIST of `class` / `inlineSchema`.
- *  - status        : a literal success status detected statically (e.g. Response::json($x, 201),
- *                    Response::created() ⇒ 201, Response::noContent() ⇒ 204); null ⇒ 200 default.
+ *  - status        : the UNAMBIGUOUS literal success status detected statically — set ONLY when every
+ *                    status-bearing success branch agrees (e.g. all return Response::json($x, 201), or the
+ *                    sole branch is Response::created()/noContent()). null when no branch carries a literal
+ *                    status (⇒ the compiler's 200 default) OR when the branches DISAGREE (see statusConflict).
+ *  - statusConflict: two or more success branches carry DIFFERENT literal statuses (e.g. 200 and 201). The
+ *                    single-status success model cannot represent this, so the compiler diagnoses it (asking
+ *                    for an explicit multi-response declaration or successStatus) and falls back to 200. Order-
+ *                    independent: `status` is null with statusConflict=true regardless of return order.
  *  - reason        : why inference is non-definite (for diagnostics).
  *
  * Pure value object — building a {@see \SpsFW\Core\Compile\Metadata\ResponseMetadata} from it is the
@@ -33,6 +39,7 @@ final readonly class SuccessInference
         public ?SchemaMetadata $inlineSchema = null,
         public bool $collection = false,
         public ?int $status = null,
+        public bool $statusConflict = false,
         public ?string $reason = null,
     ) {
     }
