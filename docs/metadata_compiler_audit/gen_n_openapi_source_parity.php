@@ -348,7 +348,7 @@ try {
         }
     }
     echo "openapi-source switch: A reproduces the legacy producer, B produces the pure graph, route/DI/secondary identical, fingerprints differ: " . ($ok ? 'PASS' : 'FAIL') . "\n";
-    echo "N production default remains Legacy primary (Metadata is the dev/probe opt-in; production flip deferred to M7/M8).\n";
+    echo "N production PRIMARY is the Metadata graph (M7b flip); the controller/DTO #[OA\...] source stays as the working rollback (Legacy) until the OA removal checkpoint.\n";
 
     $exit = $ok ? 0 : 1;
 } catch (\Throwable $e) {

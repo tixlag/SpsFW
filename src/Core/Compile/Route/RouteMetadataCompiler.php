@@ -835,7 +835,7 @@ final class RouteMetadataCompiler
     ): OperationMetadata {
         $controller = $reflection->getName();
 
-        $pathParams = $this->collectPathParams($reflection, $method, $path);
+        $pathParams = $this->collectPathParams($method, $path);
         [$requestBody, $queryParams] = $this->collectRequestProjection($reflection, $method);
         $responses = $this->collectResponses($reflection, $method);
         $security = $this->collectSecurity($method);
@@ -869,46 +869,57 @@ final class RouteMetadataCompiler
     }
 
     /**
-     * Path parameters: each {name} placeholder crossed with the method signature. The PHP type wins over the
-     * historical swagger-php `string` (plan §7). A placeholder with no name-matching parameter is a compile
-     * error — its type cannot be inferred and OpenAPI requires a schema for path params.
+     * Path parameters: each {name} placeholder crossed with the method signature POSITIONALLY — the same
+     * binding the runtime Router uses. Router::executeControllerMethod builds the action args as
+     * matchParams ++ dtoParams and invokes with `...$args`, so placeholder[i] lands on the i-th
+     * path-receiver parameter regardless of its NAME; the placeholder name is NEVER required to match a
+     * PHP parameter name (kebab→camel is a Router-internal concern, irrelevant to the positional binding).
+     * Accordingly:
+     *  - OpenAPI parameter.name is always the RAW placeholder;
+     *  - the PHP type is derived from the positionally-corresponding path-receiver — a scalar param with
+     *    NO #[JsonBody]/#[PostBody]/#[FormDataBody]/#[QueryParams] DTO marker (those are appended AFTER
+     *    the path values) and not a class-typed injection such as Request;
+     *  - a placeholder with no positional receiver (the method consumes it via Request, or it is unused)
+     *    is still documented as a valid required string path-param. No diagnostic: the metadata OpenAPI
+     *    stays correct and the runtime route resolves (matches the Router's positional semantics).
      *
      * @return list<ParameterMetadata>
      */
-    private function collectPathParams(ReflectionClass $reflection, ReflectionMethod $method, string $path): array
+    private function collectPathParams(ReflectionMethod $method, string $path): array
     {
         $params = [];
         preg_match_all('/{([a-zA-Z0-9_-]+)}/', $path, $matches);
-        $signature = [];
+
+        // Path-receiver candidates in declaration order: skip DTO-marker params (bound after the path
+        // values) and class-typed injections (Request/services — not scalar path receivers).
+        $candidates = [];
         foreach ($method->getParameters() as $parameter) {
-            $signature[$parameter->getName()] = $parameter;
-        }
-        foreach ($matches[1] as $rawName) {
-            // Router converts the placeholder kebab→camel before binding; match against that.
-            $boundName = $this->convertKebabToCamelCase($rawName);
-            if (!isset($signature[$boundName])) {
-                // A path placeholder without a matching signature arg is a MIGRATION gap, not a structural
-                // break: the runtime route still resolves (Router binds nothing), and the spec can emit a
-                // placeholder string path-param. It blocks only in strict/managed mode.
-                $this->diagnostics->warning(
-                    controller: $reflection->getName(),
-                    method: $method->getName(),
-                    dto: null,
-                    field: $rawName,
-                    cause: sprintf('path parameter {%s} has no matching method parameter $%s', $rawName, $boundName),
-                    fix: 'add a parameter whose name matches the placeholder (kebab-case is converted to camelCase), or fix the route path',
-                );
-                $params[] = new ParameterMetadata($rawName, ParameterMetadata::IN_PATH, required: true);
+            if ($parameter->getAttributes(ValidateAttr::class, ReflectionAttribute::IS_INSTANCEOF) !== []) {
                 continue;
             }
-            $mapped = $this->typeMapper->map($signature[$boundName]->getType());
-            $params[] = new ParameterMetadata(
-                name: $rawName,
-                in: ParameterMetadata::IN_PATH,
-                required: true,
-                type: $mapped['type'],
-                format: $mapped['format'],
-            );
+            $type = $parameter->getType();
+            if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
+                continue;
+            }
+            $candidates[] = $parameter;
+        }
+
+        foreach ($matches[1] as $i => $rawName) {
+            $receiver = $candidates[$i] ?? null;
+            if ($receiver !== null) {
+                $mapped = $this->typeMapper->map($receiver->getType());
+                $params[] = new ParameterMetadata(
+                    name: $rawName,
+                    in: ParameterMetadata::IN_PATH,
+                    required: true,
+                    type: $mapped['type'],
+                    format: $mapped['format'],
+                );
+                continue;
+            }
+            // No positional receiver: consumed via Request (or unused). Document a valid required string
+            // path-param; emit no diagnostic (correct metadata OpenAPI, runtime route resolves).
+            $params[] = new ParameterMetadata($rawName, ParameterMetadata::IN_PATH, required: true);
         }
         return $params;
     }
@@ -1261,11 +1272,6 @@ final class RouteMetadataCompiler
     }
 
     // --- small reflection/type helpers (TypeMapper covers the actual mapping) ---
-
-    private function convertKebabToCamelCase(string $str): string
-    {
-        return lcfirst(str_replace('-', '', ucwords($str, '-')));
-    }
 
     /**
      * First non-builtin class name of a (possibly union/nullable) type, mirroring DtoSchemaBuilder's

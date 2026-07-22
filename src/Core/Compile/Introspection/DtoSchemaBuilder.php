@@ -350,11 +350,31 @@ final class DtoSchemaBuilder
             $resolvedRefClass = $oaRef;
         }
 
-        // An array property with no derivable element type — neither #[Items] nor a legacy OA items type/ref —
-        // is a migration gap: the spec can still emit type:array, just not its items schema. Fatal only in
-        // strict mode.
-        $isArray = $phpType === 'array' || ($oaArgs['type'] ?? null) === 'array' || $oaItemType !== null;
-        if ($isArray && $itemType === null) {
+        // M8a: a PHP `array` is a LIST only when it carries a list signal — #[Items], a legacy OA `items:`
+        // element, or OA `type:'array'`. Without one, the JSON value is an OBJECT/map (an opaque bag), and the
+        // honest encoding is `type: object` (objectMap), NOT a list with a guessed element. That covers three
+        // real shapes the inventory surfaces: (1) OA explicitly declares the property an object
+        // (`type:'object'` / `additionalProperties` / inline `properties`), (2) OA points at a single object
+        // via `$ref` (resolved to a real class ⇒ a `{$ref}` below; an unresolvable schema-name ref ⇒ an opaque
+        // object), and (3) an untyped array with no OA at all ⇒ a map. The fallback deliberately does NOT fire
+        // when `#[Items]` is present: a broken/ambiguous item declaration (neither/nor) is diagnosed as such,
+        // not silently folded into an object.
+        $oaType = $oaArgs['type'] ?? null;
+        $oaObjectSignal = $oaType === 'object'
+            || array_key_exists('additionalProperties', $oaArgs)
+            || array_key_exists('properties', $oaArgs);
+        $isFreeFormObject = $items === null
+            && $phpType === 'array'
+            && $itemType === null
+            && $resolvedRefClass === null
+            && ($oaObjectSignal || $oaRef !== null || ($oaType === null && $oaItemType === null));
+
+        // An array with no derivable element type is a migration gap ONLY when it is genuinely a list the
+        // developer neither itemized (`#[Items]`/OA items) nor declared an object/map, and that does not
+        // resolve to a single-object ref. Free-form objects and resolvable refs have honest encodings and
+        // surface no warning; a declared-but-itemless list (`type:'array'` with no items) still warns.
+        $isArray = $phpType === 'array' || $oaType === 'array' || $oaItemType !== null;
+        if ($isArray && $itemType === null && $resolvedRefClass === null && !$isFreeFormObject) {
             $this->diagnostics->warning(
                 controller: null,
                 method: null,
@@ -380,6 +400,7 @@ final class DtoSchemaBuilder
             ref: $resolvedRefClass ?? $oaRef,
             refClass: $resolvedRefClass,
             itemType: $itemType,
+            objectMap: $isFreeFormObject,
             format: $field?->format ?? ($oaArgs['format'] ?? null),
             nullable: $type?->allowsNull() ?? true, // untyped ⇒ optional (treated as nullable)
             hasDefault: $hasDefault,

@@ -19,6 +19,10 @@ use SpsFW\Core\Compile\Introspection\RequiredSource;
  *  - ref         : FQCN of a nested DTO the graph references; null for scalars / collections of scalars
  *  - refClass    : reflection-derived nested class (first non-builtin type member), the parity source for ref
  *  - itemType    : for arrays: the element PHP type / FQCN, else null (resolved via #[Items])
+ *  - objectMap   : a PHP `array` that is semantically a free-form OBJECT/map (JSON object, not a list) —
+ *                  encoded as `type: object` (M8a). Set when the array carries an object signal (legacy
+ *                  `#[OA\Property(type:object|additionalProperties|properties|$ref)]`) or no list signal at
+ *                  all, and has no derivable element type; a real list still uses itemType.
  *  - format      : OpenAPI format hint (uuid, date, date-time, email, …) from #[Field(format)] or class type
  *  - constraints : minimum/maximum/minLength/maxLength/enum from #[Field]
  *  - nullable / hasDefault / defaultValue : the PHP-type optionality signals (post-OA required source)
@@ -47,6 +51,7 @@ final readonly class PropertyMetadata
         public ?string $ref = null,
         public ?string $refClass = null,
         public ?string $itemType = null,
+        public bool $objectMap = false,
         public ?string $format = null,
         public bool $nullable = false,
         public bool $hasDefault = false,

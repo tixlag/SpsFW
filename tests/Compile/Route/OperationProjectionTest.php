@@ -321,33 +321,34 @@ final class OpDiagController
     }
 
     #[Route('/api/op/badpath/{missing}', [HttpMethod::GET])]
-    public function badPath(): void // path placeholder has no matching method param
+    public function badPath(): void // path placeholder {missing} with no formal param — positional binding ⇒ required string, NO warning
     {
     }
 }
 
 $diag = new CompileDiagnostics();
 (new RouteMetadataCompiler($diag))->compileOperationClasses([OpDiagController::class]);
-// These are all MIGRATION gaps (Step 4 severity split): the spec is generatable with an opaque/empty
-// response — they are warnings, not fatal errors. They block only in strict/managed mode.
+// Three are MIGRATION gaps (Step 4 severity split): the spec is generatable with an opaque/empty response —
+// warnings, not fatal errors, blocking only in strict/managed mode. The former fourth gap — a path
+// placeholder with no name-matching method param — no longer warns: path params bind POSITIONALLY at runtime
+// (Router::executeControllerMethod builds args = matchParams ++ dtoParams, invokes with ...$args), so
+// {missing} with no formal param is documented as a required string path-param, not a diagnostic.
 assert_true($diag->hasWarnings(), 'diagnostic controller surfaces migration warnings');
 assert_true(!$diag->hasErrors(), 'response-projection gaps are NOT fatal errors');
-assert_same(4, $diag->warningCount(), 'exactly four migration warnings: non-eligible entity, itemless array, union, path mismatch');
+assert_same(3, $diag->warningCount(), 'exactly three migration warnings: non-eligible entity, itemless array, union');
 
-// field distribution: three return warnings + one path-mismatch warning
+// field distribution: three return warnings (path placeholders carry no warning under positional binding)
 $fieldCounts = [];
 foreach ($diag->warnings() as $err) {
     $fieldCounts[$err['field']] = ($fieldCounts[$err['field']] ?? 0) + 1;
 }
 assert_same(3, $fieldCounts['return'], 'three return-field warnings (entity / array / union)');
-assert_same(1, $fieldCounts['missing'], 'one path-param mismatch warning');
 
 // each distinct cause is present (entity/array/union share field=return, so assert over the joined causes)
 $causes = implode("\n", array_map(static fn(array $e): string => $e['cause'], $diag->warnings()));
 assert_true(str_contains($causes, 'not a DTO-eligible class'), 'non-eligible class warning present');
 assert_true(str_contains($causes, 'array return type has no derivable item type'), 'itemless array warning present');
 assert_true(str_contains($causes, 'is not auto-derivable: union'), 'union return warning present (member order is PHP-normalized)');
-assert_true(str_contains($causes, 'path parameter {missing} has no matching method parameter'), 'path-param mismatch warning present');
 
 // the entity warning carries the entity FQCN in its `dto` slot
 $entityErr = null;
