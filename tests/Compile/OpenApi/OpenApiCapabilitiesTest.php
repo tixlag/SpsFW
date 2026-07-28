@@ -81,6 +81,32 @@ assert_same(['stale', 'dup'], $byName['reason']['schema']['enum'], 'emit: query 
 assert_same('stale', $byName['reason']['schema']['default'], 'emit: query default rendered');
 assert_same('Why the resource is removed', $byName['reason']['description'], 'emit: query description rendered at parameter level');
 
+// Array query param element type (Step 9 pass 2): #[Parameter(items:…)] restores the baseline
+// {type:array, items:{type:…}} contract that a bare `array` DTO property cannot express.
+final class OcapArrayParamController
+{
+    #[Route('/cap/array-query', [HttpMethod::GET], returns: 'string')]
+    #[Parameter(name: 'ids[]', in: 'query', required: true, type: 'array', items: ['type' => 'integer', 'example' => 1135119], example: [1135119, 1135120], description: 'Массив идентификаторов')]
+    #[NoAuthAccess]
+    public function list() {}
+}
+$d = new CompileDiagnostics();
+$ops = ocapCompile(OcapArrayParamController::class, $d);
+assert_true(!$d->hasErrors() && !$d->hasWarnings(), 'array-param: no diagnostics');
+$arrParam = null;
+foreach ($ops[0]->queryParams as $p) { if ($p->name === 'ids[]') $arrParam = $p; }
+assert_same('ids[]', $arrParam->name, 'array-param: bracket name carried');
+assert_true($arrParam->required, 'array-param: required carried');
+assert_same('array', $arrParam->type, 'array-param: array type carried');
+assert_same('integer', $arrParam->items->type, 'array-param: item element type projected');
+$doc = (new OpenApiEmitter($d))->emit($ops);
+$ap = null;
+foreach ($doc['paths']['/cap/array-query']['get']['parameters'] as $p) { if ($p['name'] === 'ids[]') $ap = $p; }
+assert_same('array', $ap['schema']['type'], 'emit: array query type rendered');
+assert_same('integer', $ap['schema']['items']['type'], 'emit: array query item type rendered');
+assert_same(1135119, $ap['schema']['items']['example'], 'emit: array query item example rendered');
+assert_true($ap['required'], 'emit: array query required rendered');
+
 // ============================================================================
 // 2. #[OpenApi\RequestBody] — inline raw JSON body (shape), multipart upload, override + diagnostics.
 // ============================================================================

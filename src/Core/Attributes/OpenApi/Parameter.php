@@ -19,6 +19,10 @@ use Attribute;
  * `in` is `'path'` or `'query'` (default `'query'`). A path parameter is always required; `required` is
  * honored only for query parameters. Repeatable (one per parameter).
  *
+ * `items` declares the ELEMENT schema of an `array` query parameter (a facet array, e.g.
+ * `items: ['type' => 'integer', 'example' => 1]`) — the carry-over of the legacy `#[OA\Items]` that the DTO
+ * inference cannot express for a bare `array` property. Restores the baseline array-with-item-type contract.
+ *
  * Doc-only — the runtime Router reads only the `#[Route]` path/method; this attribute never changes dispatch
  * or validation. Maps into the existing {@see \SpsFW\Core\Compile\Metadata\ParameterMetadata}.
  */
@@ -28,6 +32,7 @@ final readonly class Parameter
     /**
      * @param ?list<mixed> $enum explicit enum values
      * @param ?string $in 'path' | 'query' (default 'query')
+     * @param ?array<string, mixed> $items element facet of an `array` parameter (`['type' => …, …]`)
      */
     public function __construct(
         public string $name,
@@ -42,6 +47,7 @@ final readonly class Parameter
         public mixed $max = null,
         public ?string $description = null,
         public bool $deprecated = false,
+        public ?array $items = null,
     ) {
     }
 }

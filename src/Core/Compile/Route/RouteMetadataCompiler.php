@@ -1212,8 +1212,14 @@ final class RouteMetadataCompiler
             } else {
                 $type = $this->typeMapper->mapScalar($property->phpType ?? 'string');
             }
+            // The query-param NAME is the runtime Request key the Validator reads from $_GET
+            // (Validator: $reqParams[$propertyName], $propertyName = #[OA\Property(property:)] ?? PHP name),
+            // NOT the schema-projection serialName (#[Field]/PHP name used for the response JSON contract).
+            // Emitting serialName here produced the PHP name (e.g. "dateFrom") when the DTO carries
+            // #[OA\Property(property: "date_from")] — diverging from both baseline and the live wire contract.
+            $name = ($property->rawArguments['property'] ?? null) ?? $property->name;
             $params[] = new ParameterMetadata(
-                name: $property->serialName(),
+                name: $name,
                 in: ParameterMetadata::IN_QUERY,
                 required: $property->isRequired($this->requiredSource),
                 type: $type,
@@ -1331,8 +1337,14 @@ final class RouteMetadataCompiler
             }
             $merged = false;
             foreach ($queryParams as $i => $existing) {
-                if ($existing->name === $param->name) {
-                    $queryParams[$i] = $this->mergeParameter($existing, $param);
+                $exact = $existing->name === $param->name;
+                // A declared array query param named `X[]` enriches/replaces the bare `X` inferred from a DTO
+                // `array $x` property — the legacy `name[]=…` PHP convention (e.g. objects_ids[] ↔ objects_ids).
+                $bracket = !$exact
+                    && str_ends_with($param->name, '[]')
+                    && $existing->name === substr($param->name, 0, -2);
+                if ($exact || $bracket) {
+                    $queryParams[$i] = $this->mergeParameter($existing, $param, $bracket ? $param->name : null);
                     $merged = true;
                     break;
                 }
@@ -1404,10 +1416,10 @@ final class RouteMetadataCompiler
      * Overlay an explicit {@see OpenApiParameter}'s facets onto an inferred parameter. Facets the attribute
      * leaves null are kept from the inference; an explicit query `required` overrides; a path param stays required.
      */
-    private function mergeParameter(ParameterMetadata $base, OpenApiParameter $param): ParameterMetadata
+    private function mergeParameter(ParameterMetadata $base, OpenApiParameter $param, ?string $name = null): ParameterMetadata
     {
         return new ParameterMetadata(
-            name: $base->name,
+            name: $name ?? $base->name,
             in: $base->in,
             required: $base->isPath() ? true : ($param->required ?? $base->required),
             type: $param->type ?? $base->type,
@@ -1419,6 +1431,7 @@ final class RouteMetadataCompiler
             default: $param->default ?? $base->default,
             minimum: $param->min ?? $base->minimum,
             maximum: $param->max ?? $base->maximum,
+            items: $param->items !== null ? $this->facetToSchema($param->items) : $base->items,
         );
     }
 
@@ -1437,6 +1450,7 @@ final class RouteMetadataCompiler
             default: $param->default,
             minimum: $param->min,
             maximum: $param->max,
+            items: $param->items !== null ? $this->facetToSchema($param->items) : null,
         );
     }
 

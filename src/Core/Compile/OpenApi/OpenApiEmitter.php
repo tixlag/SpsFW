@@ -272,8 +272,8 @@ final class OpenApiEmitter
         }
 
         $parameters = array_merge(
-            $this->buildParameters($operation->pathParams),
-            $this->buildParameters($operation->queryParams),
+            $this->buildParameters($operation->pathParams, $componentsSchemas),
+            $this->buildParameters($operation->queryParams, $componentsSchemas),
         );
         if ($parameters !== []) {
             $op['parameters'] = $parameters;
@@ -292,9 +292,10 @@ final class OpenApiEmitter
 
     /**
      * @param list<ParameterMetadata> $params
+     * @param array<string, array<string, mixed>> $componentsSchemas
      * @return list<array<string, mixed>>
      */
-    private function buildParameters(array $params): array
+    private function buildParameters(array $params, array &$componentsSchemas): array
     {
         $out = [];
         foreach ($params as $param) {
@@ -313,6 +314,9 @@ final class OpenApiEmitter
             }
             if ($param->maximum !== null) {
                 $schema['maximum'] = $param->maximum;
+            }
+            if ($param->items !== null) {
+                $schema['items'] = $this->renderSchemaFragment($param->items, $componentsSchemas);
             }
             if ($param->example !== null) {
                 $schema['example'] = $param->example;

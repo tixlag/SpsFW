@@ -26,6 +26,7 @@ final readonly class ParameterMetadata
      * @param mixed $default explicit default value (#[OpenApi\Parameter(default: …)])
      * @param mixed $minimum explicit lower bound (#[OpenApi\Parameter(min: …)])
      * @param mixed $maximum explicit upper bound (#[OpenApi\Parameter(max: …)])
+     * @param ?SchemaMetadata $items element schema of an `array` parameter (#[OpenApi\Parameter(items: …)])
      */
     public function __construct(
         public string $name,
@@ -40,6 +41,7 @@ final readonly class ParameterMetadata
         public mixed $default = null,
         public mixed $minimum = null,
         public mixed $maximum = null,
+        public ?SchemaMetadata $items = null,
     ) {
     }
 
