@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core\Auth\AccessRule;
 
+use OpenApi\Attributes as OA;
 use SpsFW\Core\Attributes\Inject;
 use SpsFW\Core\Attributes\Route;
 use SpsFW\Core\Attributes\Validation\JsonBody;
@@ -24,6 +25,38 @@ class AccessRuleController extends RestController
     }
 
 
+    #[OA\Post(
+        path: "/api/auth/add-access-rules",
+        operationId: "addAccessRules",
+        description: "Неуказанные правила не будут не тронуты",
+        summary: "Добавить правила доступа пользователю",
+        requestBody: new OA\RequestBody(
+            description: "Access rules",
+            required: true,
+            content: new OA\MediaType(
+                mediaType: "application/json",
+                schema: new OA\Schema(
+                    ref: AccessRulesArrayDto::class
+                )
+            )
+        ),
+        tags: ["Users"],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: "OK",
+                headers: [
+                    new OA\Header(
+                        header: "Authorization",
+                        description: "Bearer token с новыми ролями пользователя",
+                        schema: new OA\Schema(
+                            type: "string"
+                        )
+                    )
+                ]
+            )
+        ]
+    )]
     #[Route('/api/auth/add-access-rules', ['PATCH'])]
     #[Validate(ParamsIn::Json, AccessRulesArrayDto::class)]
     #[ApiResponse(status: 200, description: 'OK')]
@@ -32,6 +65,38 @@ class AccessRuleController extends RestController
         return $this->accessRulesService->addAccessRules($accessRulesDto);
     }
 
+    #[OA\Post(
+        path: "/api/auth/set-access-rules",
+        operationId: "setAccessRules",
+        description: "Перезапишет существующие правила доступа",
+        summary: "Назначить правила доступа пользователю",
+        requestBody: new OA\RequestBody(
+            description: "Access rules",
+            required: true,
+            content: new OA\MediaType(
+                mediaType: "application/json",
+                schema: new OA\Schema(
+                    ref: AccessRulesArrayDto::class
+                )
+            )
+        ),
+        tags: ["Users"],
+        responses: [
+            new OA\Response(
+                response: 200,
+                description: "OK",
+                headers: [
+                    new OA\Header(
+                        header: "Authorization",
+                        description: "Bearer token с новыми ролями пользователя",
+                        schema: new OA\Schema(
+                            type: "string"
+                        )
+                    )
+                ]
+            )
+        ]
+    )]
     #[Route('/api/auth/set-access-rules', ['POST'])]
     #[ApiResponse(status: 200, description: 'OK')]
     public function setAccessRules(#[JsonBody] AccessRulesArrayDto $accessRulesDto): UserAbstract

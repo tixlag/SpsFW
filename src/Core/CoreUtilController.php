@@ -2,6 +2,7 @@
 
 namespace SpsFW\Core;
 
+use OpenApi\Attributes as OA;
 use ReflectionException;
 use SpsFW\Core\Attributes\Controller;
 use SpsFW\Core\Attributes\NoAuthAccess;
@@ -22,6 +23,8 @@ class CoreUtilController extends RestController
      * и проверял, изменился ли файл. Если да, то обновляем кеш
      * @return array
      */
+    #[OA\Post(path: '/api/core/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
+    #[OA\Response(response: 200, description: "Успешно обновлено")]
     #[Route('/api/core/update', ['POST'])]
     #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateRoutes(): array
@@ -35,6 +38,8 @@ class CoreUtilController extends RestController
         return ['result' => 'ok'];
     }
 
+    #[OA\Post(path: '/api/core/update/routes', summary: 'Обновляет только роуты', tags: ['Core'])]
+    #[OA\Response(response: 200, description: "Успешно обновлено")]
     #[Route('/api/core/update/routes', ['POST'])]
     #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateOnlyRoutes(): array
@@ -72,6 +77,8 @@ class CoreUtilController extends RestController
     }
 
 
+    #[OA\Post(path: '/swagger/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
+    #[OA\Response(response: 200, description: "Успешно обновлено")]
     #[Route('/swagger/update', ['POST'])]
     #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateDocs(): array
