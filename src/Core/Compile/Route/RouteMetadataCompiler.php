@@ -1262,8 +1262,41 @@ final class RouteMetadataCompiler
             return [$pathParams, $queryParams];
         }
         $controller = $method->getDeclaringClass()->getName();
+
+        // Normalize + validate `in` (D2: only path|query is valid; anything else was silently mapped to query).
+        $normalized = [];
         foreach ($declared as $param) {
-            $in = $param->in === ParameterMetadata::IN_PATH ? ParameterMetadata::IN_PATH : ParameterMetadata::IN_QUERY;
+            $normalized[] = [$param, $this->normalizeParameterIn($method, $param)];
+        }
+
+        // D2: detect two #[Parameter] declarations for the same (in,name) that set CONFLICTING facets —
+        // previously the later one won silently (order-dependent). The check is symmetric (order-independent).
+        $byKey = [];
+        foreach ($normalized as [$param, $in]) {
+            $byKey[$in . ':' . $param->name][] = $param;
+        }
+        foreach ($byKey as $key => $group) {
+            if (count($group) < 2) {
+                continue;
+            }
+            for ($i = 0, $n = count($group); $i < $n; $i++) {
+                for ($j = $i + 1; $j < $n; $j++) {
+                    $conflict = $this->explicitParameterConflict($group[$i], $group[$j]);
+                    if ($conflict !== null) {
+                        $this->diagnostics->error(
+                            controller: $controller,
+                            method: $method->getName(),
+                            dto: null,
+                            field: $param->name,
+                            cause: sprintf('#[OpenApi\Parameter(%s)] is declared more than once with conflicting %s', $key, $conflict),
+                            fix: sprintf('make the repeated #%s declarations agree (or remove the duplicate)', $conflict),
+                        );
+                    }
+                }
+            }
+        }
+
+        foreach ($normalized as [$param, $in]) {
             if ($param->name === '') {
                 $this->diagnostics->error(
                     controller: $controller,
@@ -1309,6 +1342,62 @@ final class RouteMetadataCompiler
             }
         }
         return [$pathParams, $queryParams];
+    }
+
+    /**
+     * Validate + normalize a #[Parameter] `in` value. Only 'path'/'query' (and null, the 'query' default) are
+     * valid; anything else is a malformed declaration. D2: previously any non-'path' value was silently mapped to
+     * 'query'. An invalid `in` emits an ERROR but still resolves to 'query' so the rest of the pipeline proceeds
+     * (the error blocks publication).
+     */
+    private function normalizeParameterIn(ReflectionMethod $method, OpenApiParameter $param): string
+    {
+        $in = $param->in;
+        if ($in === null || $in === ParameterMetadata::IN_QUERY || $in === ParameterMetadata::IN_PATH) {
+            return $in ?? ParameterMetadata::IN_QUERY;
+        }
+        $this->diagnostics->error(
+            controller: $method->getDeclaringClass()->getName(),
+            method: $method->getName(),
+            dto: null,
+            field: $param->name === '' ? 'parameter' : $param->name,
+            cause: sprintf('#[OpenApi\Parameter(name: %s, in: %s)] declares an unsupported `in`; only "path" or "query" is valid', $param->name === '' ? '?' : $param->name, $in),
+            fix: 'set in: "path" (a {placeholder}) or in: "query", or omit it (defaults to query)',
+        );
+        return ParameterMetadata::IN_QUERY;
+    }
+
+    /**
+     * The name of the first facet where two explicit #[Parameter] declarations for the same (in,name) CONFLICT
+     * (both set, to different values), or null when they agree. Symmetric — order-independent. Used by the
+     * duplicate-parameter check (D2); the legacy overlay path silently let the later declaration win.
+     */
+    private function explicitParameterConflict(OpenApiParameter $a, OpenApiParameter $b): ?string
+    {
+        foreach (['type', 'format', 'description'] as $f) {
+            if ($a->$f !== null && $b->$f !== null && $a->$f !== $b->$f) {
+                return $f;
+            }
+        }
+        foreach (['required'] as $f) {
+            if ($a->$f !== null && $b->$f !== null && $a->$f !== $b->$f) {
+                return $f;
+            }
+        }
+        foreach (['enum'] as $f) {
+            if ($a->$f !== null && $b->$f !== null && $a->$f != $b->$f) {
+                return $f;
+            }
+        }
+        foreach (['example', 'default', 'min', 'max'] as $f) {
+            if ($a->$f !== null && $b->$f !== null && $a->$f !== $b->$f) {
+                return $f;
+            }
+        }
+        if ($a->deprecated !== $b->deprecated) {
+            return 'deprecated';
+        }
+        return null;
     }
 
     /**
@@ -1364,6 +1453,17 @@ final class RouteMetadataCompiler
         }
         $attr = $declared[0]; // a single #[OpenApi\RequestBody] per method
         $controller = $method->getDeclaringClass()->getName();
+        // D2: schema AND shape together is ambiguous — previously schema silently won and shape was dropped.
+        if ($attr->schema !== null && $attr->shape !== null) {
+            $this->diagnostics->error(
+                controller: $controller,
+                method: $method->getName(),
+                dto: null,
+                field: 'requestBody',
+                cause: '#[OpenApi\RequestBody] declares schema AND shape together; exactly one body source is allowed',
+                fix: 'declare either schema (a DTO class) or shape (an inline object), not both',
+            );
+        }
         $schema = null;
         if ($attr->schema !== null) {
             if (!class_exists($attr->schema)) {
@@ -1379,6 +1479,9 @@ final class RouteMetadataCompiler
                 $schema = $this->schemas->build($attr->schema);
             }
         } elseif ($attr->shape !== null) {
+            // D2: a malformed shape (a property facet that is not an array) — previously coerced to an empty
+            // facet and emitted a bare {type: object}, masking the mistake.
+            $this->assertShapeWellFormed($method, $attr->shape, 'requestBody');
             $schema = new SchemaMetadata(properties: $this->propertiesFromShape($attr->shape));
         }
         return new RequestBodyMetadata(
@@ -1407,81 +1510,210 @@ final class RouteMetadataCompiler
     }
 
     /**
+     * A shape is well-formed when each property maps to a facet ARRAY (the OpenAPI keys for that property). A
+     * non-array facet (e.g. a bare scalar `shape: ['name' => 'string']`) is a malformed declaration — D2: emit a
+     * compile ERROR instead of silently coercing it to an empty facet (which emitted a bare {type: object}).
+     *
+     * @param array<string, mixed> $shape
+     */
+    private function assertShapeWellFormed(ReflectionMethod $method, array $shape, string $field): void
+    {
+        $controller = $method->getDeclaringClass()->getName();
+        foreach ($shape as $name => $facet) {
+            if (!is_array($facet)) {
+                $this->diagnostics->error(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: $field,
+                    cause: sprintf('shape property `%s` is not a facet array (got %s); each shape property must be an array of OpenAPI keys', (string) $name, get_debug_type($facet)),
+                    fix: sprintf('declare `%s` as a facet array, e.g. shape: [\'%s\' => [\'type\' => \'string\']]', (string) $name, (string) $name),
+                );
+            }
+        }
+    }
+
+    /**
+     * Build a single inline-shape property from its facet array. Carries EVERY facet the baseline records on
+     * an inline property — description, default (incl. explicit null), enum, example, bounds, format, nullable,
+     * required — and recurses into nested inline objects, typed maps (additionalProperties), and full array
+     * items (D3: an item is a complete {@see SchemaMetadata} fragment so its own facets survive instead of
+     * collapsing to a bare scalar type).
+     *
      * @param array<string, mixed> $f
      */
     private function propertyFromFacet(string $name, array $f): PropertyMetadata
     {
         $ref = isset($f['ref']) && is_string($f['ref']) ? $f['ref'] : null;
+        $description = $this->facetString($f, 'description');
+        [$addl, $addlFalse] = $this->facetAdditionalProperties($f);
 
-        // A nested inline object property: {properties: {…}} (or an objectMap free-form when no properties).
+        $common = [
+            'format' => $f['format'] ?? null,
+            'nullable' => (bool) ($f['nullable'] ?? false),
+            'required' => (bool) ($f['required'] ?? false),
+            'enum' => $f['enum'] ?? null,
+            'minimum' => $f['minimum'] ?? $f['min'] ?? null,
+            'maximum' => $f['maximum'] ?? $f['max'] ?? null,
+            'minLength' => $f['minLength'] ?? $f['min_length'] ?? null,
+            'maxLength' => $f['maxLength'] ?? $f['max_length'] ?? null,
+            'example' => $f['example'] ?? null,
+            'hasDefault' => array_key_exists('default', $f),
+            'defaultValue' => $f['default'] ?? null,
+            'description' => $description,
+        ];
+
+        // A nested inline object property: {properties: {…}} (the item shape of an ad-hoc object body).
         if (isset($f['properties']) && is_array($f['properties'])) {
-            return new PropertyMetadata(
-                name: $name,
-                phpType: $f['type'] ?? null,
-                objectMap: false,
-                format: $f['format'] ?? null,
-                nullable: (bool) ($f['nullable'] ?? false),
-                required: (bool) ($f['required'] ?? false),
-                enum: $f['enum'] ?? null,
-                minimum: $f['minimum'] ?? $f['min'] ?? null,
-                maximum: $f['maximum'] ?? $f['max'] ?? null,
-                example: $f['example'] ?? null,
-                inlineObject: new SchemaMetadata(properties: $this->propertiesFromShape($f['properties'])),
-            );
+            return new PropertyMetadata(...[
+                'name' => $name,
+                'phpType' => 'object',
+                'objectMap' => false,
+                ...$common,
+                'inlineObject' => new SchemaMetadata(
+                    properties: $this->propertiesFromShape($f['properties']),
+                    additionalProperties: $addl,
+                    additionalPropertiesFalse: $addlFalse,
+                ),
+                'additionalProperties' => $addl,
+                'additionalPropertiesFalse' => $addlFalse,
+            ]);
         }
 
-        // An array property. The element is a class-string ref, a scalar `type`, or a nested inline object.
+        // An array property. The element is a bare class-string, a ref, a scalar, or a nested inline object —
+        // built as a FULL item fragment (itemSchema) so its type/format/enum/example/default/constraints are
+        // kept. A bare class-string element still uses itemType (the legacy #[Items] path).
         if (($f['type'] ?? null) === 'array' || array_key_exists('items', $f)) {
             $items = $f['items'] ?? null;
-            if (is_array($items) && isset($items['properties']) && is_array($items['properties'])) {
-                // array of inline object
-                return new PropertyMetadata(
-                    name: $name,
-                    phpType: 'array',
-                    objectMap: false,
-                    format: $f['format'] ?? null,
-                    nullable: (bool) ($f['nullable'] ?? false),
-                    required: (bool) ($f['required'] ?? false),
-                    example: $f['example'] ?? null,
-                    inlineItems: new SchemaMetadata(properties: $this->propertiesFromShape($items['properties'])),
-                );
+            $itemType = null;
+            $itemSchema = null;
+            if (is_string($items)) {
+                $itemType = $items; // bare class-string element
+            } elseif (is_array($items)) {
+                $itemSchema = $this->facetToSchema($items);
             }
-            $itemType = match (true) {
-                is_string($items) => $items, // a bare string is a class-string; a scalar element must be ['type' => …]
-                is_array($items) && isset($items['ref']) => $items['ref'],
-                is_array($items) && isset($items['type']) => $this->toPhpScalarType($items['type']),
-                default => null,
-            };
-            return new PropertyMetadata(
-                name: $name,
-                phpType: 'array',
-                itemType: is_string($itemType) ? $itemType : null,
-                objectMap: false,
-                format: $f['format'] ?? null,
-                nullable: (bool) ($f['nullable'] ?? false),
-                required: (bool) ($f['required'] ?? false),
-                enum: $f['enum'] ?? null,
-                minimum: $f['minimum'] ?? $f['min'] ?? null,
-                maximum: $f['maximum'] ?? $f['max'] ?? null,
-                example: $f['example'] ?? null,
-            );
+            return new PropertyMetadata(...[
+                'name' => $name,
+                'phpType' => 'array',
+                'itemType' => $itemType,
+                'itemSchema' => $itemSchema,
+                'objectMap' => false,
+                ...$common,
+            ]);
+        }
+
+        // A typed map (an object whose values share one schema) or an explicit additionalProperties:false —
+        // distinct from a free-form objectMap (no value schema) and from an inline-object property.
+        if ($addl !== null || $addlFalse) {
+            return new PropertyMetadata(...[
+                'name' => $name,
+                'phpType' => 'object',
+                'objectMap' => false,
+                ...$common,
+                'additionalProperties' => $addl,
+                'additionalPropertiesFalse' => $addlFalse,
+            ]);
         }
 
         // A scalar / ref property.
-        return new PropertyMetadata(
-            name: $name,
-            phpType: $this->toPhpScalarType($f['type'] ?? null),
-            ref: $ref,
-            refClass: $ref,
-            format: $f['format'] ?? null,
-            nullable: (bool) ($f['nullable'] ?? false),
+        return new PropertyMetadata(...[
+            'name' => $name,
+            'phpType' => $this->toPhpScalarType($f['type'] ?? null),
+            'ref' => $ref,
+            'refClass' => $ref,
+            ...$common,
+        ]);
+    }
+
+    /**
+     * Read a string facet key, returning null when absent/non-string (avoids a non-string `description`
+     * producing a TypeError downstream). The single place a facet is coerced — the emitter never parses.
+     *
+     * @param array<string, mixed> $f
+     */
+    private function facetString(array $f, string $key): ?string
+    {
+        return isset($f[$key]) && is_string($f[$key]) ? $f[$key] : null;
+    }
+
+    /**
+     * Resolve a shape `additionalProperties` facet into a typed value-schema + an explicit-false flag.
+     * Returns `[null, false]` when absent or `true` (explicit allow == default; nothing to emit).
+     *
+     * @param array<string, mixed> $f
+     * @return array{0: ?SchemaMetadata, 1: bool}
+     */
+    private function facetAdditionalProperties(array $f): array
+    {
+        if (!array_key_exists('additionalProperties', $f)) {
+            return [null, false];
+        }
+        $ap = $f['additionalProperties'];
+        if ($ap === false) {
+            return [null, true];
+        }
+        if (is_array($ap)) {
+            return [$this->facetToSchema($ap), false];
+        }
+        return [null, false]; // true / other => default allow
+    }
+
+    /**
+     * Recursively build a {@see SchemaMetadata} fragment from a facet array — the typed model an inline
+     * array item, a typed-map value, or a union member maps into. Handles a DTO ref (`{ref: …}`), a nested
+     * inline object (`{properties: …}`), an array (`{type: array, items: …}`), and a scalar facet
+     * (`{type: …, format: …, enum: …, …}`), preserving every facet. The emitter renders this model; it
+     * never re-parses the raw facet.
+     *
+     * @param array<string, mixed> $f
+     */
+    private function facetToSchema(array $f): SchemaMetadata
+    {
+        $ref = isset($f['ref']) && is_string($f['ref']) ? $f['ref'] : null;
+
+        if ($ref !== null) {
+            return class_exists($ref) ? $this->schemas->build($ref) : new SchemaMetadata();
+        }
+
+        if (isset($f['properties']) && is_array($f['properties'])) {
+            [$addl, $addlFalse] = $this->facetAdditionalProperties($f);
+            return new SchemaMetadata(
+                properties: $this->propertiesFromShape($f['properties']),
+                description: $this->facetString($f, 'description') ?? '',
+                additionalProperties: $addl,
+                additionalPropertiesFalse: $addlFalse,
+            );
+        }
+
+        if (($f['type'] ?? null) === 'array' || array_key_exists('items', $f)) {
+            $items = $f['items'] ?? null;
+            $itemSchema = match (true) {
+                is_array($items) => $this->facetToSchema($items),
+                is_string($items) => (class_exists($items) ? $this->schemas->build($items) : new SchemaMetadata()),
+                default => null,
+            };
+            return new SchemaMetadata(
+                type: 'array',
+                items: $itemSchema,
+                description: $this->facetString($f, 'description') ?? '',
+                nullable: (bool) ($f['nullable'] ?? false),
+                example: $f['example'] ?? null,
+            );
+        }
+
+        return new SchemaMetadata(
+            type: $f['type'] ?? null,
+            format: $this->facetString($f, 'format'),
+            enum: $f['enum'] ?? null,
+            example: $f['example'] ?? null,
             hasDefault: array_key_exists('default', $f),
             defaultValue: $f['default'] ?? null,
-            required: (bool) ($f['required'] ?? false),
-            enum: $f['enum'] ?? null,
+            nullable: (bool) ($f['nullable'] ?? false),
             minimum: $f['minimum'] ?? $f['min'] ?? null,
             maximum: $f['maximum'] ?? $f['max'] ?? null,
-            example: $f['example'] ?? null,
+            minLength: $f['minLength'] ?? $f['min_length'] ?? null,
+            maxLength: $f['maxLength'] ?? $f['max_length'] ?? null,
+            description: $this->facetString($f, 'description') ?? '',
         );
     }
 
@@ -1522,11 +1754,10 @@ final class RouteMetadataCompiler
             }
             return $this->schemas->build($member);
         }
-        if (isset($member['properties']) && is_array($member['properties'])) {
-            return new SchemaMetadata(properties: $this->propertiesFromShape($member['properties']));
-        }
-        // scalar facet (incl. the explicit null member {type: 'null'} and a binary {type:'string',format:'binary'})
-        return new SchemaMetadata(type: $member['type'] ?? null, format: $member['format'] ?? null);
+        // a facet-array member (DTO ref / nested inline object / array / scalar) — route through the recursive
+        // facet builder so a member keeps ALL its facets (format/enum/example/default/constraints/description)
+        // instead of only type+format, and so {type: 'null'} and a binary facet survive verbatim (D3).
+        return $this->facetToSchema($member);
     }
 
     /**
@@ -1565,14 +1796,18 @@ final class RouteMetadataCompiler
         // cases are still handled by the per-status check / the returns/native/AST path.)
         if (count($successApiResponses) > 1) {
             foreach ($successApiResponses as $response) {
-                if ($response->status === 204 && $response->schema !== null) {
+                // D1 (universal): a 204 with ANY body-form — schema / shape / type / oneOf / anyOf / collection —
+                // is an ERROR. The body-form is resolved into a ResponseMetadata via responseFromAttribute()
+                // first so hasBody() sees oneOf/anyOf/shape/type too, not just `schema`.
+                $resolved = $this->responseFromAttribute($method, $response);
+                if ($resolved->status === 204 && $resolved->hasBody()) {
                     $this->diagnostics->error(
                         controller: $method->getDeclaringClass()->getName(),
                         method: $method->getName(),
                         dto: null,
                         field: 'return',
-                        cause: sprintf('#[Response] declares a body (schema) at status %d; No Content (204) carries no body', $response->status),
-                        fix: 'drop the schema for the 204 response, or use a 200/201 status',
+                        cause: sprintf('#[Response] declares a body at status %d; No Content (204) carries no body', $response->status),
+                        fix: 'drop the body (schema/shape/type/oneOf/anyOf) for the 204 response, or use a 200/201 status',
                     );
                 }
             }
@@ -1696,14 +1931,18 @@ final class RouteMetadataCompiler
         if ($success->status !== 204) {
             return;
         }
-        if ($success->schema !== null || $success->arrayItem !== null) {
+        // D1 (universal): ANY body-form at 204 is an ERROR — schema, arrayItem, or a union (oneOf/anyOf). The
+        // body may also be an inline shape / scalar type / collection, all of which land in `schema`/`arrayItem`
+        // (shape→schema properties, type→schema type, collection→arrayItem); oneOf/anyOf are their own fields.
+        // hasBody() is the single source of truth shared with the multi-success precheck.
+        if ($success->hasBody()) {
             $this->diagnostics->error(
                 controller: $method->getDeclaringClass()->getName(),
                 method: $method->getName(),
                 dto: null,
                 field: 'return',
                 cause: 'the success response declares a body but the success status is 204 (No Content carries no body)',
-                fix: 'drop the success body (returns / #[Response(schema:)] / the Response::json body) for a 204, or set successStatus to 200/201',
+                fix: 'drop the success body (returns / #[Response(schema:)] / shape / type / oneOf / anyOf) for a 204, or set successStatus to 200/201',
             );
         }
     }
@@ -1716,6 +1955,17 @@ final class RouteMetadataCompiler
 
         // A genuine union body (oneOf/anyOf) — mutually exclusive with schema/shape/type.
         if ($response->oneOf !== null || $response->anyOf !== null) {
+            // D2: oneOf AND anyOf together is an ambiguous declaration (exactly one body-form is allowed).
+            if ($response->oneOf !== null && $response->anyOf !== null) {
+                $this->diagnostics->error(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'return',
+                    cause: '#[Response] declares oneOf AND anyOf together; exactly one body-form is allowed',
+                    fix: 'choose one: declare either oneOf or anyOf, not both',
+                );
+            }
             if ($response->collection || $response->schema !== null || $response->shape !== null || $response->type !== null) {
                 $this->diagnostics->error(
                     controller: $controller,
@@ -1727,6 +1977,23 @@ final class RouteMetadataCompiler
                 );
             }
             $members = $response->oneOf ?? $response->anyOf;
+            // D2: an empty union carries no variant — the body is undefined.
+            if ($members === []) {
+                $this->diagnostics->error(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'return',
+                    cause: '#[Response] declares an empty oneOf/anyOf; a union needs at least one member',
+                    fix: 'add at least one member (a class-string or a facet array) to oneOf/anyOf',
+                );
+                return new ResponseMetadata(
+                    status: $response->status,
+                    contentType: $response->contentType,
+                    description: $response->description ?? '',
+                    headers: $response->headers,
+                );
+            }
             $list = [];
             foreach ($members as $member) {
                 $list[] = $this->schemaFromMember($method, $member);
@@ -1738,6 +2005,40 @@ final class RouteMetadataCompiler
                 headers: $response->headers,
                 oneOf: $response->oneOf !== null ? $list : null,
                 anyOf: $response->anyOf !== null ? $list : null,
+            );
+        }
+
+        // D2: exactly one body-form (schema/shape/type) is allowed; multiple together is ambiguous (previously
+        // resolved by silent precedence, so the second declaration was silently dropped).
+        $setForms = [];
+        if ($response->schema !== null) {
+            $setForms[] = 'schema';
+        }
+        if ($response->shape !== null) {
+            $setForms[] = 'shape';
+        }
+        if ($response->type !== null) {
+            $setForms[] = 'type';
+        }
+        if (count($setForms) > 1) {
+            $this->diagnostics->error(
+                controller: $controller,
+                method: $method->getName(),
+                dto: null,
+                field: 'return',
+                cause: sprintf('#[Response] declares several body forms together (%s); exactly one of schema/shape/type is allowed', implode(' + ', $setForms)),
+                fix: 'declare exactly one body form (schema, shape, or type)',
+            );
+        }
+        // D2: format applies only to a scalar type — a format without a type is meaningless (was silently kept).
+        if ($response->format !== null && $response->type === null) {
+            $this->diagnostics->error(
+                controller: $controller,
+                method: $method->getName(),
+                dto: null,
+                field: 'return',
+                cause: '#[Response] declares a format without a type; format applies only to a scalar type',
+                fix: 'pair the format with type: e.g. #[Response(type: \'string\', format: \'date-time\')]',
             );
         }
 
@@ -1757,6 +2058,7 @@ final class RouteMetadataCompiler
                 $itemSchema = $this->schemas->build($response->schema);
             }
         } elseif ($response->shape !== null) {
+            $this->assertShapeWellFormed($method, $response->shape, 'return');
             $itemSchema = new SchemaMetadata(properties: $this->propertiesFromShape($response->shape));
         } elseif ($response->type !== null) {
             $itemSchema = new SchemaMetadata(type: $response->type, format: $response->format);

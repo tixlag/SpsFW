@@ -345,7 +345,7 @@ final class OpenApiEmitter
             return null;
         }
         $schema = $body->schema !== null
-            ? $this->refOrInline($body->schema, $componentsSchemas)
+            ? $this->renderSchemaFragment($body->schema, $componentsSchemas)
             : ['type' => 'object'];
         $request = [
             'required' => $body->required,
@@ -479,23 +479,23 @@ final class OpenApiEmitter
     {
         if ($response->oneOf !== null) {
             return ['oneOf' => array_map(
-                fn (SchemaMetadata $member): array => $this->refOrInline($member, $componentsSchemas),
+                fn (SchemaMetadata $member): array => $this->renderSchemaFragment($member, $componentsSchemas),
                 $response->oneOf,
             )];
         }
         if ($response->anyOf !== null) {
             return ['anyOf' => array_map(
-                fn (SchemaMetadata $member): array => $this->refOrInline($member, $componentsSchemas),
+                fn (SchemaMetadata $member): array => $this->renderSchemaFragment($member, $componentsSchemas),
                 $response->anyOf,
             )];
         }
         if ($response->schema !== null) {
-            return $this->refOrInline($response->schema, $componentsSchemas);
+            return $this->renderSchemaFragment($response->schema, $componentsSchemas);
         }
         if ($response->arrayItem !== null) {
             return [
                 'type' => 'array',
-                'items' => $this->refOrInline($response->arrayItem, $componentsSchemas),
+                'items' => $this->renderSchemaFragment($response->arrayItem, $componentsSchemas),
             ];
         }
         return null;
@@ -525,40 +525,100 @@ final class OpenApiEmitter
     // --- schema rendering / collection ---
 
     /**
-     * Render a schema fragment: object DTOs ⇒ $ref (collected into components); enums/scalars ⇒ inline.
+     * Render a {@see SchemaMetadata} fragment — recursively. A backed-enum ⇒ an inline enum schema; a DTO class
+     * ⇒ a `$ref` (collected into components); an array ⇒ `{type: array, items: …}`; an inline object (or a typed
+     * map / additionalProperties:false) ⇒ `{type: object, properties: …, additionalProperties: …}`; a scalar ⇒
+     * `{type: …, format: …}`. Each branch then folds its own facets (format/enum/example/default/constraints/
+     * description/nullability) via {@see withSchemaFacets} so a nested array item, map value, or union member
+     * keeps EVERY facet the baseline records — D3: the old renderer collapsed an inline item to a bare scalar type
+     * and dropped additionalProperties / description / default / item facets entirely.
      *
      * @param array<string, array<string, mixed>> $componentsSchemas
      * @return array<string, mixed>
      */
-    private function refOrInline(SchemaMetadata $schema, array &$componentsSchemas): array
+    private function renderSchemaFragment(SchemaMetadata $schema, array &$componentsSchemas): array
     {
         if ($schema->isEnum) {
             $inline = ['type' => $schema->enumType ?? 'string'];
             if ($schema->enumCases !== null) {
                 $inline['enum'] = array_values($schema->enumCases);
             }
-            return $inline;
+            return $this->withSchemaFacets($inline, $schema);
         }
-        if ($schema->type !== null) {
-            // scalar / DateTime inline fragment.
-            $inline = ['type' => $schema->type];
-            if ($schema->format !== null) {
-                $inline['format'] = $schema->format;
+
+        // An array fragment (declared `{type: array, items: …}`, or carrying an items fragment). The item is a
+        // FULL recursive fragment, so `{items: {type: string, example: active}}` survives intact.
+        if ($schema->type === 'array' || $schema->items !== null) {
+            $out = ['type' => 'array'];
+            if ($schema->items !== null) {
+                $out['items'] = $this->renderSchemaFragment($schema->items, $componentsSchemas);
             }
-            return $inline;
+            return $this->withSchemaFacets($out, $schema);
         }
+
+        // A referenced DTO object (built, so non-empty) — render the component `$ref`.
         if ($schema->className !== null && !$schema->isEmpty()) {
             $name = $this->resolver->resolve($schema->className);
             $this->collectObjectSchema($schema->className, $schema, $componentsSchemas);
             return ['$ref' => $this->refTo($name)];
         }
-        if ($schema->properties !== []) {
-            // An INLINE object body (a #[Response(shape: …)] / #[RequestBody(shape: …)] fragment with no DTO
-            // class) — render its properties directly rather than collapsing to a bare {type: object}.
+
+        // An inline object (properties) and/or a typed map (additionalProperties) / explicit false.
+        if ($schema->properties !== [] || $schema->additionalProperties !== null || $schema->additionalPropertiesFalse) {
             return $this->renderInlineObject($schema, $componentsSchemas);
         }
+
+        // A scalar fragment (incl. `{type: 'null'}` and a DateTime `{type: string, format: date-time}`).
+        if ($schema->type !== null) {
+            $out = ['type' => $schema->type];
+            if ($schema->format !== null) {
+                $out['format'] = $schema->format;
+            }
+            return $this->withSchemaFacets($out, $schema);
+        }
+
         // Empty object fragment (no properties, no type) — render as a bare object.
         return ['type' => 'object'];
+    }
+
+    /**
+     * Fold the facet fields of a {@see SchemaMetadata} onto an already-rendered fragment: enum, example, default
+     * (incl. explicit null), bounds, description, and OpenAPI-3.1 nullability. Distinct from
+     * {@see withConstraints} (which folds a {@see PropertyMetadata}'s facets) — a fragment is anonymous.
+     *
+     * @param array<string, mixed> $out
+     * @return array<string, mixed>
+     */
+    private function withSchemaFacets(array $out, SchemaMetadata $schema): array
+    {
+        if ($schema->format !== null && !isset($out['format'])) {
+            $out['format'] = $schema->format;
+        }
+        if ($schema->enum !== null) {
+            $out['enum'] = array_values($schema->enum);
+        }
+        if ($schema->example !== null) {
+            $out['example'] = $schema->example;
+        }
+        if ($schema->hasDefault) {
+            $out['default'] = $schema->defaultValue;
+        }
+        if ($schema->minimum !== null) {
+            $out['minimum'] = $schema->minimum;
+        }
+        if ($schema->maximum !== null) {
+            $out['maximum'] = $schema->maximum;
+        }
+        if ($schema->minLength !== null) {
+            $out['minLength'] = $schema->minLength;
+        }
+        if ($schema->maxLength !== null) {
+            $out['maxLength'] = $schema->maxLength;
+        }
+        if ($schema->description !== '') {
+            $out['description'] = $schema->description;
+        }
+        return $this->applyNullability($out, $schema->nullable);
     }
 
     /**
@@ -578,9 +638,20 @@ final class OpenApiEmitter
                 $required[] = $property->serialName();
             }
         }
-        $out = ['type' => 'object', 'properties' => $properties];
+        $out = ['type' => 'object'];
+        if ($properties !== []) {
+            $out['properties'] = $properties;
+        }
         if ($required !== []) {
             $out['required'] = $required;
+        }
+        // A typed map value — an object whose values share one schema (e.g. `rules: {<id>: [string]}`),
+        // rendered recursively so the value keeps its facets. An explicit `additionalProperties: false`
+        // forbids extra keys verbatim. D3: previously lost (the engine rendered a bare {type: object}).
+        if ($schema->additionalProperties !== null) {
+            $out['additionalProperties'] = $this->renderSchemaFragment($schema->additionalProperties, $componentsSchemas);
+        } elseif ($schema->additionalPropertiesFalse) {
+            $out['additionalProperties'] = false;
         }
         if ($schema->description !== '') {
             $out['description'] = $schema->description;
@@ -636,21 +707,43 @@ final class OpenApiEmitter
      */
     private function renderProperty(PropertyMetadata $property, array &$componentsSchemas): array
     {
-        // An inline response-shape array element (#[Response(shape: …)] with a nested array property whose
-        // items are themselves an inline object). Renders before the itemType branch, which only knows how to
-        // render a class/scalar element.
-        if ($property->inlineItems !== null) {
-            return $this->withConstraints(
-                ['type' => 'array', 'items' => $this->renderInlineObject($property->inlineItems, $componentsSchemas)],
-                $property,
-            );
-        }
-
         // An inline response-shape nested object (a #[Response(shape: …)] property that is itself an inline
         // object). Renders before the objectMap/refClass branches.
         if ($property->inlineObject !== null) {
             return $this->withConstraints(
                 $this->renderInlineObject($property->inlineObject, $componentsSchemas),
+                $property,
+            );
+        }
+
+        // A TYPED MAP property — an object whose JSON values share one schema (e.g. a `rules` map of id→[string])
+        // declared via an inline-shape `additionalProperties:` facet, or an explicit `additionalProperties: false`.
+        // Distinct from a free-form objectMap (no value schema). D3: previously collapsed to a bare {type: object}.
+        if ($property->additionalProperties !== null || $property->additionalPropertiesFalse) {
+            $schema = ['type' => 'object'];
+            if ($property->additionalProperties !== null) {
+                $schema['additionalProperties'] = $this->renderSchemaFragment($property->additionalProperties, $componentsSchemas);
+            } else {
+                $schema['additionalProperties'] = false;
+            }
+            return $this->withConstraints($schema, $property);
+        }
+
+        // An array property whose element is a FULL inline fragment (itemSchema) — preferred over itemType, so an
+        // inline item keeps its own type/format/enum/example/default/constraints (D3: e.g.
+        // `{type: array, items: {type: string, example: active}}`).
+        if ($property->itemSchema !== null) {
+            return $this->withConstraints(
+                ['type' => 'array', 'items' => $this->renderSchemaFragment($property->itemSchema, $componentsSchemas)],
+                $property,
+            );
+        }
+
+        // Legacy inline-shape array element (inlineItems — a nested inline object element). Kept as a fallback
+        // for any producer that still sets it; itemSchema above is the preferred path.
+        if ($property->inlineItems !== null) {
+            return $this->withConstraints(
+                ['type' => 'array', 'items' => $this->renderInlineObject($property->inlineItems, $componentsSchemas)],
                 $property,
             );
         }
@@ -766,13 +859,22 @@ final class OpenApiEmitter
         if ($property->example !== null) {
             $schema['example'] = $property->example;
         }
+        // A declared default — emitted whenever `hasDefault` is set, INCLUDING an explicit null (so
+        // `default: null` survives). D3: the renderer previously never projected `default`.
+        if ($property->hasDefault) {
+            $schema['default'] = $property->defaultValue;
+        }
+        // A property description (from an inline-shape `description:` facet). D3: previously dropped.
+        if ($property->description !== null && $property->description !== '') {
+            $schema['description'] = $property->description;
+        }
         if ($property->readOnly) {
             $schema['readOnly'] = true;
         }
         if ($property->writeOnly) {
             $schema['writeOnly'] = true;
         }
-        return $this->applyNullability($schema, $property);
+        return $this->applyNullability($schema, $property->nullable);
     }
 
     /**
@@ -781,9 +883,9 @@ final class OpenApiEmitter
      * @param array<string, mixed> $schema
      * @return array<string, mixed>
      */
-    private function applyNullability(array $schema, PropertyMetadata $property): array
+    private function applyNullability(array $schema, bool $nullable): array
     {
-        if (!$property->nullable) {
+        if (!$nullable) {
             return $schema;
         }
         if (isset($schema['$ref'])) {

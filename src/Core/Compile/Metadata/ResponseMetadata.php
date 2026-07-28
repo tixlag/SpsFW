@@ -45,6 +45,21 @@ final readonly class ResponseMetadata
     }
 
     /**
+     * Whether this response carries a body — ANY of a single schema, an array item, or a union (oneOf/anyOf).
+     * A 204 (No Content) with a body is a compile ERROR regardless of WHICH body-form is declared (D1
+     * universal): the old single-status check only looked at `schema`/`arrayItem`, so a 204 + shape / type /
+     * oneOf / anyOf / collection body slipped through. This single helper is used by BOTH the single-success
+     * and the multi-success 204 validation so the rule cannot drift between the two paths.
+     */
+    public function hasBody(): bool
+    {
+        return $this->schema !== null
+            || $this->arrayItem !== null
+            || $this->oneOf !== null
+            || $this->anyOf !== null;
+    }
+
+    /**
      * A copy with a different status — used when the success BODY and its STATUS are resolved by independent
      * priority chains (M8b fix-pass: schema = returns → ApiResponse → native → AST; status = successStatus →
      * ApiResponse → AST → 200), then combined into one ResponseMetadata.

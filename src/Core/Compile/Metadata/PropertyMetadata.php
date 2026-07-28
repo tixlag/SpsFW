@@ -36,6 +36,16 @@ use SpsFW\Core\Compile\Introspection\RequiredSource;
  *                  either this inline object (inlineObject) or an ARRAY of it (inlineItems). Set ONLY by the
  *                  inline-shape projection of an ad-hoc response body (e.g. `{msg, status}`); never by a DTO.
  *                  Lets the emitter recurse into nested inline shapes that no DTO class describes.
+ *  - description : an inline-shape property description (the `description:` facet). Emitted verbatim; never
+ *                  blended with a legacy OA description (inline shapes are doc-only). Null = absent.
+ *  - itemSchema  : a full INLINE array element fragment (carrying type/format/enum/example/default/
+ *                  constraints), set from a shape facet `items: {type: …, …}`. Preferred over `itemType`
+ *                  (the plain string) when both are present, so an inline item keeps ALL its facets instead
+ *                  of collapsing to a bare scalar type. Set ONLY by the inline-shape projection (D3).
+ *  - additionalProperties / additionalPropertiesFalse : a TYPED map value — a property whose JSON value is an
+ *                  object of uniform values (e.g. `rules: {<id>: [string]}`). additionalProperties holds the
+ *                  value-schema fragment; additionalPropertiesFalse forbids extra keys. Set ONLY by an explicit
+ *                  inline-shape facet (a real list still uses itemType; a free-form map uses objectMap).
  *  - rawArguments: PARITY-PHASE ONLY — the ordered #[OA\Property] getArguments() snapshot that the rule
  *                  graph replays to stay byte-compatible with Router::extractValidationRules(); removed in M8.
  *
@@ -74,6 +84,10 @@ final readonly class PropertyMetadata
         public ?string $schemaName = null,
         public ?SchemaMetadata $inlineObject = null,
         public ?SchemaMetadata $inlineItems = null,
+        public ?string $description = null,
+        public ?SchemaMetadata $itemSchema = null,
+        public ?SchemaMetadata $additionalProperties = null,
+        public bool $additionalPropertiesFalse = false,
         public array $extra = [],
         public ?array $rawArguments = null,
     ) {
