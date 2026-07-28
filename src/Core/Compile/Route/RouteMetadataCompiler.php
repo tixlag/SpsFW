@@ -16,6 +16,8 @@ use SpsFW\Core\Attributes\AccessRulesAny;
 use SpsFW\Core\Attributes\Middleware;
 use SpsFW\Core\Attributes\NoAuthAccess;
 use SpsFW\Core\Attributes\OpenApi\Operation;
+use SpsFW\Core\Attributes\OpenApi\Parameter as OpenApiParameter;
+use SpsFW\Core\Attributes\OpenApi\RequestBody as OpenApiRequestBody;
 use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 use SpsFW\Core\Attributes\PhpIni;
 use SpsFW\Core\Attributes\RateLimit;
@@ -37,6 +39,7 @@ use SpsFW\Core\Compile\Introspection\SuccessInference;
 use SpsFW\Core\Compile\Introspection\TypeMapper;
 use SpsFW\Core\Compile\Metadata\OperationMetadata;
 use SpsFW\Core\Compile\Metadata\ParameterMetadata;
+use SpsFW\Core\Compile\Metadata\PropertyMetadata;
 use SpsFW\Core\Compile\Metadata\RequestBodyMetadata;
 use SpsFW\Core\Compile\Metadata\ResponseMetadata;
 use SpsFW\Core\Compile\Metadata\RouteRuntimeMetadata;
@@ -877,6 +880,10 @@ final class RouteMetadataCompiler
 
         $pathParams = $this->collectPathParams($method, $path);
         [$requestBody, $queryParams] = $this->collectRequestProjection($reflection, $method);
+        // Explicit #[OpenApi\Parameter] / #[OpenApi\RequestBody] enrich or supply what the signature cannot
+        // express (path facets, manual query params, raw/multipart bodies) — doc-only, runtime-untouched.
+        [$pathParams, $queryParams] = $this->applyExplicitParameters($method, $pathParams, $queryParams);
+        $requestBody = $this->applyExplicitRequestBody($method, $requestBody);
         $responses = $this->collectResponses($reflection, $method, $route, $explicit);
         $security = $this->collectSecurity($method);
         $routeErrors = $this->collectErrorProjection($route, $method);
@@ -1240,6 +1247,289 @@ final class RouteMetadataCompiler
     }
 
     /**
+     * Apply explicit {@see OpenApiParameter} attributes: ENRICH an inferred parameter of the same (in, name)
+     * with facets the signature cannot express, or DECLARE a manual query parameter outright. Path parameters
+     * are always required; the attribute's `required` is honored only for query parameters. Doc-only.
+     *
+     * @param list<ParameterMetadata> $pathParams
+     * @param list<ParameterMetadata> $queryParams
+     * @return array{0: list<ParameterMetadata>, 1: list<ParameterMetadata>}
+     */
+    private function applyExplicitParameters(ReflectionMethod $method, array $pathParams, array $queryParams): array
+    {
+        $declared = $this->attributeReader->getInstances($method, OpenApiParameter::class);
+        if ($declared === []) {
+            return [$pathParams, $queryParams];
+        }
+        $controller = $method->getDeclaringClass()->getName();
+        foreach ($declared as $param) {
+            $in = $param->in === ParameterMetadata::IN_PATH ? ParameterMetadata::IN_PATH : ParameterMetadata::IN_QUERY;
+            if ($param->name === '') {
+                $this->diagnostics->error(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'parameter',
+                    cause: '#[OpenApi\Parameter] declares an empty name',
+                    fix: 'give the parameter a name (the raw path placeholder or the query key)',
+                );
+                continue;
+            }
+            if ($in === ParameterMetadata::IN_PATH) {
+                $found = false;
+                foreach ($pathParams as $i => $existing) {
+                    if ($existing->name === $param->name) {
+                        $pathParams[$i] = $this->mergeParameter($existing, $param);
+                        $found = true;
+                        break;
+                    }
+                }
+                if (!$found) {
+                    $this->diagnostics->warning(
+                        controller: $controller,
+                        method: $method->getName(),
+                        dto: null,
+                        field: $param->name,
+                        cause: sprintf('#[OpenApi\Parameter(name: %s, in: path)] matches no {placeholder} in the route path', $param->name),
+                        fix: 'declare the parameter as in: "query", or add {%s} to the route path',
+                    );
+                }
+                continue;
+            }
+            $merged = false;
+            foreach ($queryParams as $i => $existing) {
+                if ($existing->name === $param->name) {
+                    $queryParams[$i] = $this->mergeParameter($existing, $param);
+                    $merged = true;
+                    break;
+                }
+            }
+            if (!$merged) {
+                $queryParams[] = $this->parameterFromAttribute($param, ParameterMetadata::IN_QUERY);
+            }
+        }
+        return [$pathParams, $queryParams];
+    }
+
+    /**
+     * Overlay an explicit {@see OpenApiParameter}'s facets onto an inferred parameter. Facets the attribute
+     * leaves null are kept from the inference; an explicit query `required` overrides; a path param stays required.
+     */
+    private function mergeParameter(ParameterMetadata $base, OpenApiParameter $param): ParameterMetadata
+    {
+        return new ParameterMetadata(
+            name: $base->name,
+            in: $base->in,
+            required: $base->isPath() ? true : ($param->required ?? $base->required),
+            type: $param->type ?? $base->type,
+            format: $param->format ?? $base->format,
+            description: $param->description ?? $base->description,
+            example: $param->example ?? $base->example,
+            deprecated: $param->deprecated || $base->deprecated,
+            enum: $param->enum ?? $base->enum,
+            default: $param->default ?? $base->default,
+            minimum: $param->min ?? $base->minimum,
+            maximum: $param->max ?? $base->maximum,
+        );
+    }
+
+    private function parameterFromAttribute(OpenApiParameter $param, string $in): ParameterMetadata
+    {
+        return new ParameterMetadata(
+            name: $param->name,
+            in: $in,
+            required: $param->required ?? false,
+            type: $param->type ?? 'string',
+            format: $param->format,
+            description: $param->description,
+            example: $param->example,
+            deprecated: $param->deprecated,
+            enum: $param->enum,
+            default: $param->default,
+            minimum: $param->min,
+            maximum: $param->max,
+        );
+    }
+
+    /**
+     * Apply an explicit {@see OpenApiRequestBody}: CANONICAL — when declared it overrides any body inferred from
+     * a DTO marker. The schema comes from a DTO class-string (DtoSchemaBuilder) or an inline `shape`; the content
+     * type, required-ness, and description come from the attribute.
+     */
+    private function applyExplicitRequestBody(ReflectionMethod $method, ?RequestBodyMetadata $inferred): ?RequestBodyMetadata
+    {
+        $declared = $this->attributeReader->getInstances($method, OpenApiRequestBody::class);
+        if ($declared === []) {
+            return $inferred;
+        }
+        $attr = $declared[0]; // a single #[OpenApi\RequestBody] per method
+        $controller = $method->getDeclaringClass()->getName();
+        $schema = null;
+        if ($attr->schema !== null) {
+            if (!class_exists($attr->schema)) {
+                $this->diagnostics->error(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: $attr->schema,
+                    field: 'requestBody',
+                    cause: sprintf('#[OpenApi\RequestBody(schema: %s)] class does not exist / is not autoloadable', $attr->schema),
+                    fix: 'point #[OpenApi\RequestBody(schema:)] at a loadable class, or use shape: instead',
+                );
+            } else {
+                $schema = $this->schemas->build($attr->schema);
+            }
+        } elseif ($attr->shape !== null) {
+            $schema = new SchemaMetadata(properties: $this->propertiesFromShape($attr->shape));
+        }
+        return new RequestBodyMetadata(
+            schema: $schema,
+            contentType: $attr->contentType,
+            required: $attr->required,
+            description: $attr->description,
+        );
+    }
+
+    /**
+     * Build a list of {@see PropertyMetadata} from an inline `shape` facet array (propertyName => facet). Each
+     * facet is itself an array of OpenAPI keys; nested inline objects / arrays-of-inline-objects are carried via
+     * the PropertyMetadata.inlineObject / inlineItems fields so the emitter recurses.
+     *
+     * @param array<string, array<string, mixed>> $shape
+     * @return list<PropertyMetadata>
+     */
+    private function propertiesFromShape(array $shape): array
+    {
+        $properties = [];
+        foreach ($shape as $name => $facet) {
+            $properties[] = $this->propertyFromFacet((string) $name, is_array($facet) ? $facet : []);
+        }
+        return $properties;
+    }
+
+    /**
+     * @param array<string, mixed> $f
+     */
+    private function propertyFromFacet(string $name, array $f): PropertyMetadata
+    {
+        $ref = isset($f['ref']) && is_string($f['ref']) ? $f['ref'] : null;
+
+        // A nested inline object property: {properties: {…}} (or an objectMap free-form when no properties).
+        if (isset($f['properties']) && is_array($f['properties'])) {
+            return new PropertyMetadata(
+                name: $name,
+                phpType: $f['type'] ?? null,
+                objectMap: false,
+                format: $f['format'] ?? null,
+                nullable: (bool) ($f['nullable'] ?? false),
+                required: (bool) ($f['required'] ?? false),
+                enum: $f['enum'] ?? null,
+                minimum: $f['minimum'] ?? $f['min'] ?? null,
+                maximum: $f['maximum'] ?? $f['max'] ?? null,
+                example: $f['example'] ?? null,
+                inlineObject: new SchemaMetadata(properties: $this->propertiesFromShape($f['properties'])),
+            );
+        }
+
+        // An array property. The element is a class-string ref, a scalar `type`, or a nested inline object.
+        if (($f['type'] ?? null) === 'array' || array_key_exists('items', $f)) {
+            $items = $f['items'] ?? null;
+            if (is_array($items) && isset($items['properties']) && is_array($items['properties'])) {
+                // array of inline object
+                return new PropertyMetadata(
+                    name: $name,
+                    phpType: 'array',
+                    objectMap: false,
+                    format: $f['format'] ?? null,
+                    nullable: (bool) ($f['nullable'] ?? false),
+                    required: (bool) ($f['required'] ?? false),
+                    example: $f['example'] ?? null,
+                    inlineItems: new SchemaMetadata(properties: $this->propertiesFromShape($items['properties'])),
+                );
+            }
+            $itemType = match (true) {
+                is_string($items) => $items, // a bare string is a class-string; a scalar element must be ['type' => …]
+                is_array($items) && isset($items['ref']) => $items['ref'],
+                is_array($items) && isset($items['type']) => $this->toPhpScalarType($items['type']),
+                default => null,
+            };
+            return new PropertyMetadata(
+                name: $name,
+                phpType: 'array',
+                itemType: is_string($itemType) ? $itemType : null,
+                objectMap: false,
+                format: $f['format'] ?? null,
+                nullable: (bool) ($f['nullable'] ?? false),
+                required: (bool) ($f['required'] ?? false),
+                enum: $f['enum'] ?? null,
+                minimum: $f['minimum'] ?? $f['min'] ?? null,
+                maximum: $f['maximum'] ?? $f['max'] ?? null,
+                example: $f['example'] ?? null,
+            );
+        }
+
+        // A scalar / ref property.
+        return new PropertyMetadata(
+            name: $name,
+            phpType: $this->toPhpScalarType($f['type'] ?? null),
+            ref: $ref,
+            refClass: $ref,
+            format: $f['format'] ?? null,
+            nullable: (bool) ($f['nullable'] ?? false),
+            hasDefault: array_key_exists('default', $f),
+            defaultValue: $f['default'] ?? null,
+            required: (bool) ($f['required'] ?? false),
+            enum: $f['enum'] ?? null,
+            minimum: $f['minimum'] ?? $f['min'] ?? null,
+            maximum: $f['maximum'] ?? $f['max'] ?? null,
+            example: $f['example'] ?? null,
+        );
+    }
+
+    /**
+     * A shape facet carries an OpenAPI scalar type name ('integer'/'boolean'/'number'/'string'); the emitter's
+     * scalar path expects a PHP type name. Translate the OpenAPI names back; 'string'/null/already-PHP pass through.
+     */
+    private function toPhpScalarType(?string $openApi): ?string
+    {
+        return match ($openApi) {
+            'integer' => 'int',
+            'boolean' => 'bool',
+            'number' => 'float',
+            default => $openApi,
+        };
+    }
+
+    /**
+     * A union (oneOf/anyOf) member → a SchemaMetadata: a class-string ref (DTO), a nested inline-object facet
+     * array ({properties: …}), a scalar facet ({type: …}), or the explicit null member ({type: 'null'}).
+     *
+     * @param string|array<string, mixed> $member
+     */
+    private function schemaFromMember(ReflectionMethod $method, string|array $member): SchemaMetadata
+    {
+        if (is_string($member)) {
+            $controller = $method->getDeclaringClass()->getName();
+            if (!class_exists($member)) {
+                $this->diagnostics->error(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: $member,
+                    field: 'return',
+                    cause: sprintf('#[Response] union member class %s does not exist / is not autoloadable', $member),
+                    fix: 'point the union member at a loadable class, or declare it as a facet array',
+                );
+                return new SchemaMetadata();
+            }
+            return $this->schemas->build($member);
+        }
+        if (isset($member['properties']) && is_array($member['properties'])) {
+            return new SchemaMetadata(properties: $this->propertiesFromShape($member['properties']));
+        }
+        // scalar facet (incl. the explicit null member {type: 'null'} and a binary {type:'string',format:'binary'})
+        return new SchemaMetadata(type: $member['type'] ?? null, format: $member['format'] ?? null);
+    }
+
+    /**
      * Responses (M8b: Route-first / inference-first). The SUCCESS response is resolved by priority:
      *   1. `Route::returns` (validated shape; a definite native/AST inference that CONTRADICTS it is an ERROR);
      *   2. a single 2xx `#[ApiResponse]` (the legacy/transitional success declaration);
@@ -1422,11 +1712,41 @@ final class RouteMetadataCompiler
         ReflectionMethod $method,
         ApiResponse $response,
     ): ResponseMetadata {
+        $controller = $method->getDeclaringClass()->getName();
+
+        // A genuine union body (oneOf/anyOf) — mutually exclusive with schema/shape/type.
+        if ($response->oneOf !== null || $response->anyOf !== null) {
+            if ($response->collection || $response->schema !== null || $response->shape !== null || $response->type !== null) {
+                $this->diagnostics->error(
+                    controller: $controller,
+                    method: $method->getName(),
+                    dto: null,
+                    field: 'return',
+                    cause: '#[Response] declares oneOf/anyOf together with schema/shape/type/collection; a union body is exclusive',
+                    fix: 'declare either a union (oneOf/anyOf) or a single body (schema/shape/type), not both',
+                );
+            }
+            $members = $response->oneOf ?? $response->anyOf;
+            $list = [];
+            foreach ($members as $member) {
+                $list[] = $this->schemaFromMember($method, $member);
+            }
+            return new ResponseMetadata(
+                status: $response->status,
+                contentType: $response->contentType,
+                description: $response->description ?? '',
+                headers: $response->headers,
+                oneOf: $response->oneOf !== null ? $list : null,
+                anyOf: $response->anyOf !== null ? $list : null,
+            );
+        }
+
+        // Single body, by priority: schema (DTO class) → shape (inline object) → type (scalar/binary).
         $itemSchema = null;
         if ($response->schema !== null) {
             if (!class_exists($response->schema)) {
                 $this->diagnostics->error(
-                    controller: $method->getDeclaringClass()->getName(),
+                    controller: $controller,
                     method: $method->getName(),
                     dto: $response->schema,
                     field: 'return',
@@ -1436,6 +1756,10 @@ final class RouteMetadataCompiler
             } else {
                 $itemSchema = $this->schemas->build($response->schema);
             }
+        } elseif ($response->shape !== null) {
+            $itemSchema = new SchemaMetadata(properties: $this->propertiesFromShape($response->shape));
+        } elseif ($response->type !== null) {
+            $itemSchema = new SchemaMetadata(type: $response->type, format: $response->format);
         }
         // #[Response(collection: true)] disambiguates an array body: the schema is the per-ITEM shape and the
         // response projects type:array, items:{schema}. Without it the schema is a single object body.
@@ -1444,7 +1768,7 @@ final class RouteMetadataCompiler
                 // A collection flag with no item schema is an M7 migration gap (the array shape is unknown);
                 // the spec can still emit type:array, just without an items schema. Fatal only in strict mode.
                 $this->diagnostics->warning(
-                    controller: $method->getDeclaringClass()->getName(),
+                    controller: $controller,
                     method: $method->getName(),
                     dto: null,
                     field: 'return',
@@ -1755,7 +2079,11 @@ final class RouteMetadataCompiler
     private function responseBodySignature(ResponseMetadata $response): string
     {
         $body = 'none';
-        if ($response->schema !== null) {
+        if ($response->oneOf !== null) {
+            $body = 'oneOf:' . implode('|', array_map(fn (SchemaMetadata $s): string => $this->schemaSignature($s), $response->oneOf));
+        } elseif ($response->anyOf !== null) {
+            $body = 'anyOf:' . implode('|', array_map(fn (SchemaMetadata $s): string => $this->schemaSignature($s), $response->anyOf));
+        } elseif ($response->schema !== null) {
             $body = $this->schemaSignature($response->schema);
         } elseif ($response->arrayItem !== null) {
             $body = $this->schemaSignature($response->arrayItem) . '[]';
@@ -1771,7 +2099,17 @@ final class RouteMetadataCompiler
         if ($schema->isEnum) {
             return 'inline:' . ($schema->enumType ?? '') . ':' . ($schema->format ?? '');
         }
-        return $schema->type !== null ? 'inline:' . $schema->type . ':' . ($schema->format ?? '') : 'none';
+        if ($schema->type !== null) {
+            return 'inline:' . $schema->type . ':' . ($schema->format ?? '');
+        }
+        // An inline object (a #[Response(shape: …)] body) — fingerprint by its property names so two DIFFERENT
+        // inline shapes are not mistaken for a duplicate success redeclaration.
+        if ($schema->properties !== []) {
+            $names = array_map(static fn (PropertyMetadata $p): string => $p->name, $schema->properties);
+            sort($names);
+            return 'inline-obj:' . implode(',', $names);
+        }
+        return 'none';
     }
 
     /**

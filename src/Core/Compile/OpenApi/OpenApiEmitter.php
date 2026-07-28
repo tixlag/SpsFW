@@ -302,6 +302,21 @@ final class OpenApiEmitter
             if ($param->format !== null) {
                 $schema['format'] = $param->format;
             }
+            if ($param->enum !== null) {
+                $schema['enum'] = array_values($param->enum);
+            }
+            if ($param->default !== null) {
+                $schema['default'] = $param->default;
+            }
+            if ($param->minimum !== null) {
+                $schema['minimum'] = $param->minimum;
+            }
+            if ($param->maximum !== null) {
+                $schema['maximum'] = $param->maximum;
+            }
+            if ($param->example !== null) {
+                $schema['example'] = $param->example;
+            }
             $entry = [
                 'name' => $param->name,
                 'in' => $param->in,
@@ -441,24 +456,49 @@ final class OpenApiEmitter
     private function buildResponse(ResponseMetadata $response, array &$componentsSchemas): array
     {
         $out = ['description' => $response->description !== '' ? $response->description : 'OK'];
-        if ($response->schema !== null) {
+        $bodySchema = $this->responseBodySchema($response, $componentsSchemas);
+        if ($bodySchema !== null) {
             $out['content'] = [
-                $response->contentType => ['schema' => $this->refOrInline($response->schema, $componentsSchemas)],
-            ];
-        } elseif ($response->arrayItem !== null) {
-            $out['content'] = [
-                $response->contentType => [
-                    'schema' => [
-                        'type' => 'array',
-                        'items' => $this->refOrInline($response->arrayItem, $componentsSchemas),
-                    ],
-                ],
+                $response->contentType => ['schema' => $bodySchema],
             ];
         }
         if ($response->headers !== []) {
             $out['headers'] = $response->headers;
         }
         return $out;
+    }
+
+    /**
+     * The response body schema fragment: a union (oneOf/anyOf), an inline/object/scalar `schema`, an array
+     * `arrayItem`, or null for an empty body. The four are mutually exclusive on a single ResponseMetadata.
+     *
+     * @param array<string, array<string, mixed>> $componentsSchemas
+     * @return ?array<string, mixed>
+     */
+    private function responseBodySchema(ResponseMetadata $response, array &$componentsSchemas): ?array
+    {
+        if ($response->oneOf !== null) {
+            return ['oneOf' => array_map(
+                fn (SchemaMetadata $member): array => $this->refOrInline($member, $componentsSchemas),
+                $response->oneOf,
+            )];
+        }
+        if ($response->anyOf !== null) {
+            return ['anyOf' => array_map(
+                fn (SchemaMetadata $member): array => $this->refOrInline($member, $componentsSchemas),
+                $response->anyOf,
+            )];
+        }
+        if ($response->schema !== null) {
+            return $this->refOrInline($response->schema, $componentsSchemas);
+        }
+        if ($response->arrayItem !== null) {
+            return [
+                'type' => 'array',
+                'items' => $this->refOrInline($response->arrayItem, $componentsSchemas),
+            ];
+        }
+        return null;
     }
 
     /**
@@ -512,8 +552,40 @@ final class OpenApiEmitter
             $this->collectObjectSchema($schema->className, $schema, $componentsSchemas);
             return ['$ref' => $this->refTo($name)];
         }
+        if ($schema->properties !== []) {
+            // An INLINE object body (a #[Response(shape: …)] / #[RequestBody(shape: …)] fragment with no DTO
+            // class) — render its properties directly rather than collapsing to a bare {type: object}.
+            return $this->renderInlineObject($schema, $componentsSchemas);
+        }
         // Empty object fragment (no properties, no type) — render as a bare object.
         return ['type' => 'object'];
+    }
+
+    /**
+     * Render an inline (className-less) object schema: {type: object, properties: …, required: …}. Each property
+     * goes through {@see renderProperty}, so nested inline objects / arrays-of-inline-objects recurse correctly.
+     *
+     * @param array<string, array<string, mixed>> $componentsSchemas
+     * @return array<string, mixed>
+     */
+    private function renderInlineObject(SchemaMetadata $schema, array &$componentsSchemas): array
+    {
+        $properties = [];
+        $required = [];
+        foreach ($schema->properties as $property) {
+            $properties[$property->serialName()] = $this->renderProperty($property, $componentsSchemas);
+            if ($property->required) {
+                $required[] = $property->serialName();
+            }
+        }
+        $out = ['type' => 'object', 'properties' => $properties];
+        if ($required !== []) {
+            $out['required'] = $required;
+        }
+        if ($schema->description !== '') {
+            $out['description'] = $schema->description;
+        }
+        return $out;
     }
 
     /**
@@ -564,6 +636,25 @@ final class OpenApiEmitter
      */
     private function renderProperty(PropertyMetadata $property, array &$componentsSchemas): array
     {
+        // An inline response-shape array element (#[Response(shape: …)] with a nested array property whose
+        // items are themselves an inline object). Renders before the itemType branch, which only knows how to
+        // render a class/scalar element.
+        if ($property->inlineItems !== null) {
+            return $this->withConstraints(
+                ['type' => 'array', 'items' => $this->renderInlineObject($property->inlineItems, $componentsSchemas)],
+                $property,
+            );
+        }
+
+        // An inline response-shape nested object (a #[Response(shape: …)] property that is itself an inline
+        // object). Renders before the objectMap/refClass branches.
+        if ($property->inlineObject !== null) {
+            return $this->withConstraints(
+                $this->renderInlineObject($property->inlineObject, $componentsSchemas),
+                $property,
+            );
+        }
+
         // An explicitly-declared object/map (a PHP `array` whose JSON value is an object, not a sequence).
         // objectMap is set ONLY by an explicit #[Field(objectMap: true)] or a legacy OA object declaration. When
         // the developer also supplied a resolvable `$ref`, the explicit flag confirms cardinality and the ref

@@ -32,6 +32,10 @@ use SpsFW\Core\Compile\Introspection\RequiredSource;
  *                  under {@see RequiredSource::Oa} until the OA source is removed (M8). The two sources are
  *                  NEVER blended — see {@see isRequired()}.
  *  - readOnly / writeOnly / schemaName : direction-specific projection hints (#[Field])
+ *  - inlineObject/inlineItems : an INLINE response shape facet (from #[Response(shape: …)]) — the property is
+ *                  either this inline object (inlineObject) or an ARRAY of it (inlineItems). Set ONLY by the
+ *                  inline-shape projection of an ad-hoc response body (e.g. `{msg, status}`); never by a DTO.
+ *                  Lets the emitter recurse into nested inline shapes that no DTO class describes.
  *  - rawArguments: PARITY-PHASE ONLY — the ordered #[OA\Property] getArguments() snapshot that the rule
  *                  graph replays to stay byte-compatible with Router::extractValidationRules(); removed in M8.
  *
@@ -68,6 +72,8 @@ final readonly class PropertyMetadata
         public bool $readOnly = false,
         public bool $writeOnly = false,
         public ?string $schemaName = null,
+        public ?SchemaMetadata $inlineObject = null,
+        public ?SchemaMetadata $inlineItems = null,
         public array $extra = [],
         public ?array $rawArguments = null,
     ) {

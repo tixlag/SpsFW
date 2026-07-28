@@ -16,11 +16,16 @@ namespace SpsFW\Core\Compile\Metadata;
  *                  response is an array (#[Response(collection: true)] or an inferred array-of-DTO).
  *  - contentType : default application/json
  *  - headers     : declared response headers
+ *  - oneOf/anyOf : a genuine union body — list of SchemaMetadata members. Used ONLY where the baseline truly
+ *                  carries a union (a mixed-type collection, a `T|null` success rendered as oneOf). Mutually
+ *                  exclusive with `schema`/`arrayItem` on a single response.
  */
 final readonly class ResponseMetadata
 {
     /**
      * @param array<string, mixed> $headers
+     * @param ?list<SchemaMetadata> $oneOf
+     * @param ?list<SchemaMetadata> $anyOf
      */
     public function __construct(
         public int $status = 200,
@@ -29,6 +34,8 @@ final readonly class ResponseMetadata
         public string $contentType = 'application/json',
         public string $description = '',
         public array $headers = [],
+        public ?array $oneOf = null,
+        public ?array $anyOf = null,
     ) {
     }
 
@@ -51,6 +58,8 @@ final readonly class ResponseMetadata
             contentType: $this->contentType,
             description: $this->description,
             headers: $this->headers,
+            oneOf: $this->oneOf,
+            anyOf: $this->anyOf,
         );
     }
 }
