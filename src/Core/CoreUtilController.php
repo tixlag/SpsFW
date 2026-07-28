@@ -25,7 +25,7 @@ class CoreUtilController extends RestController
      */
     #[OA\Post(path: '/api/core/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
-    #[Route('/api/core/update', ['POST'])]
+    #[Route('/api/core/update', ['POST'], summary: 'Обновляет роуты и документацию', description: "Можно сделать так, чтобы каждый запрос сканировал все контролеры,\nи проверял, изменился ли файл. Если да, то обновляем кеш", tags: ['Core'])]
     #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateRoutes(): array
     {
@@ -40,7 +40,7 @@ class CoreUtilController extends RestController
 
     #[OA\Post(path: '/api/core/update/routes', summary: 'Обновляет только роуты', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
-    #[Route('/api/core/update/routes', ['POST'])]
+    #[Route('/api/core/update/routes', ['POST'], summary: 'Обновляет только роуты', tags: ['Core'])]
     #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateOnlyRoutes(): array
     {
@@ -79,7 +79,7 @@ class CoreUtilController extends RestController
 
     #[OA\Post(path: '/swagger/update', summary: 'Обновляет роуты и документацию', tags: ['Core'])]
     #[OA\Response(response: 200, description: "Успешно обновлено")]
-    #[Route('/swagger/update', ['POST'])]
+    #[Route('/swagger/update', ['POST'], summary: 'Обновляет роуты и документацию', tags: ['Core'])]
     #[ApiResponse(status: 200, description: 'Успешно обновлено')]
     public function updateDocs(): array
     {

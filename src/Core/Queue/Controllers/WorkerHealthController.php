@@ -29,7 +29,7 @@ class WorkerHealthController extends RestController
     /**
      * Проверка статуса работоспособности воркеров
      */
-    #[Route(path: "/api/worker-health", httpMethods: ['GET'])]
+    #[Route(path: "/api/worker-health", httpMethods: ['GET'], summary: "Получить статус работоспособности всех воркеров", description: "Возвращает список воркеров и флаг их активности (heartbeat за последние 60 секунд)", tags: ["Worker Health"])]
     #[OA\Get(
         path: "/api/worker-health",
         description: "Возвращает список воркеров и флаг их активности (heartbeat за последние 60 секунд)",
@@ -62,7 +62,7 @@ class WorkerHealthController extends RestController
             )
         ]
     )]
-    #[ApiResponse(status: 200, description: 'Успешный ответ')]
+    #[ApiResponse(status: 200, description: 'Успешный ответ', shape: ['workers' => ['type' => 'object', 'example' => ['order_notification_worker' => true, 'import_employees_worker' => false, 'visited_worker' => true]], 'timestamp' => ['type' => 'integer', 'example' => 1743849600]])]
     public function check(): Response
     {
         $workers = $this->workerConfig?->getQueueWorkerNames() ?? [

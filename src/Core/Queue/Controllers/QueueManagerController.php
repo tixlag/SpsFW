@@ -15,6 +15,8 @@ use Psr\SimpleCache\CacheInterface;
 // Импорты OpenAPI атрибутов
 use OpenApi\Attributes as OA;
 use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
+use SpsFW\Core\Attributes\OpenApi\Parameter;
+use SpsFW\Core\Attributes\OpenApi\RequestBody;
 
 #[Controller]
 #[OA\Tag(name: "Queue Management", description: "API для управления очередями задач и воркерами")]
@@ -57,7 +59,7 @@ class QueueManagerController extends RestController
         summary: "Управление воркерами очередей и прочими",
         tags: ["Queue Management"]
     )]
-    #[Route(path: "/api/workers")]
+    #[Route(path: "/api/workers", summary: "Управление воркерами очередей и прочими", description: 'Workers Management', tags: ["Queue Management"])]
     #[ApiResponse(status: 200, description: 'Workers Management')]
     public function index(): Response
     {
@@ -67,7 +69,7 @@ class QueueManagerController extends RestController
     /**
      * Dashboard со статусом всех воркеров
      */
-    #[Route(path: "/api/queue/dashboard", httpMethods: ['GET'])]
+    #[Route(path: "/api/queue/dashboard", httpMethods: ['GET'], summary: "Получить статус всех воркеров", description: "Dashboard со статусом всех воркеров", tags: ["Queue Management"])]
     #[OA\Get(
         path: "/api/queue/dashboard",
         summary: "Получить статус всех воркеров",
@@ -98,7 +100,7 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[ApiResponse(status: 200, description: 'Успешный ответ')]
+    #[ApiResponse(status: 200, description: 'Успешный ответ', shape: ['workers' => ['type' => 'array', 'items' => ['properties' => ['id' => ['type' => 'string'], 'config' => ['type' => 'object'], 'alive' => ['type' => 'boolean'], 'status' => ['type' => 'object', 'nullable' => true], 'last_error' => ['type' => 'string', 'nullable' => true], 'uptime' => ['type' => 'integer', 'nullable' => true], 'stats' => ['type' => 'object', 'nullable' => true]]]], 'timestamp' => ['type' => 'string', 'example' => '2025-04-05 12:34:56'], 'server' => ['type' => 'string', 'example' => 'app-server-01']])]
     public function dashboard(): Response
     {
         $workers = [];
@@ -137,7 +139,7 @@ class QueueManagerController extends RestController
     /**
      * Получить статистику очередей
      */
-    #[Route(path: "/api/queue/stats", httpMethods: ['GET'])]
+    #[Route(path: "/api/queue/stats", httpMethods: ['GET'], summary: "Получить общую статистику очередей", description: "Получить статистику очередей", tags: ["Queue Management"])]
     #[OA\Get(
         path: "/api/queue/stats",
         summary: "Получить общую статистику очередей",
@@ -157,7 +159,7 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[ApiResponse(status: 200, description: 'Информация о статистике')]
+    #[ApiResponse(status: 200, description: 'Информация о статистике', shape: ['message' => ['type' => 'string'], 'note' => ['type' => 'string'], 'management_url' => ['type' => 'string']])]
     public function stats(): Response
     {
         // Здесь можно добавить подключение к RabbitMQ Management API
@@ -173,7 +175,7 @@ class QueueManagerController extends RestController
     /**
      * Отправить задачу в очередь
      */
-    #[Route(path: "/api/queue/send", httpMethods: ['POST'])]
+    #[Route(path: "/api/queue/send", httpMethods: ['POST'], summary: "Отправить задачу в очередь", description: "Отправить задачу в очередь", tags: ["Queue Management"])]
     #[OA\Post(
         path: "/api/queue/send",
         summary: "Отправить задачу в очередь",
@@ -231,7 +233,10 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[ApiResponse(status: 200, description: 'Задача успешно отправлена')]
+    #[RequestBody(required: true, shape: ['job_name' => ['required' => true, 'type' => 'string', 'example' => 'ImportEmployeeJob'], 'queue' => ['required' => true, 'type' => 'string', 'example' => 'employee_import'], 'exchange' => ['type' => 'string', 'example' => 'employees'], 'routing_key' => ['type' => 'string', 'example' => 'import.key'], 'job_data' => ['type' => 'object', 'example' => ['file_path' => '/tmp/data.json']], 'use_retry' => ['type' => 'boolean', 'example' => false], 'retry_delay_ms' => ['type' => 'integer', 'example' => 10000], 'max_retries' => ['type' => 'integer', 'example' => 5]])]
+    #[ApiResponse(status: 200, description: 'Задача успешно отправлена', shape: ['success' => ['type' => 'boolean', 'example' => true], 'job_name' => ['type' => 'string'], 'job_class' => ['type' => 'string'], 'queue' => ['type' => 'string'], 'timestamp' => ['type' => 'string']])]
+    #[ApiResponse(status: 400, description: 'Ошибка валидации', shape: ['error' => ['type' => 'string']])]
+    #[ApiResponse(status: 500, description: 'Внутренняя ошибка сервера', shape: ['error' => ['type' => 'string'], 'message' => ['type' => 'string']])]
     public function send(): Response
     {
         $data = $this->request->getJsonData();
@@ -291,7 +296,7 @@ class QueueManagerController extends RestController
     /**
      * Управление воркером (start/stop/restart)
      */
-    #[Route(path: "/api/queue/worker/{workerId}/{action}", httpMethods: ['POST'])]
+    #[Route(path: "/api/queue/worker/{workerId}/{action}", httpMethods: ['POST'], summary: "Управление воркером: start, stop, restart", description: "Управление воркером (start/stop/restart)", tags: ["Queue Management"])]
     #[OA\Post(
         path: "/api/queue/worker/{workerId}/{action}",
         summary: "Управление воркером: start, stop, restart",
@@ -320,7 +325,11 @@ class QueueManagerController extends RestController
             new OA\Response(response: 500, description: "Ошибка сервера")
         ]
     )]
-    #[ApiResponse(status: 200, description: 'Операция выполнена')]
+    #[ApiResponse(status: 200, description: 'Операция выполнена', shape: ['success' => ['type' => 'boolean'], 'worker' => ['type' => 'string'], 'action' => ['type' => 'string'], 'command' => ['type' => 'string', 'nullable' => true], 'pid' => ['type' => 'integer', 'nullable' => true]])]
+    #[ApiResponse(status: 400, description: 'Неверные параметры')]
+    #[ApiResponse(status: 404, description: 'Воркер не найден')]
+    #[ApiResponse(status: 500, description: 'Ошибка сервера')]
+    #[Parameter(name: 'action', in: 'path', enum: ['start', 'stop', 'restart'])]
     public function controlWorker(string $workerId, string $action): Response
     {
         if (!isset($this->getWorkerDefinitions()[$workerId])) {
@@ -400,7 +409,7 @@ class QueueManagerController extends RestController
     /**
      * Очистка данных воркера
      */
-    #[Route(path: "/api/queue/worker/{workerId}/clear", httpMethods: ['DELETE'])]
+    #[Route(path: "/api/queue/worker/{workerId}/clear", httpMethods: ['DELETE'], summary: "Очистить данные heartbeat воркера", description: "Очистка данных воркера", tags: ["Queue Management"])]
     #[OA\Delete(
         path: "/api/queue/worker/{workerId}/clear",
         summary: "Очистить данные heartbeat воркера",
@@ -424,7 +433,8 @@ class QueueManagerController extends RestController
             new OA\Response(response: 404, description: "Воркер не найден")
         ]
     )]
-    #[ApiResponse(status: 200, description: 'Данные очищены')]
+    #[ApiResponse(status: 200, description: 'Данные очищены', shape: ['success' => ['type' => 'boolean', 'example' => true], 'worker' => ['type' => 'string'], 'action' => ['type' => 'string', 'example' => 'cleared']])]
+    #[ApiResponse(status: 404, description: 'Воркер не найден')]
     public function clearWorker(string $workerId): Response
     {
         if (!isset($this->getWorkerDefinitions()[$workerId])) {
@@ -444,7 +454,7 @@ class QueueManagerController extends RestController
     /**
      * Получить список зарегистрированных задач
      */
-    #[Route(path: "/api/queue/jobs", httpMethods: ['GET'])]
+    #[Route(path: "/api/queue/jobs", httpMethods: ['GET'], summary: "Получить список зарегистрированных задач", description: "Получить список зарегистрированных задач", tags: ["Queue Management"])]
     #[OA\Get(
         path: "/api/queue/jobs",
         summary: "Получить список зарегистрированных задач",
@@ -471,7 +481,7 @@ class QueueManagerController extends RestController
             )
         ]
     )]
-    #[ApiResponse(status: 200, description: 'Список задач')]
+    #[ApiResponse(status: 200, description: 'Список задач', shape: ['jobs' => ['type' => 'array', 'items' => ['properties' => ['name' => ['type' => 'string'], 'class' => ['type' => 'string'], 'handler' => ['type' => 'string', 'nullable' => true], 'has_handler' => ['type' => 'boolean']]]], 'total' => ['type' => 'integer']])]
     public function listJobs(): Response
     {
         $jobs = [];

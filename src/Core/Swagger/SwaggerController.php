@@ -26,7 +26,7 @@ class SwaggerController extends RestController
         summary: "Swagger UI",
         tags: ["Swagger"]
     )]
-    #[Route(path: "/swagger")]
+    #[Route(path: "/swagger", summary: "Swagger UI", description: "Swagger UI")]
     #[NoAuthAccess]
     #[ApiResponse(status: 200, description: 'Swagger UI')]
     public function index(): Response
@@ -40,7 +40,7 @@ class SwaggerController extends RestController
         summary: "OpenAPI YAML",
         tags: ["Swagger"]
     )]
-    #[Route(path: "/swagger/openapi.yaml")]
+    #[Route(path: "/swagger/openapi.yaml", summary: "OpenAPI YAML", description: "OpenAPI YAML")]
     #[ApiResponse(status: 200, description: 'OpenAPI YAML')]
     public function yaml(): Response
     {
