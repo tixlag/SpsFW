@@ -20,12 +20,6 @@ use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 class SwaggerController extends RestController
 {
 
-    #[OA\Get(
-        path: "/swagger",
-        description: "Swagger UI",
-        summary: "Swagger UI",
-        tags: ["Swagger"]
-    )]
     #[Route(path: "/swagger")]
     #[NoAuthAccess]
     #[ApiResponse(status: 200, description: 'Swagger UI')]
@@ -34,12 +28,6 @@ class SwaggerController extends RestController
         return Response::html(file_get_contents('View/index.html', true));
     }
 
-    #[OA\Get(
-        path: "/swagger/openapi.yaml",
-        description: "OpenAPI YAML",
-        summary: "OpenAPI YAML",
-        tags: ["Swagger"]
-    )]
     #[Route(path: "/swagger/openapi.yaml")]
     #[ApiResponse(status: 200, description: 'OpenAPI YAML')]
     public function yaml(): Response

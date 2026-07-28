@@ -13,11 +13,9 @@ use SpsFW\Core\Workers\WorkerConfig;
 use Psr\SimpleCache\CacheInterface;
 
 // Импорты OpenAPI атрибутов
-use OpenApi\Attributes as OA;
 use SpsFW\Core\Attributes\OpenApi\Response as ApiResponse;
 
 #[Controller]
-#[OA\Tag(name: "Queue Management", description: "API для управления очередями задач и воркерами")]
 class QueueManagerController extends RestController
 {
     private array $workerDefinitions = [
@@ -51,12 +49,6 @@ class QueueManagerController extends RestController
 
 
 
-    #[OA\Get(
-        path: "/api/workers",
-        description: "Workers Management",
-        summary: "Управление воркерами очередей и прочими",
-        tags: ["Queue Management"]
-    )]
     #[Route(path: "/api/workers")]
     #[ApiResponse(status: 200, description: 'Workers Management')]
     public function index(): Response
@@ -68,36 +60,6 @@ class QueueManagerController extends RestController
      * Dashboard со статусом всех воркеров
      */
     #[Route(path: "/api/queue/dashboard", httpMethods: ['GET'])]
-    #[OA\Get(
-        path: "/api/queue/dashboard",
-        summary: "Получить статус всех воркеров",
-        tags: ["Queue Management"],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: "Успешный ответ",
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: "workers", type: "array", items: new OA\Items(
-                            properties: [
-                                new OA\Property(property: "id", type: "string"),
-                                new OA\Property(property: "config", type: "object"),
-                                new OA\Property(property: "alive", type: "boolean"),
-                                new OA\Property(property: "status", type: "object", nullable: true),
-                                new OA\Property(property: "last_error", type: "string", nullable: true),
-                                new OA\Property(property: "uptime", type: "integer", nullable: true),
-                                new OA\Property(property: "stats", type: "object", nullable: true),
-                            ],
-                            type: "object"
-                        )),
-                        new OA\Property(property: "timestamp", type: "string", example: "2025-04-05 12:34:56"),
-                        new OA\Property(property: "server", type: "string", example: "app-server-01"),
-                    ],
-                    type: "object"
-                )
-            )
-        ]
-    )]
     #[ApiResponse(status: 200, description: 'Успешный ответ')]
     public function dashboard(): Response
     {
@@ -138,25 +100,6 @@ class QueueManagerController extends RestController
      * Получить статистику очередей
      */
     #[Route(path: "/api/queue/stats", httpMethods: ['GET'])]
-    #[OA\Get(
-        path: "/api/queue/stats",
-        summary: "Получить общую статистику очередей",
-        tags: ["Queue Management"],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: "Информация о статистике",
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: "message", type: "string"),
-                        new OA\Property(property: "note", type: "string"),
-                        new OA\Property(property: "management_url", type: "string"),
-                    ],
-                    type: "object"
-                )
-            )
-        ]
-    )]
     #[ApiResponse(status: 200, description: 'Информация о статистике')]
     public function stats(): Response
     {
@@ -174,63 +117,6 @@ class QueueManagerController extends RestController
      * Отправить задачу в очередь
      */
     #[Route(path: "/api/queue/send", httpMethods: ['POST'])]
-    #[OA\Post(
-        path: "/api/queue/send",
-        summary: "Отправить задачу в очередь",
-        requestBody: new OA\RequestBody(
-            required: true,
-            content: new OA\JsonContent(
-                required: ["job_name", "queue"],
-                properties: [
-                    new OA\Property(property: "job_name", type: "string", example: "ImportEmployeeJob"),
-                    new OA\Property(property: "queue", type: "string", example: "employee_import"),
-                    new OA\Property(property: "exchange", type: "string", example: "employees"),
-                    new OA\Property(property: "routing_key", type: "string", example: "import.key"),
-                    new OA\Property(property: "job_data", type: "object", example: ["file_path" => "/tmp/data.json"]),
-                    new OA\Property(property: "use_retry", type: "boolean", example: false),
-                    new OA\Property(property: "retry_delay_ms", type: "integer", example: 10000),
-                    new OA\Property(property: "max_retries", type: "integer", example: 5),
-                ],
-                type: "object"
-            )
-        ),
-        tags: ["Queue Management"],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: "Задача успешно отправлена",
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "job_name", type: "string"),
-                        new OA\Property(property: "job_class", type: "string"),
-                        new OA\Property(property: "queue", type: "string"),
-                        new OA\Property(property: "timestamp", type: "string"),
-                    ],
-                    type: "object"
-                )
-            ),
-            new OA\Response(
-                response: 400,
-                description: "Ошибка валидации",
-                content: new OA\JsonContent(
-                    properties: [new OA\Property(property: "error", type: "string")],
-                    type: "object"
-                )
-            ),
-            new OA\Response(
-                response: 500,
-                description: "Внутренняя ошибка сервера",
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: "error", type: "string"),
-                        new OA\Property(property: "message", type: "string")
-                    ],
-                    type: "object"
-                )
-            )
-        ]
-    )]
     #[ApiResponse(status: 200, description: 'Задача успешно отправлена')]
     public function send(): Response
     {
@@ -292,34 +178,6 @@ class QueueManagerController extends RestController
      * Управление воркером (start/stop/restart)
      */
     #[Route(path: "/api/queue/worker/{workerId}/{action}", httpMethods: ['POST'])]
-    #[OA\Post(
-        path: "/api/queue/worker/{workerId}/{action}",
-        summary: "Управление воркером: start, stop, restart",
-        tags: ["Queue Management"],
-        parameters: [
-            new OA\Parameter(name: "workerId", in: "path", required: true, schema: new OA\Schema(type: "string")),
-            new OA\Parameter(name: "action", in: "path", required: true, schema: new OA\Schema(type: "string", enum: ["start", "stop", "restart"]))
-        ],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: "Операция выполнена",
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: "success", type: "boolean"),
-                        new OA\Property(property: "worker", type: "string"),
-                        new OA\Property(property: "action", type: "string"),
-                        new OA\Property(property: "command", type: "string", nullable: true),
-                        new OA\Property(property: "pid", type: "integer", nullable: true),
-                    ],
-                    type: "object"
-                )
-            ),
-            new OA\Response(response: 400, description: "Неверные параметры"),
-            new OA\Response(response: 404, description: "Воркер не найден"),
-            new OA\Response(response: 500, description: "Ошибка сервера")
-        ]
-    )]
     #[ApiResponse(status: 200, description: 'Операция выполнена')]
     public function controlWorker(string $workerId, string $action): Response
     {
@@ -401,29 +259,6 @@ class QueueManagerController extends RestController
      * Очистка данных воркера
      */
     #[Route(path: "/api/queue/worker/{workerId}/clear", httpMethods: ['DELETE'])]
-    #[OA\Delete(
-        path: "/api/queue/worker/{workerId}/clear",
-        summary: "Очистить данные heartbeat воркера",
-        tags: ["Queue Management"],
-        parameters: [
-            new OA\Parameter(name: "workerId", in: "path", required: true, schema: new OA\Schema(type: "string"))
-        ],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: "Данные очищены",
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: "success", type: "boolean", example: true),
-                        new OA\Property(property: "worker", type: "string"),
-                        new OA\Property(property: "action", type: "string", example: "cleared"),
-                    ],
-                    type: "object"
-                )
-            ),
-            new OA\Response(response: 404, description: "Воркер не найден")
-        ]
-    )]
     #[ApiResponse(status: 200, description: 'Данные очищены')]
     public function clearWorker(string $workerId): Response
     {
@@ -445,32 +280,6 @@ class QueueManagerController extends RestController
      * Получить список зарегистрированных задач
      */
     #[Route(path: "/api/queue/jobs", httpMethods: ['GET'])]
-    #[OA\Get(
-        path: "/api/queue/jobs",
-        summary: "Получить список зарегистрированных задач",
-        tags: ["Queue Management"],
-        responses: [
-            new OA\Response(
-                response: 200,
-                description: "Список задач",
-                content: new OA\JsonContent(
-                    properties: [
-                        new OA\Property(property: "jobs", type: "array", items: new OA\Items(
-                            properties: [
-                                new OA\Property(property: "name", type: "string"),
-                                new OA\Property(property: "class", type: "string"),
-                                new OA\Property(property: "handler", type: "string", nullable: true),
-                                new OA\Property(property: "has_handler", type: "boolean"),
-                            ],
-                            type: "object"
-                        )),
-                        new OA\Property(property: "total", type: "integer"),
-                    ],
-                    type: "object"
-                )
-            )
-        ]
-    )]
     #[ApiResponse(status: 200, description: 'Список задач')]
     public function listJobs(): Response
     {
