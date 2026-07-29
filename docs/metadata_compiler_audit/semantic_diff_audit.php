@@ -52,13 +52,26 @@ declare(strict_types=1);
 use Symfony\Component\Yaml\Yaml;
 
 // ============================================================================
-// Library bootstrap: prefer the consumer autoload (has symfony/yaml), then local vendor.
+// Library bootstrap: PREFER THE LOCAL vendor (this repo's own, which has
+// symfony/yaml AND maps `SpsFW\` -> `src/`). A CONSUMER project's autoload also
+// registers a `SpsFW\` PSR-4 rule pointing at an OLDER packaged copy of the
+// framework; loading it in-process SHADOWS `src/` for any framework class not yet
+// loaded (Router, Route, …), which corrupts compile tests run in the same process
+// (test-isolation bug). The consumer autoload is a LAST-RESORT fallback only for
+// runs from a checkout without a local vendor.
 // ============================================================================
 (function (): void {
+    if (class_exists(Yaml::class, false)) {
+        return; // already loaded (e.g. tests/bootstrap.php pulled in the local vendor)
+    }
+    $local = dirname(__DIR__, 2) . '/vendor/autoload.php';
+    if (is_file($local)) {
+        require $local;
+        return;
+    }
     foreach ([
         dirname(__DIR__, 3) . '/.wt/lk-step6b/next/vendor/autoload.php',
         dirname(__DIR__, 3) . '/lk.sps38.pro/next/vendor/autoload.php',
-        dirname(__DIR__, 2) . '/vendor/autoload.php',
     ] as $candidate) {
         if (is_file($candidate)) {
             require $candidate;
