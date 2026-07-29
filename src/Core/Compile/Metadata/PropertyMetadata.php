@@ -102,6 +102,47 @@ final readonly class PropertyMetadata
     }
 
     /**
+     * A copy of this property carrying a different serial name. Used by the OUTPUT projection
+     * ({@see \SpsFW\Core\Compile\Introspection\DtoSchemaBuilder::build()} with {@see SchemaDirection::Output}):
+     * a JsonSerializable class may alias a wire key to a property (`preview_info => $this->preview`), so the
+     * property's type/constraints are projected under the alias key instead of the PHP name.
+     */
+    public function withSerialName(string $serialName): self
+    {
+        return new self(
+            name: $this->name,
+            serialName: $serialName,
+            phpType: $this->phpType,
+            ref: $this->ref,
+            refClass: $this->refClass,
+            itemType: $this->itemType,
+            objectMap: $this->objectMap,
+            format: $this->format,
+            nullable: $this->nullable,
+            hasDefault: $this->hasDefault,
+            defaultValue: $this->defaultValue,
+            required: $this->required,
+            enum: $this->enum,
+            minimum: $this->minimum,
+            maximum: $this->maximum,
+            minLength: $this->minLength,
+            maxLength: $this->maxLength,
+            example: $this->example,
+            readOnly: $this->readOnly,
+            writeOnly: $this->writeOnly,
+            schemaName: $this->schemaName,
+            inlineObject: $this->inlineObject,
+            inlineItems: $this->inlineItems,
+            description: $this->description,
+            itemSchema: $this->itemSchema,
+            additionalProperties: $this->additionalProperties,
+            additionalPropertiesFalse: $this->additionalPropertiesFalse,
+            extra: $this->extra,
+            rawArguments: $this->rawArguments,
+        );
+    }
+
+    /**
      * Whether the property is required, resolved through the active {@see RequiredSource} (plan §7 — the two
      * sources are never blended mid-parity):
      *  - {@see RequiredSource::Oa}     : the legacy OA `required:[true]` flag ($required) — the PARITY source,

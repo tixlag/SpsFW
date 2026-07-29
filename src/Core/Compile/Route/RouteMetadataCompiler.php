@@ -35,6 +35,7 @@ use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
 use SpsFW\Core\Compile\Introspection\OperationIdResolver;
 use SpsFW\Core\Compile\Introspection\RequiredSource;
 use SpsFW\Core\Compile\Introspection\ResponseAstAnalyzer;
+use SpsFW\Core\Compile\Introspection\SchemaDirection;
 use SpsFW\Core\Compile\Introspection\SuccessInference;
 use SpsFW\Core\Compile\Introspection\TypeMapper;
 use SpsFW\Core\Compile\Metadata\OperationMetadata;
@@ -1514,11 +1515,11 @@ final class RouteMetadataCompiler
      * @param array<string, array<string, mixed>> $shape
      * @return list<PropertyMetadata>
      */
-    private function propertiesFromShape(array $shape): array
+    private function propertiesFromShape(array $shape, SchemaDirection $direction = SchemaDirection::Input): array
     {
         $properties = [];
         foreach ($shape as $name => $facet) {
-            $properties[] = $this->propertyFromFacet((string) $name, is_array($facet) ? $facet : []);
+            $properties[] = $this->propertyFromFacet((string) $name, is_array($facet) ? $facet : [], $direction);
         }
         return $properties;
     }
@@ -1556,11 +1557,11 @@ final class RouteMetadataCompiler
      *
      * @param array<string, mixed> $f
      */
-    private function propertyFromFacet(string $name, array $f): PropertyMetadata
+    private function propertyFromFacet(string $name, array $f, SchemaDirection $direction = SchemaDirection::Input): PropertyMetadata
     {
         $ref = isset($f['ref']) && is_string($f['ref']) ? $f['ref'] : null;
         $description = $this->facetString($f, 'description');
-        [$addl, $addlFalse] = $this->facetAdditionalProperties($f);
+        [$addl, $addlFalse] = $this->facetAdditionalProperties($f, $direction);
 
         $common = [
             'format' => $f['format'] ?? null,
@@ -1585,7 +1586,7 @@ final class RouteMetadataCompiler
                 'objectMap' => false,
                 ...$common,
                 'inlineObject' => new SchemaMetadata(
-                    properties: $this->propertiesFromShape($f['properties']),
+                    properties: $this->propertiesFromShape($f['properties'], $direction),
                     additionalProperties: $addl,
                     additionalPropertiesFalse: $addlFalse,
                 ),
@@ -1604,7 +1605,7 @@ final class RouteMetadataCompiler
             if (is_string($items)) {
                 $itemType = $items; // bare class-string element
             } elseif (is_array($items)) {
-                $itemSchema = $this->facetToSchema($items);
+                $itemSchema = $this->facetToSchema($items, $direction);
             }
             return new PropertyMetadata(...[
                 'name' => $name,
@@ -1657,7 +1658,7 @@ final class RouteMetadataCompiler
      * @param array<string, mixed> $f
      * @return array{0: ?SchemaMetadata, 1: bool}
      */
-    private function facetAdditionalProperties(array $f): array
+    private function facetAdditionalProperties(array $f, SchemaDirection $direction = SchemaDirection::Input): array
     {
         if (!array_key_exists('additionalProperties', $f)) {
             return [null, false];
@@ -1667,7 +1668,7 @@ final class RouteMetadataCompiler
             return [null, true];
         }
         if (is_array($ap)) {
-            return [$this->facetToSchema($ap), false];
+            return [$this->facetToSchema($ap, $direction), false];
         }
         return [null, false]; // true / other => default allow
     }
@@ -1681,18 +1682,18 @@ final class RouteMetadataCompiler
      *
      * @param array<string, mixed> $f
      */
-    private function facetToSchema(array $f): SchemaMetadata
+    private function facetToSchema(array $f, SchemaDirection $direction = SchemaDirection::Input): SchemaMetadata
     {
         $ref = isset($f['ref']) && is_string($f['ref']) ? $f['ref'] : null;
 
         if ($ref !== null) {
-            return class_exists($ref) ? $this->schemas->build($ref) : new SchemaMetadata();
+            return class_exists($ref) ? $this->schemas->build($ref, $direction) : new SchemaMetadata();
         }
 
         if (isset($f['properties']) && is_array($f['properties'])) {
-            [$addl, $addlFalse] = $this->facetAdditionalProperties($f);
+            [$addl, $addlFalse] = $this->facetAdditionalProperties($f, $direction);
             return new SchemaMetadata(
-                properties: $this->propertiesFromShape($f['properties']),
+                properties: $this->propertiesFromShape($f['properties'], $direction),
                 description: $this->facetString($f, 'description') ?? '',
                 additionalProperties: $addl,
                 additionalPropertiesFalse: $addlFalse,
@@ -1702,8 +1703,8 @@ final class RouteMetadataCompiler
         if (($f['type'] ?? null) === 'array' || array_key_exists('items', $f)) {
             $items = $f['items'] ?? null;
             $itemSchema = match (true) {
-                is_array($items) => $this->facetToSchema($items),
-                is_string($items) => (class_exists($items) ? $this->schemas->build($items) : new SchemaMetadata()),
+                is_array($items) => $this->facetToSchema($items, $direction),
+                is_string($items) => (class_exists($items) ? $this->schemas->build($items, $direction) : new SchemaMetadata()),
                 default => null,
             };
             return new SchemaMetadata(
@@ -1766,12 +1767,14 @@ final class RouteMetadataCompiler
                 );
                 return new SchemaMetadata();
             }
-            return $this->schemas->build($member);
+            return $this->schemas->build($member, SchemaDirection::Output);
         }
         // a facet-array member (DTO ref / nested inline object / array / scalar) — route through the recursive
         // facet builder so a member keeps ALL its facets (format/enum/example/default/constraints/description)
         // instead of only type+format, and so {type: 'null'} and a binary facet survive verbatim (D3).
-        return $this->facetToSchema($member);
+        // A union member is a RESPONSE contract ⇒ the OUTPUT direction (jsonSerialize subset for a
+        // JsonSerializable member, never the exhaustive public-property set — §1/§3).
+        return $this->facetToSchema($member, SchemaDirection::Output);
     }
 
     /**
@@ -2069,11 +2072,11 @@ final class RouteMetadataCompiler
                     fix: 'point #[Response(schema:)] at a loadable class',
                 );
             } else {
-                $itemSchema = $this->schemas->build($response->schema);
+                $itemSchema = $this->schemas->build($response->schema, SchemaDirection::Output);
             }
         } elseif ($response->shape !== null) {
             $this->assertShapeWellFormed($method, $response->shape, 'return');
-            $itemSchema = new SchemaMetadata(properties: $this->propertiesFromShape($response->shape));
+            $itemSchema = new SchemaMetadata(properties: $this->propertiesFromShape($response->shape, SchemaDirection::Output));
         } elseif ($response->type !== null) {
             $itemSchema = new SchemaMetadata(type: $response->type, format: $response->format);
         }
@@ -2213,7 +2216,7 @@ final class RouteMetadataCompiler
     private function responseMetadataFromInference(SuccessInference $inf, int $status): ResponseMetadata
     {
         if ($inf->class !== null) {
-            $schema = class_exists($inf->class) ? $this->schemas->build($inf->class) : null;
+            $schema = class_exists($inf->class) ? $this->schemas->build($inf->class, SchemaDirection::Output) : null;
             return $inf->collection
                 ? new ResponseMetadata($status, schema: null, arrayItem: $schema)
                 : new ResponseMetadata($status, schema: $schema);
@@ -2290,7 +2293,7 @@ final class RouteMetadataCompiler
                 $this->diagnostics->error(controller: $controller, method: $method, dto: $element, field: 'returns', cause: sprintf('#[Route(returns: %s)] is not a DTO-eligible class', $element), fix: 'point returns at a *Dto (or an enum / scalar type name)');
                 return null;
             }
-            return $this->schemas->build($element);
+            return $this->schemas->build($element, SchemaDirection::Output);
         }
         if ($mapped['type'] !== null || $mapped['enum'] !== null) {
             return $this->inlineSchema($mapped);

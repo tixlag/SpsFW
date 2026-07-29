@@ -6,6 +6,7 @@ namespace SpsFW\Core\Compile\OpenApi;
 
 use SpsFW\Core\Compile\CompileDiagnostics;
 use SpsFW\Core\Compile\Introspection\DtoSchemaBuilder;
+use SpsFW\Core\Compile\Introspection\SchemaDirection;
 use SpsFW\Core\Compile\Introspection\TypeMapper;
 use SpsFW\Core\Compile\Metadata\OperationMetadata;
 use SpsFW\Core\Compile\Metadata\ParameterMetadata;
@@ -58,7 +59,9 @@ final class OpenApiEmitter
     /** Set fresh by each {@see emit()} call so emission is repeatable/idempotent. */
     private SchemaNameResolver $resolver;
 
-    /** @var array<string, true> FQCNs whose component slot is allocated (collected or mid-render) — cycle guard */
+    /** @var array<string, string> FQCN ⇒ SchemaDirection value of the component slot already allocated (collected
+     *    or mid-render). The direction is tracked so a class reached as BOTH an input and an output does NOT have
+     *    its first-collected shape silently reused for the other direction (Step 9.5 §4). */
     private array $collectedFqcn = [];
 
     public function __construct(
@@ -316,7 +319,7 @@ final class OpenApiEmitter
                 $schema['maximum'] = $param->maximum;
             }
             if ($param->items !== null) {
-                $schema['items'] = $this->renderSchemaFragment($param->items, $componentsSchemas);
+                $schema['items'] = $this->renderSchemaFragment($param->items, $componentsSchemas, SchemaDirection::Input);
             }
             if ($param->example !== null) {
                 $schema['example'] = $param->example;
@@ -349,7 +352,7 @@ final class OpenApiEmitter
             return null;
         }
         $schema = $body->schema !== null
-            ? $this->renderSchemaFragment($body->schema, $componentsSchemas)
+            ? $this->renderSchemaFragment($body->schema, $componentsSchemas, SchemaDirection::Input)
             : ['type' => 'object'];
         $request = [
             'required' => $body->required,
@@ -483,23 +486,23 @@ final class OpenApiEmitter
     {
         if ($response->oneOf !== null) {
             return ['oneOf' => array_map(
-                fn (SchemaMetadata $member): array => $this->renderSchemaFragment($member, $componentsSchemas),
+                fn (SchemaMetadata $member): array => $this->renderSchemaFragment($member, $componentsSchemas, SchemaDirection::Output),
                 $response->oneOf,
             )];
         }
         if ($response->anyOf !== null) {
             return ['anyOf' => array_map(
-                fn (SchemaMetadata $member): array => $this->renderSchemaFragment($member, $componentsSchemas),
+                fn (SchemaMetadata $member): array => $this->renderSchemaFragment($member, $componentsSchemas, SchemaDirection::Output),
                 $response->anyOf,
             )];
         }
         if ($response->schema !== null) {
-            return $this->renderSchemaFragment($response->schema, $componentsSchemas);
+            return $this->renderSchemaFragment($response->schema, $componentsSchemas, SchemaDirection::Output);
         }
         if ($response->arrayItem !== null) {
             return [
                 'type' => 'array',
-                'items' => $this->renderSchemaFragment($response->arrayItem, $componentsSchemas),
+                'items' => $this->renderSchemaFragment($response->arrayItem, $componentsSchemas, SchemaDirection::Output),
             ];
         }
         return null;
@@ -540,7 +543,7 @@ final class OpenApiEmitter
      * @param array<string, array<string, mixed>> $componentsSchemas
      * @return array<string, mixed>
      */
-    private function renderSchemaFragment(SchemaMetadata $schema, array &$componentsSchemas): array
+    private function renderSchemaFragment(SchemaMetadata $schema, array &$componentsSchemas, SchemaDirection $direction): array
     {
         if ($schema->isEnum) {
             $inline = ['type' => $schema->enumType ?? 'string'];
@@ -555,21 +558,23 @@ final class OpenApiEmitter
         if ($schema->type === 'array' || $schema->items !== null) {
             $out = ['type' => 'array'];
             if ($schema->items !== null) {
-                $out['items'] = $this->renderSchemaFragment($schema->items, $componentsSchemas);
+                $out['items'] = $this->renderSchemaFragment($schema->items, $componentsSchemas, $direction);
             }
             return $this->withSchemaFacets($out, $schema);
         }
 
-        // A referenced DTO object (built, so non-empty) — render the component `$ref`.
+        // A referenced DTO object (built, so non-empty) — render the component `$ref`. The component is collected
+        // in the fragment's direction so a response's nested JsonSerializable ref projects its OUTPUT shape
+        // (Step 9.5 §1/§4): a request Input ref never accidentally serves a response.
         if ($schema->className !== null && !$schema->isEmpty()) {
             $name = $this->resolver->resolve($schema->className);
-            $this->collectObjectSchema($schema->className, $schema, $componentsSchemas);
+            $this->collectObjectSchema($schema->className, $schema, $componentsSchemas, $direction);
             return ['$ref' => $this->refTo($name)];
         }
 
         // An inline object (properties) and/or a typed map (additionalProperties) / explicit false.
         if ($schema->properties !== [] || $schema->additionalProperties !== null || $schema->additionalPropertiesFalse) {
-            return $this->renderInlineObject($schema, $componentsSchemas);
+            return $this->renderInlineObject($schema, $componentsSchemas, $direction);
         }
 
         // A scalar fragment (incl. `{type: 'null'}` and a DateTime `{type: string, format: date-time}`).
@@ -632,12 +637,12 @@ final class OpenApiEmitter
      * @param array<string, array<string, mixed>> $componentsSchemas
      * @return array<string, mixed>
      */
-    private function renderInlineObject(SchemaMetadata $schema, array &$componentsSchemas): array
+    private function renderInlineObject(SchemaMetadata $schema, array &$componentsSchemas, SchemaDirection $direction): array
     {
         $properties = [];
         $required = [];
         foreach ($schema->properties as $property) {
-            $properties[$property->serialName()] = $this->renderProperty($property, $componentsSchemas);
+            $properties[$property->serialName()] = $this->renderProperty($property, $componentsSchemas, $direction);
             if ($property->required) {
                 $required[] = $property->serialName();
             }
@@ -653,7 +658,7 @@ final class OpenApiEmitter
         // rendered recursively so the value keeps its facets. An explicit `additionalProperties: false`
         // forbids extra keys verbatim. D3: previously lost (the engine rendered a bare {type: object}).
         if ($schema->additionalProperties !== null) {
-            $out['additionalProperties'] = $this->renderSchemaFragment($schema->additionalProperties, $componentsSchemas);
+            $out['additionalProperties'] = $this->renderSchemaFragment($schema->additionalProperties, $componentsSchemas, $direction);
         } elseif ($schema->additionalPropertiesFalse) {
             $out['additionalProperties'] = false;
         }
@@ -671,17 +676,40 @@ final class OpenApiEmitter
      *
      * @param array<string, array<string, mixed>> $componentsSchemas
      */
-    private function collectObjectSchema(string $fqcn, SchemaMetadata $schema, array &$componentsSchemas): void
+    private function collectObjectSchema(string $fqcn, SchemaMetadata $schema, array &$componentsSchemas, SchemaDirection $direction): void
     {
-        if (isset($this->collectedFqcn[$fqcn])) {
-            return; // already collected or mid-render (cycle) — the slot exists or will be filled by the owner.
+        $priorDirection = $this->collectedFqcn[$fqcn] ?? null;
+        if ($priorDirection !== null) {
+            if ($priorDirection !== $direction->value
+                && $this->directionShapesDiffer($fqcn, SchemaDirection::from($priorDirection), $direction)) {
+                // §4: this class is reached as BOTH directions AND the two projections DIFFER (only a
+                // JsonSerializable class whose jsonSerialize() curates a subset yields Input ≠ Output). A single
+                // component name cannot carry two different shapes — the first-collected shape would silently
+                // serve the other direction (e.g. an exhaustive INPUT shape leaking password / internal DB fields
+                // into a response). Identical shapes (a non-JsonSerializable class, or one whose jsonSerialize
+                // returns the full public set) are NOT a conflict — the existing slot is reused correctly.
+                $this->diagnostics->error(
+                    controller: null,
+                    method: null,
+                    dto: $fqcn,
+                    field: 'schema',
+                    cause: sprintf(
+                        'Class %s is projected as BOTH a %s component and a %s component with DIFFERENT shapes; a single component name cannot carry both without one silently serving the other.',
+                        $fqcn,
+                        $priorDirection,
+                        $direction->value,
+                    ),
+                    fix: 'use a distinct response DTO (or an explicit #[Response(shape:/schema:/oneOf:)]) so the class appears in only one direction, or split the request and response types.',
+                );
+            }
+            return; // already collected (same direction, or identical shape) or mid-render (cycle) — the slot exists.
         }
         $name = $this->resolver->resolve($fqcn);
         if ($this->resolver->ownerOf($name) !== $fqcn) {
             // Collision loser — the name is owned by another FQCN; the fatal diagnostic already blocks publication.
             return;
         }
-        $this->collectedFqcn[$fqcn] = true;
+        $this->collectedFqcn[$fqcn] = $direction->value;
 
         // Pre-register a placeholder so a self-referential (or mutually-recursive) property walk terminates.
         $componentsSchemas[$name] = ['type' => 'object', 'properties' => new \stdClass()];
@@ -689,7 +717,7 @@ final class OpenApiEmitter
         $properties = [];
         $required = [];
         foreach ($schema->properties as $property) {
-            $properties[$property->serialName()] = $this->renderProperty($property, $componentsSchemas);
+            $properties[$property->serialName()] = $this->renderProperty($property, $componentsSchemas, $direction);
             if ($property->required) {
                 $required[] = $property->serialName();
             }
@@ -709,16 +737,35 @@ final class OpenApiEmitter
     }
 
     /**
+     * Whether the two directions of a class project DIFFERENT response/request field shapes — the §4 collision
+     * condition. Compares the property WIRE-NAME sets (recursion-safe: PropertyMetadata::serialName() returns a
+     * string; the comparison never descends into nested SchemaMetadata). Only a JsonSerializable class whose
+     * jsonSerialize() curates a subset yields Input ≠ Output; a non-JsonSerializable class (or one that serializes
+     * the full public set) projects identically in both directions and reusing one component is correct.
+     */
+    private function directionShapesDiffer(string $fqcn, SchemaDirection $a, SchemaDirection $b): bool
+    {
+        $wireNames = static function (SchemaMetadata $schema): array {
+            $names = [];
+            foreach ($schema->properties as $property) {
+                $names[] = $property->serialName();
+            }
+            return $names;
+        };
+        return $wireNames($this->schemaBuilder->build($fqcn, $a)) !== $wireNames($this->schemaBuilder->build($fqcn, $b));
+    }
+
+    /**
      * @param array<string, array<string, mixed>> $componentsSchemas
      * @return array<string, mixed>
      */
-    private function renderProperty(PropertyMetadata $property, array &$componentsSchemas): array
+    private function renderProperty(PropertyMetadata $property, array &$componentsSchemas, SchemaDirection $direction): array
     {
         // An inline response-shape nested object (a #[Response(shape: …)] property that is itself an inline
         // object). Renders before the objectMap/refClass branches.
         if ($property->inlineObject !== null) {
             return $this->withConstraints(
-                $this->renderInlineObject($property->inlineObject, $componentsSchemas),
+                $this->renderInlineObject($property->inlineObject, $componentsSchemas, $direction),
                 $property,
             );
         }
@@ -729,7 +776,7 @@ final class OpenApiEmitter
         if ($property->additionalProperties !== null || $property->additionalPropertiesFalse) {
             $schema = ['type' => 'object'];
             if ($property->additionalProperties !== null) {
-                $schema['additionalProperties'] = $this->renderSchemaFragment($property->additionalProperties, $componentsSchemas);
+                $schema['additionalProperties'] = $this->renderSchemaFragment($property->additionalProperties, $componentsSchemas, $direction);
             } else {
                 $schema['additionalProperties'] = false;
             }
@@ -741,7 +788,7 @@ final class OpenApiEmitter
         // `{type: array, items: {type: string, example: active}}`).
         if ($property->itemSchema !== null) {
             return $this->withConstraints(
-                ['type' => 'array', 'items' => $this->renderSchemaFragment($property->itemSchema, $componentsSchemas)],
+                ['type' => 'array', 'items' => $this->renderSchemaFragment($property->itemSchema, $componentsSchemas, $direction)],
                 $property,
             );
         }
@@ -750,7 +797,7 @@ final class OpenApiEmitter
         // for any producer that still sets it; itemSchema above is the preferred path.
         if ($property->inlineItems !== null) {
             return $this->withConstraints(
-                ['type' => 'array', 'items' => $this->renderInlineObject($property->inlineItems, $componentsSchemas)],
+                ['type' => 'array', 'items' => $this->renderInlineObject($property->inlineItems, $componentsSchemas, $direction)],
                 $property,
             );
         }
@@ -761,7 +808,7 @@ final class OpenApiEmitter
         // supplies the type ⇒ render the typed single object `{$ref}`; otherwise render free-form `type: object`.
         if ($property->objectMap) {
             $schema = $property->refClass !== null
-                ? $this->classRefSchema($property->refClass, $componentsSchemas)
+                ? $this->classRefSchema($property->refClass, $componentsSchemas, $direction)
                 : ['type' => 'object'];
             return $this->withConstraints($schema, $property);
         }
@@ -769,7 +816,7 @@ final class OpenApiEmitter
         // Array element (#[Items] / legacy OA items).
         if ($property->itemType !== null) {
             $items = $this->isClassish($property->itemType)
-                ? $this->classRefSchema($property->itemType, $componentsSchemas)
+                ? $this->classRefSchema($property->itemType, $componentsSchemas, $direction)
                 : ['type' => $this->typeMapper->mapScalar($property->itemType) ?? 'string'];
             $schema = ['type' => 'array', 'items' => $items];
             return $this->withConstraints($schema, $property);
@@ -778,7 +825,7 @@ final class OpenApiEmitter
         // Nested object ref (reflection class or legacy OA ref).
         if ($property->refClass !== null) {
             return $this->withConstraints(
-                $this->classRefSchema($property->refClass, $componentsSchemas),
+                $this->classRefSchema($property->refClass, $componentsSchemas, $direction),
                 $property,
             );
         }
@@ -795,7 +842,7 @@ final class OpenApiEmitter
      * @param array<string, array<string, mixed>> $componentsSchemas
      * @return array<string, mixed>
      */
-    private function classRefSchema(string $fqcn, array &$componentsSchemas): array
+    private function classRefSchema(string $fqcn, array &$componentsSchemas, SchemaDirection $direction): array
     {
         $mapped = $this->typeMapper->mapClass($fqcn);
         // Enum / DateTime ⇒ inline scalar/enum fragment (no component).
@@ -814,7 +861,10 @@ final class OpenApiEmitter
         }
 
         $name = $this->resolver->resolve($fqcn);
-        $this->collectObjectSchema($fqcn, $this->schemaBuilder->build($fqcn), $componentsSchemas);
+        // The nested ref is built in the INHERITED direction: a JsonSerializable class reached through a response
+        // projects its OUTPUT (jsonSerialize) shape; the same class reached through a request body keeps its
+        // INPUT (exhaustive) shape (Step 9.5 §1/§4).
+        $this->collectObjectSchema($fqcn, $this->schemaBuilder->build($fqcn, $direction), $componentsSchemas, $direction);
         return ['$ref' => $this->refTo($name)];
     }
 

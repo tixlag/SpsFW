@@ -50,7 +50,7 @@ use SpsFW\Core\Validation\Validator;
  */
 final class DtoSchemaBuilder
 {
-    /** @var array<class-string, SchemaMetadata> schema projection per FQCN */
+    /** @var array<string, SchemaMetadata> schema projection per FQCN+direction (`class\0direction`) */
     private array $memo = [];
 
     /** @var array<class-string, array<string, array<string, mixed>>> rule graph per FQCN (deterministic) */
@@ -59,25 +59,65 @@ final class DtoSchemaBuilder
     /** @var array<class-string, true> DTOs currently on the ruleGraph expansion stack (cycle detection) */
     private array $ruleStack = [];
 
+    /**
+     * The minimal pinned list of credential field names that must NEVER appear in a response (OUTPUT) schema — a
+     * backstop over the jsonSerialize projection: even a provable serializer that happens to return one of these
+     * (or a DTO aliasing a credential property under another key) fails the build rather than publishing it. This
+     * is intentionally NOT a production blacklist — only the two known-credential names (Step 9.5 §8).
+     */
+    private const SENSITIVE_OUTPUT_FIELDS = ['password', 'hashedpassword'];
+
     public function __construct(
         private readonly CompileDiagnostics $diagnostics = new CompileDiagnostics(),
+        private readonly ?JsonSerializeShapeAnalyzer $jsonSerializeAnalyzer = null,
     ) {
     }
 
     /**
-     * Build (and memoize) the SCHEMA projection for a DTO class: every public, non-static, serializable
-     * property, enriched from #[Field]/#[Items]. Non-recursive — nested-class references are captured as
-     * strings (refClass/itemType), so a cyclic DTO does not loop here; the cycle surfaces only when the rule
-     * graph is expanded.
+     * Build (and memoize) the SCHEMA projection for a DTO class.
+     *
+     * INPUT (the default): every public, non-static, serializable property, enriched from #[Field]/#[Items] — the
+     * hydration/validation contract the runtime reads (plan §6). Non-recursive — nested-class references are
+     * captured as strings (refClass/itemType), so a cyclic DTO does not loop here; the cycle surfaces only when
+     * the rule graph is expanded.
+     *
+     * OUTPUT: for a JsonSerializable class, the statically-proven {@see jsonSerialize()} SUBSET instead — never
+     * the exhaustive set, so internal DB columns and credentials do not leak into the response contract (Step 9.5
+     * §1/§3). For a non-JsonSerializable class OUTPUT is identical to INPUT (there is no serializer to override
+     * the public-property set). When the serializer's shape is not statically provable, a compile diagnostic is
+     * emitted and an EMPTY (non-leaky) schema is returned — there is NO exhaustive fallback.
      *
      * @param class-string $class
      */
-    public function build(string $class): SchemaMetadata
+    public function build(string $class, SchemaDirection $direction = SchemaDirection::Input): SchemaMetadata
     {
-        if (isset($this->memo[$class])) {
-            return $this->memo[$class];
+        $key = $class . "\0" . $direction->value;
+        if (isset($this->memo[$key])) {
+            return $this->memo[$key];
         }
+        if ($direction === SchemaDirection::Output && $this->declaresJsonSerializable($class)) {
+            return $this->memo[$key] = $this->buildOutputProjection($class);
+        }
+        return $this->memo[$key] = $this->buildExhaustive($class);
+    }
 
+    /**
+     * Whether a class customizes its JSON output via JsonSerializable (directly or inherited). Such a class's
+     * public properties are NOT its response shape — the OUTPUT projection uses its jsonSerialize() subset.
+     */
+    private function declaresJsonSerializable(string $class): bool
+    {
+        return is_a($class, \JsonSerializable::class, true);
+    }
+
+    /**
+     * The exhaustive SCHEMA projection (the INPUT contract): every public, non-static, serializable property,
+     * enriched from #[Field]/#[Items]. Also the type/constraint SOURCE for the OUTPUT projection.
+     *
+     * @param class-string $class
+     */
+    private function buildExhaustive(string $class): SchemaMetadata
+    {
         $reflection = new ReflectionClass($class);
         $constructor = $reflection->getConstructor();
 
@@ -106,13 +146,190 @@ final class DtoSchemaBuilder
         // a non-contractual component heading legacy OpenAPI published to clients.
         [$schemaDescription, $schemaTitle] = $this->oaSchemaFacets($reflection);
 
-        return $this->memo[$class] = new SchemaMetadata(
+        return new SchemaMetadata(
             className: $class,
             name: $this->shortName($class),
             properties: $properties,
             description: $schemaDescription,
             title: $schemaTitle,
         );
+    }
+
+    /**
+     * The OUTPUT projection of a JsonSerializable class: the statically-proven {@see jsonSerialize()} subset,
+     * projected under each wire key. The type/constraints of each key come from the underlying property (looked
+     * up in the exhaustive projection, or reflected directly for a non-public property). An UNPROVABLE
+     * serializer (a dynamic shape, e.g. `get_object_vars($this)`) ⇒ a compile diagnostic and an EMPTY schema —
+     * there is NO exhaustive fallback, so internal/credential fields never leak (Step 9.5 §2/§3).
+     *
+     * @param class-string $class
+     */
+    private function buildOutputProjection(string $class): SchemaMetadata
+    {
+        $analyzer = $this->jsonSerializeAnalyzer ?? new JsonSerializeShapeAnalyzer();
+        $projection = $analyzer->project($class);
+
+        $exhaustive = $this->buildExhaustive($class);
+        if (!$projection->provable) {
+            // A generation GAP, not a structural impossibility: we CAN still emit a sound (empty, non-leaky) schema.
+            // Per the CompileDiagnostics contract this is a WARNING — parity mode tolerates it (the response is
+            // emitted empty for the gap), strict/managed mode promotes it to fatal, and the §10 audit gate still
+            // demands warnings=0 for a release. It MUST NOT be an ERROR: the graph runs even under a Legacy
+            // openApiSource (to produce the comparison secondary generated.yml), and an ERROR here would block the
+            // authoritative swagger-php PRIMARY of a Legacy build — regressing the "pure rollback for every client"
+            // promise on any DTO with an unprovable serializer. The credential LEAK guard (guardOutputFields, §8)
+            // stays a hard ERROR; a mere unprovable shape does not.
+            $this->diagnostics->warning(
+                controller: null,
+                method: null,
+                dto: $class,
+                field: null,
+                cause: sprintf(
+                    '%s implements JsonSerializable but its jsonSerialize() wire shape is not statically derivable (%s); the response schema is emitted empty — an exhaustive fallback would leak internal fields',
+                    $class,
+                    $projection->reason ?? 'opaque shape',
+                ),
+                fix: 'declare the response shape explicitly (#[Response(shape: …)] / #[Response(oneOf: …)] / #[Route(returns: …)]), or simplify jsonSerialize() to a literal shape',
+            );
+            // Return an EMPTY schema (no properties) — NO exhaustive fallback, so internal/credential fields never leak.
+            return new SchemaMetadata(
+                className: $class,
+                name: $this->shortName($class),
+                description: $exhaustive->description,
+                title: $exhaustive->title,
+            );
+        }
+
+        $byPhpName = [];
+        foreach ($exhaustive->properties as $property) {
+            $byPhpName[$property->name] = $property;
+        }
+
+        $properties = [];
+        foreach ($projection->keys as $key) {
+            $properties[] = $this->outputProperty($class, $key, $byPhpName);
+        }
+
+        $properties = $this->guardOutputFields($class, $properties);
+
+        return new SchemaMetadata(
+            className: $class,
+            name: $this->shortName($class),
+            properties: $properties,
+            description: $exhaustive->description,
+            title: $exhaustive->title,
+        );
+    }
+
+    /**
+     * Step 9.5 §8: a credential field (password / hashedPassword) must never reach a response schema — by wire key
+     * OR by backing property name. Any OUTPUT property matching the {@see SENSITIVE_OUTPUT_FIELDS} pinned list is
+     * dropped and surfaces a compile ERROR (the diagnostic blocks publication); it is removed from the projection
+     * regardless, so a credential never leaks even if the diagnostic were bypassed. This guards the OUTPUT
+     * projection only — password is a legitimate INPUT (request) field.
+     *
+     * @param list<PropertyMetadata> $properties
+     * @return list<PropertyMetadata>
+     */
+    private function guardOutputFields(string $class, array $properties): array
+    {
+        $kept = [];
+        foreach ($properties as $property) {
+            $wire = strtolower($property->serialName());
+            $backing = strtolower($property->name);
+            if (in_array($wire, self::SENSITIVE_OUTPUT_FIELDS, true) || in_array($backing, self::SENSITIVE_OUTPUT_FIELDS, true)) {
+                $this->diagnostics->error(
+                    controller: null,
+                    method: null,
+                    dto: $class,
+                    field: $property->name,
+                    cause: sprintf(
+                        'credential field `%s` (wire key `%s`) would appear in the response schema of %s — credentials must never be serialized to a response',
+                        $property->name,
+                        $property->serialName(),
+                        $class,
+                    ),
+                    fix: 'remove the field from jsonSerialize() / the response DTO, or project it under a non-credential key',
+                );
+                continue;
+            }
+            $kept[] = $property;
+        }
+        return $kept;
+    }
+
+    /**
+     * One OUTPUT property from a proven {@see JsonSerializeKey}: the underlying property's type/constraints
+     * re-keyed to the wire name (alias), a literal scalar, or a nested inline object.
+     *
+     * @param array<string, PropertyMetadata> $byPhpName
+     */
+    private function outputProperty(string $class, JsonSerializeKey $key, array $byPhpName): PropertyMetadata
+    {
+        if ($key->propertyName !== null) {
+            if (isset($byPhpName[$key->propertyName])) {
+                return $byPhpName[$key->propertyName]->withSerialName($key->wireName);
+            }
+            return $this->outputReflectedProperty($class, $key);
+        }
+        if ($key->nested !== []) {
+            $nested = [];
+            foreach ($key->nested as $nestedKey) {
+                $nested[] = $this->outputProperty($class, $nestedKey, $byPhpName);
+            }
+            return new PropertyMetadata(
+                name: $key->wireName,
+                serialName: $key->wireName,
+                inlineObject: new SchemaMetadata(properties: $nested),
+            );
+        }
+        return new PropertyMetadata(
+            name: $key->wireName,
+            serialName: $key->wireName,
+            phpType: $this->phpScalarType($key->literalType),
+        );
+    }
+
+    /**
+     * A jsonSerialize key mapped to a property that is NOT in the public exhaustive set (a non-public property
+     * or a computed accessor): reflect the property directly (any visibility) for its type/ref, projected under
+     * the wire name. Carries no validation constraints (those come from the public projection).
+     *
+     * @param class-string $class
+     */
+    private function outputReflectedProperty(string $class, JsonSerializeKey $key): PropertyMetadata
+    {
+        $refClass = null;
+        $phpType = null;
+        try {
+            $property = new ReflectionClass($class)->getProperty($key->propertyName ?? '');
+            $type = $property->getType();
+            $refClass = $this->reflectionClassName($type);
+            $phpType = $type instanceof ReflectionNamedType
+                ? $type->getName()
+                : ($type !== null ? (string) $type : null);
+        } catch (\ReflectionException) {
+            // property gone / inaccessible — leave the value untyped (the key still appears; no leak).
+        }
+        return new PropertyMetadata(
+            name: $key->wireName,
+            serialName: $key->wireName,
+            phpType: $phpType,
+            ref: $refClass,
+            refClass: $refClass,
+        );
+    }
+
+    private function phpScalarType(?string $literal): ?string
+    {
+        return match ($literal) {
+            'string' => 'string',
+            'int' => 'int',
+            'float' => 'float',
+            'bool' => 'bool',
+            'null' => 'null',
+            default => null,
+        };
     }
 
     /**
