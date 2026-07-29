@@ -154,6 +154,22 @@ final class DsbCycleSelf
     public DsbCycleSelf $next;
 }
 
+// --- wire-name precedence + OA description carry (Step 9 pass-3): serialName precedence is
+//     #[Field(name)] > OA\Property::property > PHP name; the legacy OA description is carried transitively.
+//     `name` is always the PHP property name; only the serial key and the description change. ---
+final class DsbWireNameDto
+{
+    #[OA\Property(property: 'oa_name', description: 'OA-described field', type: 'string')]
+    public string $oaOnly;
+
+    #[OA\Property(property: 'oa_loses', type: 'string')]
+    #[Field(name: 'field_wins')]
+    public string $fieldOverridesOa;
+
+    #[OA\Property(type: 'string')]
+    public string $noWireName;
+}
+
 $builder = new DtoSchemaBuilder();
 
 /**
@@ -210,12 +226,14 @@ assert_same(
 
 // ============================================================================
 // Schema projection (Step 2 captures it; Step 4 consumes it) — basic shape locks.
-// The serial name is the JSON key json_encode emits: #[Field(name)] or the PHP name — NEVER the legacy
-// OA `property` arg (which is the VALIDATION key only; serialization contract, plan §6).
+// serialName precedence (Step 9 pass-3): #[Field(name)] → legacy OA\Property::property (the runtime input
+// hydrator's wire key, also the DB/1C array output key that legacy OpenAPI published to clients) → the PHP
+// name ONLY when no wire name is declared anywhere. `name` stays the PHP property name; only the serial key
+// changes. Emitting the bare PHP name where the hydrator reads a different key is a hidden breaking change.
 // ============================================================================
 $renamed = $fixture->property('renamed');
 assert_same('renamed', $renamed->name, 'PropertyMetadata.name is the PHP property name');
-assert_same('renamed', $renamed->serialName(), 'serialName() is the PHP name, NOT the OA `property` arg (serialization contract)');
+assert_same('aliased', $renamed->serialName(), 'serialName() honors the OA `property` arg (aliased) — the hydrator wire name — over the PHP name');
 assert_same('string', $renamed->phpType, 'phpType reflects the PHP type');
 assert_true($renamed->hasDefault, 'hasDefault set when an OA `default` arg is present');
 assert_same('def', $renamed->defaultValue, 'defaultValue carries the resolved default');
@@ -225,9 +243,10 @@ assert_same(DsbNestedDto::class, $child->refClass, 'refClass is the reflection-d
 assert_same(DsbNestedDto::class, $child->ref, 'ref follows refClass (reflection wins over OA ref)');
 
 $plain = $fixture->property('plainNoConstraints');
-assert_same('plainNoConstraints', $plain->serialName(), 'serialName is the PHP name when no #[Field(name)] override exists');
+assert_same('plain', $plain->serialName(), 'serialName() honors the OA `property` arg (plain) over the PHP name when no #[Field(name)] override exists');
 
-// The OA `property` arg is STILL the rule-graph key (parity), even though it is NOT the schema serial name.
+// The OA `property` arg is ALSO the rule-graph (hydration) key — serial name and hydration key now BOTH
+// honor it (previously the schema serial name diverged to the PHP name, the pass-3-corrected defect).
 assert_true(array_key_exists('aliased', $graph), 'the rule graph keys on the OA `property` arg (aliased), not the PHP name');
 assert_true(!array_key_exists('renamed', $graph), 'the rule graph never keys on the PHP name when an OA property arg is set');
 
@@ -311,5 +330,37 @@ $dagDiag = new CompileDiagnostics();
 $dagBuilder = new DtoSchemaBuilder($dagDiag);
 $dagBuilder->ruleGraph($dagBuilder->build(DsbFixtureDto::class));
 assert_true(!$dagDiag->hasErrors(), 'a DAG (shared leaf, no back-edge) does not trip the cycle guard');
+
+// ============================================================================
+// Step 9 pass-3: wire-name precedence + OA description carry + hydration-key invariance.
+//   1. PHP prop + OA\Property(property)  ⇒ serial name = OA arg (the hydrator wire key).
+//   2. #[Field(name)] + OA\Property(property) ⇒ #[Field(name)] wins (Step-10 canonical source).
+//   3. no Field::name, no OA property   ⇒ serial name = PHP property name.
+//   4. OA description is carried onto PropertyMetadata (rendered by withConstraints()).
+//   6. the rule-graph (hydration) key is STILL the OA arg — the fix touched the schema projection only.
+// ============================================================================
+$wn = $builder->build(DsbWireNameDto::class);
+
+$oaOnly = $wn->property('oaOnly');
+assert_same('oaOnly', $oaOnly->name, 'wire-name: PropertyMetadata.name stays the PHP property name');
+assert_same('oa_name', $oaOnly->serialName(), 'wire-name: OA\Property(property) is the serial name when no #[Field(name)] override exists');
+assert_same('OA-described field', $oaOnly->description, 'wire-name: OA\Property(description) is carried onto PropertyMetadata.description');
+
+$fieldOverridesOa = $wn->property('fieldOverridesOa');
+assert_same('field_wins', $fieldOverridesOa->serialName(), 'wire-name: #[Field(name)] overrides the legacy OA\Property(property) wire name');
+
+$noWireName = $wn->property('noWireName');
+assert_same('noWireName', $noWireName->serialName(), 'wire-name: serial name falls back to the PHP property name when no wire name is declared anywhere');
+
+// The rule-graph (hydration) key is unchanged — serial-name fix touched only the schema projection.
+$wnGraph = $builder->ruleGraph($wn)->rules;
+assert_true(array_key_exists('oa_name', $wnGraph), 'wire-name: rule-graph (hydration) key is the OA arg (oa_name)');
+assert_true(array_key_exists('oa_loses', $wnGraph), 'wire-name: rule-graph key is the OA arg (oa_loses), NOT the #[Field(name)] override');
+assert_true(!array_key_exists('field_wins', $wnGraph), 'wire-name: #[Field(name)] never leaks into the rule-graph hydration key');
+assert_same(
+    $builder->ruleGraph($builder->build(DsbWireNameDto::class))->rules,
+    Router::extractValidationRules(DsbWireNameDto::class),
+    'wire-name: DsbWireNameDto rule-graph byte-identical to extractValidationRules (hydration key unchanged by the schema fix)',
+);
 
 echo "DtoSchemaBuilder parity + projection passed\n";

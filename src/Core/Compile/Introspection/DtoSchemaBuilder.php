@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace SpsFW\Core\Compile\Introspection;
 
 use OpenApi\Attributes\Property;
+use OpenApi\Attributes\Schema;
 use ReflectionAttribute;
 use ReflectionClass;
 use ReflectionIntersectionType;
@@ -100,11 +101,35 @@ final class DtoSchemaBuilder
             $properties[] = $this->makeSchemaProperty($property, $constructorParamDefaults, $class);
         }
 
+        // Legacy #[OA\Schema] component doc facets (title/description) carried transitively until Step 10
+        // replaces OA with framework attributes. R4: descriptions preserved unless provably false; the title is
+        // a non-contractual component heading legacy OpenAPI published to clients.
+        [$schemaDescription, $schemaTitle] = $this->oaSchemaFacets($reflection);
+
         return $this->memo[$class] = new SchemaMetadata(
             className: $class,
             name: $this->shortName($class),
             properties: $properties,
+            description: $schemaDescription,
+            title: $schemaTitle,
         );
+    }
+
+    /**
+     * Read the legacy #[OA\Schema] component facets (description, title) from a class. Returns ['', null] when
+     * no #[OA\Schema] is present.
+     *
+     * @return array{0: string, 1: ?string} [description, title]
+     */
+    private function oaSchemaFacets(ReflectionClass $reflection): array
+    {
+        foreach ($reflection->getAttributes(Schema::class) as $attr) {
+            $args = $attr->getArguments();
+            $description = isset($args['description']) && is_string($args['description']) ? $args['description'] : '';
+            $title = isset($args['title']) && is_string($args['title']) && $args['title'] !== '' ? $args['title'] : null;
+            return [$description, $title];
+        }
+        return ['', null];
     }
 
     /**
@@ -394,7 +419,16 @@ final class DtoSchemaBuilder
 
         return new PropertyMetadata(
             name: $realName,
-            serialName: $field?->name, // null ⇒ serialName() falls back to the PHP name (the real JSON key)
+            // serialName precedence (the wire/JSON key actually read by the runtime input hydrator and emitted
+            // by DB/1C array responses, which legacy OpenAPI published to clients): explicit #[Field(name:)]
+            // — the Step-10 canonical source — then the legacy OA\Property::property compatibility fallback,
+            // then the PHP property name ONLY when no wire name is declared anywhere. `name` stays the real PHP
+            // property name; only the serial key changes. Moving to the bare PHP name without migrating the
+            // runtime hydrator/serialization is a hidden breaking change, so a declared wire name always wins.
+            serialName: $field?->name
+                ?? (is_string($oaArgs['property'] ?? null) && $oaArgs['property'] !== ''
+                    ? $oaArgs['property']
+                    : null),
             phpType: $phpType,
             ref: $resolvedRefClass ?? $oaRef,
             refClass: $resolvedRefClass,
@@ -414,6 +448,10 @@ final class DtoSchemaBuilder
             readOnly: $field?->readOnly ?? false,
             writeOnly: $field?->writeOnly ?? false,
             schemaName: $field?->schema,
+            // Transitional: carry the legacy OA description verbatim (R4 — descriptions preserved unless
+            // provably false) until Step 10 replaces this OA source with #[Field(description:)]. Field has no
+            // description slot yet, so no Field precedence is applied in this pass.
+            description: $oaArgs['description'] ?? null,
             rawArguments: $oaArgs ?: null,
         );
     }

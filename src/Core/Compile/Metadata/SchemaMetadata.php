@@ -55,6 +55,7 @@ final readonly class SchemaMetadata
         public mixed $maximum = null,
         public ?int $minLength = null,
         public ?int $maxLength = null,
+        public ?string $title = null,
     ) {
     }
 

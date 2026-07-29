@@ -702,6 +702,9 @@ final class OpenApiEmitter
         if ($schema->description !== '') {
             $component['description'] = $schema->description;
         }
+        if ($schema->title !== null && $schema->title !== '') {
+            $component['title'] = $schema->title;
+        }
         $componentsSchemas[$name] = $component;
     }
 

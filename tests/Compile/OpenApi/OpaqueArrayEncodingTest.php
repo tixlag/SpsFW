@@ -107,15 +107,17 @@ $emitter = new OpenApiEmitter(new CompileDiagnostics());
 $doc = $emitter->emit($operations);
 $props = $doc['components']['schemas']['OaeDto']['properties'];
 
-assert_same(['type' => 'object'], $props['objectViaOa'], 'OA type:object ⇒ {type: object}');
-assert_same(['type' => 'object'], $props['fieldObjectMap'], '#[Field(objectMap:true)] ⇒ {type: object}');
-assert_same(['$ref' => '#/components/schemas/OaeRefDto'], $props['refConfirmed'], 'objectMap + OA ref ⇒ typed single-object {$ref}');
+// Emitted schema keys are the serial name: OA\Property::property arg when given (the wire key the runtime
+// hydrator reads), else the PHP name — see DtoSchemaBuilder serial-name precedence (pass-3 schema-parity fix).
+assert_same(['type' => 'object'], $props['object_via_oa'], 'OA type:object ⇒ {type: object} (keyed by the OA property arg object_via_oa)');
+assert_same(['type' => 'object'], $props['fieldObjectMap'], '#[Field(objectMap:true)] ⇒ {type: object} (no OA property arg ⇒ PHP name key)');
+assert_same(['$ref' => '#/components/schemas/OaeRefDto'], $props['ref_confirmed'], 'objectMap + OA ref ⇒ typed single-object {$ref} (keyed by the OA property arg ref_confirmed)');
 assert_same(['type' => 'array', 'items' => ['type' => 'object']], $props['itemsObject'], '#[Items(type:object)] ⇒ array of free-form objects');
 assert_same(['type' => 'array', 'items' => ['$ref' => '#/components/schemas/OaeItemDto']], $props['itemsClass'], '#[Items(class)] ⇒ array of {$ref}');
 assert_same(['type' => 'array', 'items' => ['type' => 'string']], $props['itemsScalar'], '#[Items(type:string)] ⇒ array of strings');
 assert_same(['type' => 'array'], $props['noSignal'], 'bare array ⇒ emitted as a bare type:array (shape unresolved; warned)');
-assert_same(['type' => 'array'], $props['bareRef'], 'array + bare $ref ⇒ NOT a {$ref} (cardinality unconfirmed; warned)');
-assert_same(['type' => 'array'], $props['declaredListNoItems'], 'itemless declared list ⇒ type:array with no items (warned)');
+assert_same(['type' => 'array'], $props['bare_ref'], 'array + bare $ref ⇒ NOT a {$ref} (cardinality unconfirmed; warned; keyed by OA property arg bare_ref)');
+assert_same(['type' => 'array'], $props['declared_list_no_items'], 'itemless declared list ⇒ type:array with no items (warned; keyed by OA property arg declared_list_no_items)');
 
 // --- warning inventory: the three ambiguous/gap arrays warn; every explicit object/list is silent ---
 $warnings = $diag->warnings();
