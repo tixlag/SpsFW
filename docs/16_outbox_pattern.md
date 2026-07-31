@@ -198,3 +198,5 @@ echo "Flushed: $flushed\n";
 | `claim_token` | VARCHAR(36), nullable             | Lease конкретного relay       |
 | `claimed_until` | TIMESTAMPTZ / DATETIME(6)      | Срок lease                    |
 | `last_error`  | TEXT, nullable                    | Последняя ошибка публикации   |
+| `quarantined_at` | TIMESTAMPTZ / DATETIME(6), nullable | Запись исключена из автоматической доставки |
+| `quarantine_reason` | TEXT, nullable               | Причина quarantine             |

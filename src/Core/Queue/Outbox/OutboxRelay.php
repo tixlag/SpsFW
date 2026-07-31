@@ -15,13 +15,16 @@ final readonly class OutboxRelay
         private PreparedMessageTransportInterface $transport,
         private int $leaseSeconds = 60,
         private int $maxRetryDelaySeconds = 300,
+        private ?string $exchange = null,
+        private ?string $routingKey = null,
+        private int $maxAttempts = 10,
     ) {
     }
 
     public function runBatch(int $limit = 100): int
     {
         $published = 0;
-        foreach ($this->storage->claimDue($limit, $this->leaseSeconds) as $message) {
+        foreach ($this->claimDue($limit) as $message) {
             $properties = $message->properties;
             if (isset($properties['application_headers']) && is_array($properties['application_headers'])) {
                 $properties['application_headers'] = new AMQPTable($properties['application_headers']);
@@ -45,15 +48,47 @@ final readonly class OutboxRelay
                     $this->maxRetryDelaySeconds,
                     5 * (2 ** min(10, $message->attempts)),
                 );
-                $this->storage->releaseFailed(
-                    $message->id,
-                    $message->claimToken,
-                    $exception->getMessage(),
-                    $retryDelay,
-                );
+                $this->releaseFailed($message->id, $message->claimToken, $exception->getMessage(), $retryDelay);
             }
         }
 
         return $published;
+    }
+
+    public function nextAvailableAt(): ?\DateTimeImmutable
+    {
+        if ($this->exchange === null && $this->routingKey === null && $this->maxAttempts === 10) {
+            return $this->storage->nextAvailableAt();
+        }
+
+        return $this->storage->nextAvailableAtFiltered($this->exchange, $this->routingKey, $this->maxAttempts);
+    }
+
+    /**
+     * @return list<OutboxMessage>
+     */
+    private function claimDue(int $limit): array
+    {
+        if ($this->exchange === null && $this->routingKey === null && $this->maxAttempts === 10) {
+            return $this->storage->claimDue($limit, $this->leaseSeconds);
+        }
+
+        return $this->storage->claimDueFiltered(
+            $limit,
+            $this->leaseSeconds,
+            $this->exchange,
+            $this->routingKey,
+            $this->maxAttempts,
+        );
+    }
+
+    private function releaseFailed(string $id, string $claimToken, string $error, int $retryDelay): void
+    {
+        if ($this->maxAttempts === 10) {
+            $this->storage->releaseFailed($id, $claimToken, $error, $retryDelay);
+            return;
+        }
+
+        $this->storage->releaseFailedWithLimit($id, $claimToken, $error, $retryDelay, $this->maxAttempts);
     }
 }

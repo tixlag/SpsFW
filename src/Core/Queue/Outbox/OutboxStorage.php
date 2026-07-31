@@ -79,23 +79,62 @@ class OutboxStorage extends PdoStorage
      */
     public function claimDue(int $limit, int $leaseSeconds): array
     {
+        return $this->claimDueFiltered($limit, $leaseSeconds);
+    }
+
+    /**
+     * @return list<OutboxMessage>
+     */
+    public function claimDueFiltered(
+        int $limit,
+        int $leaseSeconds,
+        ?string $exchange = null,
+        ?string $routingKey = null,
+        int $maxAttempts = 10,
+    ): array
+    {
         $limit = max(1, $limit);
+        $maxAttempts = max(1, $maxAttempts);
         $claimToken = $this->newUuid();
         $claimedUntil = $this->formatDate(new \DateTimeImmutable(sprintf('+%d seconds', max(1, $leaseSeconds))));
+
+        $conditions = [
+            'available_at <= CURRENT_TIMESTAMP',
+            'next_attempt_at <= CURRENT_TIMESTAMP',
+            '(claimed_until IS NULL OR claimed_until < CURRENT_TIMESTAMP)',
+            'quarantined_at IS NULL',
+            'attempts < ?',
+        ];
+        $parameters = [$maxAttempts];
+
+        if ($exchange !== null) {
+            $conditions[] = 'exchange = ?';
+            $parameters[] = $exchange;
+        }
+        if ($routingKey !== null) {
+            $conditions[] = 'routing_key = ?';
+            $parameters[] = $routingKey;
+        }
 
         $this->beginTransaction();
         try {
             $statement = $this->getPdo()->prepare(sprintf(
                 "SELECT * FROM %s
-                 WHERE available_at <= CURRENT_TIMESTAMP
-                   AND next_attempt_at <= CURRENT_TIMESTAMP
-                   AND (claimed_until IS NULL OR claimed_until < CURRENT_TIMESTAMP)
+                 WHERE %s
                  ORDER BY available_at ASC, created_at ASC
                  LIMIT ?
                  FOR UPDATE SKIP LOCKED",
                 self::TABLE,
+                implode("\n                   AND ", $conditions),
             ));
-            $statement->bindValue(1, $limit, \PDO::PARAM_INT);
+            $parameters[] = $limit;
+            foreach ($parameters as $index => $parameter) {
+                $statement->bindValue(
+                    $index + 1,
+                    $parameter,
+                    is_int($parameter) ? \PDO::PARAM_INT : \PDO::PARAM_STR,
+                );
+            }
             $statement->execute();
             $rows = $statement->fetchAll();
 
@@ -138,11 +177,26 @@ class OutboxStorage extends PdoStorage
         string $error,
         int $retryDelaySeconds,
     ): void {
+        $this->releaseFailedWithLimit($id, $claimToken, $error, $retryDelaySeconds, 10);
+    }
+
+    public function releaseFailedWithLimit(
+        string $id,
+        string $claimToken,
+        string $error,
+        int $retryDelaySeconds,
+        int $maxAttempts,
+    ): void {
+        $maxAttempts = max(1, $maxAttempts);
+        $error = mb_substr($error, 0, 2000);
+        $quarantineAt = $this->formatDate(new \DateTimeImmutable('now'));
         $nextAttemptAt = $this->formatDate(new \DateTimeImmutable(sprintf('+%d seconds', max(1, $retryDelaySeconds))));
         $this->execute(
             sprintf(
                 "UPDATE %s
-                 SET attempts = attempts + 1,
+                 SET quarantined_at = CASE WHEN attempts + 1 >= ? THEN ? ELSE quarantined_at END,
+                     quarantine_reason = CASE WHEN attempts + 1 >= ? THEN ? ELSE quarantine_reason END,
+                     attempts = attempts + 1,
                      last_error = ?,
                      next_attempt_at = ?,
                      claim_token = NULL,
@@ -150,23 +204,59 @@ class OutboxStorage extends PdoStorage
                  WHERE id = ? AND claim_token = ?",
                 self::TABLE,
             ),
-            [mb_substr($error, 0, 2000), $nextAttemptAt, $this->databaseId($id), $claimToken],
+            [
+                $maxAttempts,
+                $quarantineAt,
+                $maxAttempts,
+                $error,
+                $error,
+                $nextAttemptAt,
+                $this->databaseId($id),
+                $claimToken,
+            ],
         );
     }
 
     public function nextAvailableAt(): ?\DateTimeImmutable
     {
+        return $this->nextAvailableAtFiltered();
+    }
+
+    public function nextAvailableAtFiltered(
+        ?string $exchange = null,
+        ?string $routingKey = null,
+        int $maxAttempts = 10,
+    ): ?\DateTimeImmutable
+    {
+        $maxAttempts = max(1, $maxAttempts);
+        $conditions = [
+            'quarantined_at IS NULL',
+            '(claim_token IS NULL OR claimed_until < CURRENT_TIMESTAMP)',
+            'attempts < ?',
+        ];
+        $parameters = [$maxAttempts];
+
+        if ($exchange !== null) {
+            $conditions[] = 'exchange = ?';
+            $parameters[] = $exchange;
+        }
+        if ($routingKey !== null) {
+            $conditions[] = 'routing_key = ?';
+            $parameters[] = $routingKey;
+        }
+
         $row = $this->fetchOne(sprintf(
             "SELECT CASE
                         WHEN next_attempt_at > available_at THEN next_attempt_at
                         ELSE available_at
                     END AS next_at
              FROM %s
-             WHERE claim_token IS NULL OR claimed_until < CURRENT_TIMESTAMP
+             WHERE %s
              ORDER BY next_at ASC
              LIMIT 1",
             self::TABLE,
-        ));
+            implode("\n               AND ", $conditions),
+        ), $parameters);
 
         return isset($row['next_at']) ? new \DateTimeImmutable((string) $row['next_at']) : null;
     }

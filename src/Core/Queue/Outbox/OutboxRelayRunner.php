@@ -23,7 +23,7 @@ final readonly class OutboxRelayRunner
             }
 
             $timeout = $this->fallbackMilliseconds;
-            $nextAvailableAt = $this->storage->nextAvailableAt();
+            $nextAvailableAt = $this->relay->nextAvailableAt();
             if ($nextAvailableAt !== null) {
                 $milliseconds = ($nextAvailableAt->getTimestamp() - time()) * 1000;
                 $timeout = max(100, min($this->fallbackMilliseconds, $milliseconds));
