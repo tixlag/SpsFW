@@ -82,11 +82,11 @@ framework source.
 │  OutboxPublisher (декоратор)                        │
 │                                                     │
 │  publish()  ──►  RabbitMQQueuePublisher             │
-│                       │ OK → autoFlush(outbox→MQ)   │
+│                       │ OK → return                 │
 │                       │ ERR → saveToOutbox(DB)      │
 │                                                     │
-│  flush()    ──►  SELECT FOR UPDATE SKIP LOCKED      │
-│                  → publish each → delete → commit   │
+│  OutboxRelay ──►  claim lease → publish confirm     │
+│                  → delete row / release with retry  │
 └────────────────────────────────────────────────────┘
 ```
 
@@ -124,7 +124,7 @@ $publisher = $factory->createWithOutbox(
     exchange:       'orders.exchange',
     routingKey:     'order.created',
     storage:        $outboxStorage,
-    autoFlushBatch: 10,   // сколько outbox-сообщений дренировать при каждом успешном publish()
+    autoFlushBatch: 0,    // автодренирование отключено; доставку выполняет отдельный relay
 );
 
 // Через имя воркера:
@@ -136,8 +136,8 @@ $publisher = $factory->createByWorkerNameWithOutbox('orders_worker', $outboxStor
 API полностью совместимо с `RabbitMQQueuePublisher`:
 
 ```php
-// Если RabbitMQ доступен — сообщение уходит сразу, попутно сливается до 10 outbox-записей
-// Если нет — сохраняется в queue_outbox
+// Если RabbitMQ доступен — сообщение уходит сразу.
+// Если нет — сохраняется в queue_outbox для отдельного relay.
 $publisher->publish(new CreateOrderJob($orderId));
 
 // Отложенная доставка (publishAt тоже работает через outbox)
@@ -163,7 +163,10 @@ echo "Flushed: $flushed\n";
 
 ## Конкурентность
 
-`flush()` использует `SELECT FOR UPDATE SKIP LOCKED` внутри транзакции. Это значит, что несколько воркеров или cron-процессов могут вызывать `flush()` одновременно — они получат разные строки и не опубликуют одно сообщение дважды.
+`flush()` использует lease-модель `OutboxRelay`: строки захватываются на ограниченное время,
+публикуются с RabbitMQ publisher confirms и удаляются только после подтверждения. Ошибка одной
+строки не откатывает уже обработанные строки и записывается в `attempts`, `last_error` и
+`next_attempt_at`.
 
 ---
 
@@ -173,7 +176,7 @@ echo "Flushed: $flushed\n";
 |------------------|----------------------------|--------------|-----------------------------------------------|
 | `$publisher`     | `RabbitMQQueuePublisher`   | —            | Обёртываемый publisher                        |
 | `$storage`       | `OutboxStorage`            | —            | Хранилище сообщений                           |
-| `$autoFlushBatch`| `int`                      | `10`         | Авто-слив при каждом успешном `publish()`. `0` — отключить |
+| `$autoFlushBatch`| `int`                      | `0`          | Не рекомендуется; best-effort flush после publish. `0` — отключить |
 
 ---
 

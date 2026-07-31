@@ -67,12 +67,12 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
      */
     public function preparePayload(array $payload, array $options = []): PreparedQueueMessage
     {
-        $messageId = (string) ($options['messageId'] ?? bin2hex(random_bytes(16)));
+        $properties = $options['properties'] ?? [];
+        $messageId = (string) ($options['messageId'] ?? $properties['message_id'] ?? bin2hex(random_bytes(16)));
         $availableAt = isset($options['executeAt']) && $options['executeAt'] instanceof \DateTimeInterface
             ? \DateTimeImmutable::createFromInterface($options['executeAt'])
             : new \DateTimeImmutable('now', new \DateTimeZone(self::UTC));
 
-        $properties = $options['properties'] ?? [];
         if (!isset($properties['message_id'])) {
             $properties['message_id'] = $messageId;
         }
@@ -127,7 +127,8 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
     private function buildPublishArgs(JobInterface $job, array $options): array
     {
         $isPayloadJob = $job instanceof PayloadJobInterface;
-        $messageId = $options['messageId'] ?? bin2hex(random_bytes(16));
+        $properties = $options['properties'] ?? [];
+        $messageId = (string) ($options['messageId'] ?? $properties['message_id'] ?? bin2hex(random_bytes(16)));
         $attempt = isset($options['attempt']) ? max(0, (int)$options['attempt']) : 0;
 
         $payload = [
@@ -146,7 +147,6 @@ class RabbitMQQueuePublisher implements QueuePublisherInterface, PreparedMessage
             $payload['meta']['executeAt'] = $options['executeAt']->format(\DateTime::ATOM);
         }
 
-        $properties = $options['properties'] ?? [];
         if (!isset($properties['message_id'])) {
             $properties['message_id'] = $messageId;
         }

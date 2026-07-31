@@ -2,7 +2,6 @@
 
 namespace SpsFW\Core\Queue\Outbox;
 
-use PhpAmqpLib\Wire\AMQPTable;
 use SpsFW\Core\Queue\Interfaces\JobInterface;
 use SpsFW\Core\Queue\Interfaces\QueuePublisherInterface;
 use SpsFW\Core\Queue\RabbitMQQueuePublisher;
@@ -11,8 +10,9 @@ use SpsFW\Core\Queue\RabbitMQQueuePublisher;
  * Декоратор над RabbitMQQueuePublisher.
  *
  * Если RabbitMQ недоступен при publish() — сохраняет сообщение в БД (outbox).
- * При следующем успешном publish() автоматически пробует слить накопленные сообщения
- * (до autoFlushBatch штук).
+ * По умолчанию не сливает накопленные сообщения из publish(). Для доставки
+ * используется отдельный OutboxRelay; autoFlushBatch оставлен только для
+ * явно настроенного legacy-кода.
  *
  * Для ручного слива вызывайте flush() из cron/воркера.
  *
@@ -29,24 +29,32 @@ class OutboxPublisher implements QueuePublisherInterface
         private readonly RabbitMQQueuePublisher $publisher,
         private readonly OutboxStorage          $storage,
         /** Сколько outbox-сообщений дренировать при каждом успешном publish(). 0 = отключить автодрейн. */
-        private readonly int $autoFlushBatch = 10,
+        private readonly int $autoFlushBatch = 0,
     ) {}
 
     /**
      * Публикует задачу.
      * При недоступности RabbitMQ сохраняет в outbox.
-     * При успехе — автоматически пробует слить накопленный outbox.
+     * Ошибка последующего best-effort flush не превращает уже опубликованное
+     * сообщение в новую запись outbox.
      */
     public function publish(JobInterface $job, array $options = []): void
     {
         try {
             $this->publisher->publish($job, $options);
-            // RabbitMQ доступен — дренируем outbox
-            if ($this->autoFlushBatch > 0) {
-                $this->flush($this->autoFlushBatch);
-            }
         } catch (\Throwable) {
             $this->saveToOutbox($job, $options);
+            return;
+        }
+
+        if ($this->autoFlushBatch > 0) {
+            try {
+                $this->flush($this->autoFlushBatch);
+            } catch (\Throwable $exception) {
+                // Основное сообщение уже принято publisher'ом. Нельзя сохранять
+                // его повторно из-за сбоя доставки старых outbox-записей.
+                error_log('Outbox flush failed after successful publish: ' . $exception->getMessage());
+            }
         }
     }
 
@@ -63,78 +71,30 @@ class OutboxPublisher implements QueuePublisherInterface
     /**
      * Слить накопленные outbox-сообщения в RabbitMQ.
      *
-     * Использует SELECT FOR UPDATE SKIP LOCKED, чтобы конкурентные вызовы
-     * (например, из нескольких воркеров) не публиковали одни и те же сообщения дважды.
+     * Использует lease-модель OutboxRelay и publisher confirms, чтобы конкурентные
+     * вызовы не держали общую транзакцию во время сетевого вызова к RabbitMQ.
      *
      * @param int|null $limit Максимальное количество сообщений за один вызов (null = 100)
      * @return int Количество успешно опубликованных сообщений
      */
     public function flush(?int $limit = null): int
     {
-        if (!$this->storage->hasPending()) {
-            return 0;
-        }
-
-        $client = $this->publisher->getClient();
-        $flushed = 0;
-
-        $this->storage->beginTransaction();
-        try {
-            $messages = $this->storage->fetchLocked($limit ?? 100);
-
-            foreach ($messages as $message) {
-                try {
-                    $client->publish(
-                        data:       $message->payload,
-                        properties: $this->restoreProperties($message->properties),
-                        routingKey: $message->routingKey ?: null,
-                        exchange:   $message->exchange ?: null,
-                    );
-                    $this->storage->delete($message->id);
-                    $flushed++;
-                } catch (\Throwable) {
-                    // RabbitMQ снова недоступен — прекращаем попытки.
-                    // Успешно опубликованные и удалённые сообщения зафиксируются в commit().
-                    break;
-                }
-            }
-
-            $this->storage->commitTransaction();
-        } catch (\Throwable $e) {
-            $this->storage->rollbackTransaction();
-            throw $e;
-        }
-
-        return $flushed;
+        return (new OutboxRelay($this->storage, $this->publisher))->runBatch($limit ?? 100);
     }
 
     // -----------------------------------------------------------------------
 
     private function saveToOutbox(JobInterface $job, array $options): void
     {
-        $this->storage->savePrepared($this->publisher->prepare($job, $options));
-    }
+        $deduplicationKey = isset($options['deduplicationKey'])
+            ? trim((string) $options['deduplicationKey'])
+            : null;
+        unset($options['deduplicationKey']);
 
-    /**
-     * Конвертировать AMQPTable → plain array перед сохранением в JSON.
-     */
-    private function serializeProperties(array $properties): array
-    {
-        $result = [];
-        foreach ($properties as $key => $value) {
-            $result[$key] = $value instanceof AMQPTable ? $value->getNativeData() : $value;
-        }
-        return $result;
-    }
-
-    /**
-     * При публикации из outbox восстановить application_headers как AMQPTable.
-     */
-    private function restoreProperties(array $properties): array
-    {
-        if (isset($properties['application_headers']) && is_array($properties['application_headers'])) {
-            $properties['application_headers'] = new AMQPTable($properties['application_headers']);
-        }
-        return $properties;
+        $prepared = $this->publisher->prepare($job, $options);
+        $this->storage->savePrepared(
+            $prepared,
+            $deduplicationKey !== '' ? $deduplicationKey : $prepared->messageId,
+        );
     }
 }

@@ -66,7 +66,7 @@ class QueueClientAndPublisherFactory
         $publisher = $this->createWithoutOutbox($queueName, $exchange, $routingKey, $exchangeType, $exchangeArguments, $largeMessageHandler);
 
         if ($this->outboxStorage !== null) {
-            return new OutboxPublisher($publisher, $this->outboxStorage);
+            return new OutboxPublisher($publisher, $this->outboxStorage, 0);
         }
 
         return $publisher;
@@ -83,7 +83,7 @@ class QueueClientAndPublisherFactory
         $publisher = $this->createByWorkerNameWithoutOutbox($workerName);
 
         if ($this->outboxStorage !== null) {
-            return new OutboxPublisher($publisher, $this->outboxStorage);
+            return new OutboxPublisher($publisher, $this->outboxStorage, 0);
         }
 
         return $publisher;
@@ -108,7 +108,7 @@ class QueueClientAndPublisherFactory
         $publisher = $this->createWithRetryWithoutOutbox($queueName, $exchange, $routingKey, $retryDelayMs, $maxRetries, $exchangeType, $exchangeArguments, $largeMessageHandler);
 
         if ($this->outboxStorage !== null) {
-            return new OutboxPublisher($publisher, $this->outboxStorage);
+            return new OutboxPublisher($publisher, $this->outboxStorage, 0);
         }
 
         return $publisher;
@@ -262,7 +262,7 @@ class QueueClientAndPublisherFactory
         string $exchange = "",
         string $routingKey = "",
         ?OutboxStorage $storage = null,
-        int $autoFlushBatch = 10,
+        int $autoFlushBatch = 0,
         string $exchangeType = AMQPExchangeType::DIRECT,
         array $exchangeArguments = [],
         ?LargeMessageHandlerInterface $largeMessageHandler = null,
@@ -280,7 +280,7 @@ class QueueClientAndPublisherFactory
     public function createByWorkerNameWithOutbox(
         string $workerName,
         ?OutboxStorage $storage = null,
-        int $autoFlushBatch = 10,
+        int $autoFlushBatch = 0,
     ): OutboxPublisher {
         $storage ??= $this->outboxStorage ?? throw new \LogicException(
             'OutboxStorage must be provided either via createByWorkerNameWithOutbox() argument or QueueClientAndPublisherFactory constructor.'

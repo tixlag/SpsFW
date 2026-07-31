@@ -14,7 +14,7 @@
 Фичи transactional outbox и устойчивой очереди добавили в runtime несколько новых слоёв:
 
 - `RabbitMQQueuePublisher::prepare()` — сообщение собирается в нормализованный `PreparedQueueMessage` до публикации;
-- `OutboxPublisher` — compatibility fallback: пробует отправить в RabbitMQ, а при сбое сохраняет подготовленное сообщение в outbox и позже сливает накопленные записи;
+- `OutboxPublisher` — compatibility fallback: пробует отправить в RabbitMQ, а при сбое сохраняет подготовленное сообщение в outbox; по умолчанию не дренирует outbox внутри HTTP-запроса;
 - `TransactionalOutboxPublisher` — сохраняет подготовленное сообщение в `queue_outbox` вместо немедленной отправки в брокер;
 - `TransactionManager` — даёт `afterCommit()`-хуки, чтобы wakeup происходил после успешного commit;
 - `OutboxStorage` — хранит `available_at`, `next_attempt_at`, `deduplication_key`, `claim_token`, `claimed_until`, `last_error`;
@@ -42,9 +42,9 @@
 2. Publisher собирает `PreparedQueueMessage` с `message_id`, `available_at`, routing metadata и headers.
 3. В outbox-режиме сообщение пишется в `queue_outbox`.
 4. При создании через `createForTransaction()` manager и storage проверены на одно PDO; внутри `transactional()` wakeup откладывается до commit через `TransactionManager::afterCommit()`. Если менеджера нет, outbox insert остаётся durable, а wakeup вызывается сразу, но атомарности с ранее выполненной бизнес-записью такой вызов не обещает.
-5. Relay берёт due rows через `SELECT ... FOR UPDATE SKIP LOCKED`.
+5. Relay берёт due rows через lease-модель с `SELECT ... FOR UPDATE SKIP LOCKED`.
 6. Успешно опубликованные строки удаляются.
-7. При ошибке строка остаётся в outbox, получает `attempts + 1`, `last_error` и новый `next_attempt_at`.
+7. При ошибке строка остаётся в outbox, получает `attempts + 1`, `last_error` и новый `next_attempt_at`; ошибка relay не превращается в повторную запись уже опубликованного сообщения.
 8. После окончания lease строка снова становится доступной для захвата.
 
 Важно: даже после confirm от RabbitMQ возможен дубль, если процесс упал между confirm и удалением строки. Поэтому handler’ы должны быть идемпотентными.
