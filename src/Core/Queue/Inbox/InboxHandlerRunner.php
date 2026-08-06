@@ -36,7 +36,13 @@ final readonly class InboxHandlerRunner
         $message = $this->storage->claim($messageId, $consumerId, $now, $this->leaseSeconds);
 
         if ($message === null) {
-            return JobResult::Success;
+            $current = $this->storage->find($messageId);
+            // A duplicate delivery must not acknowledge a non-terminal event. The broker
+            // remains the retry scheduler; a competing lease or early redelivery is sent
+            // back for another delivery instead of being converted into Success.
+            return $current !== null && !$current->isTerminal()
+                ? JobResult::Retry
+                : JobResult::Success;
         }
 
         try {
@@ -54,8 +60,14 @@ final readonly class InboxHandlerRunner
 
     private function markProcessed(InboxMessage $message, string $consumerId, \DateTimeImmutable $now): JobResult
     {
-        $this->storage->markProcessed($message->messageId, $consumerId, $now);
-        return JobResult::Success;
+        if ($this->storage->markProcessed($message, $now)) {
+            return JobResult::Success;
+        }
+
+        $current = $this->storage->find($message->messageId);
+        return $current !== null && $current->isTerminal()
+            ? JobResult::Success
+            : JobResult::Retry;
     }
 
     private function retryOrQuarantine(
@@ -68,12 +80,12 @@ final readonly class InboxHandlerRunner
             return $this->markQuarantined($message, $consumerId, $now, $error);
         }
 
-        $this->storage->scheduleRetry(
-            $message->messageId,
-            $consumerId,
-            $this->retryPolicy->nextAttemptAt($message, $now),
-            mb_substr($error, 0, 2000),
-        );
+        if (!$this->storage->scheduleRetry($message, mb_substr($error, 0, 2000))) {
+            $current = $this->storage->find($message->messageId);
+            return $current !== null && $current->isTerminal()
+                ? JobResult::Success
+                : JobResult::Retry;
+        }
 
         return JobResult::Retry;
     }
@@ -84,13 +96,17 @@ final readonly class InboxHandlerRunner
         \DateTimeImmutable $now,
         string $error,
     ): JobResult {
-        $this->quarantine->quarantine(
+        if ($this->quarantine->quarantine(
             $message,
-            $consumerId,
             $now,
             $error,
-        );
+        )) {
+            return JobResult::Success;
+        }
 
-        return JobResult::Success;
+        $current = $this->storage->find($message->messageId);
+        return $current !== null && $current->isTerminal()
+            ? JobResult::Success
+            : JobResult::Retry;
     }
 }

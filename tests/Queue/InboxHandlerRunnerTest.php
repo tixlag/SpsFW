@@ -15,11 +15,15 @@ final class InboxRunnerTestStorage implements InboxStorage
 {
     public ?InboxMessage $message = null;
     public array $calls = [];
+    public bool $simulateEarlyRedelivery = false;
 
     public function claim(string $messageId, string $consumerId, DateTimeImmutable $now, int $leaseSeconds): ?InboxMessage
     {
         $this->calls[] = ['claim', $messageId, $consumerId, $leaseSeconds];
         if ($this->message === null || $this->message->messageId !== $messageId || $this->message->isTerminal()) {
+            return null;
+        }
+        if ($this->simulateEarlyRedelivery && $this->message->status === 'retrying') {
             return null;
         }
 
@@ -36,31 +40,51 @@ final class InboxRunnerTestStorage implements InboxStorage
             lastError: $this->message->lastError,
             processedAt: $this->message->processedAt,
             quarantinedAt: $this->message->quarantinedAt,
+            lockedBy: $consumerId,
+            claimToken: 'claim-' . $consumerId,
+            processingGeneration: $this->message->processingGeneration + 1,
         );
     }
 
-    public function markProcessed(string $messageId, string $consumerId, DateTimeImmutable $processedAt): void
+    public function find(string $messageId): ?InboxMessage
     {
-        $this->calls[] = ['processed', $messageId, $consumerId];
+        return $this->message?->messageId === $messageId ? $this->message : null;
+    }
+
+    public function markProcessed(InboxMessage $message, DateTimeImmutable $processedAt): bool
+    {
+        if ($this->message?->claimToken !== $message->claimToken) {
+            return false;
+        }
+        $this->calls[] = ['processed', $message->messageId, $message->lockedBy];
         $this->message = $this->message?->withStatus('processed', processedAt: $processedAt);
+        return true;
     }
 
-    public function scheduleRetry(string $messageId, string $consumerId, DateTimeImmutable $nextAttemptAt, string $error): void
+    public function scheduleRetry(InboxMessage $message, string $error): bool
     {
-        $this->calls[] = ['retry', $messageId, $consumerId, $nextAttemptAt, $error];
-        $this->message = $this->message?->withStatus('retrying', nextAttemptAt: $nextAttemptAt, lastError: $error);
+        if ($this->message?->claimToken !== $message->claimToken) {
+            return false;
+        }
+        $this->calls[] = ['retry', $message->messageId, $message->lockedBy, $error];
+        $this->message = $this->message?->withStatus('retrying', lastError: $error);
+        return true;
     }
 
-    public function quarantine(string $messageId, string $consumerId, DateTimeImmutable $quarantinedAt, string $error): void
+    public function quarantine(InboxMessage $message, DateTimeImmutable $quarantinedAt, string $error): bool
     {
-        $this->calls[] = ['quarantine', $messageId, $consumerId, $error];
+        if ($this->message?->claimToken !== $message->claimToken) {
+            return false;
+        }
+        $this->calls[] = ['quarantine', $message->messageId, $message->lockedBy, $error];
         $this->message = $this->message?->withStatus('quarantined', lastError: $error, quarantinedAt: $quarantinedAt);
+        return true;
     }
 
     public function replay(string $messageId, DateTimeImmutable $replayedAt): void
     {
         $this->calls[] = ['replay', $messageId];
-        $this->message = $this->message?->withStatus('pending', nextAttemptAt: $replayedAt, lastError: null, quarantinedAt: null);
+        $this->message = $this->message?->withStatus('pending', lastError: null, quarantinedAt: null);
     }
 }
 
@@ -112,7 +136,7 @@ assert_same(
 );
 assert_same(0, $handled, 'terminal inbox message is a no-op');
 
-assert_true(inbox_runner_test_message(status: 'failed')->isTerminal(), 'failed inbox message is terminal');
+assert_true(!inbox_runner_test_message(status: 'failed')->isTerminal(), 'failed is not a canonical inbox status');
 
 $storage->message = inbox_runner_test_message();
 assert_same(
@@ -123,7 +147,17 @@ assert_same(
     'retryable inbox result asks the queue to retry',
 );
 assert_same('retrying', $storage->message?->status, 'retryable inbox result stores retry state');
-assert_same('2026-08-06T12:00:05+00:00', $storage->message?->nextAttemptAt?->format(DATE_ATOM), 'retry uses bounded backoff');
+assert_same(null, $storage->message?->nextAttemptAt, 'retry state does not create a second database scheduler');
+
+$storage->simulateEarlyRedelivery = true;
+assert_same(
+    JobResult::Retry,
+    $runner->run('inbox-message-1', 'worker-2', static function (): JobResult {
+        throw new RuntimeException('must not run while the broker redelivery is early');
+    }, $now),
+    'early broker redelivery of a non-terminal inbox event is never acknowledged',
+);
+$storage->simulateEarlyRedelivery = false;
 
 $storage->message = inbox_runner_test_message(attempts: 2);
 assert_same(

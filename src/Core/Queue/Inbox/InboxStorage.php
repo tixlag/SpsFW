@@ -13,22 +13,20 @@ interface InboxStorage
         int $leaseSeconds,
     ): ?InboxMessage;
 
-    public function markProcessed(string $messageId, string $consumerId, \DateTimeImmutable $processedAt): void;
+    public function find(string $messageId): ?InboxMessage;
+
+    public function markProcessed(InboxMessage $message, \DateTimeImmutable $processedAt): bool;
 
     public function scheduleRetry(
-        string $messageId,
-        string $consumerId,
-        \DateTimeImmutable $nextAttemptAt,
+        InboxMessage $message,
         string $error,
-    ): void;
+    ): bool;
 
     public function quarantine(
-        string $messageId,
-        string $consumerId,
+        InboxMessage $message,
         \DateTimeImmutable $quarantinedAt,
         string $error,
-    ): void;
+    ): bool;
 
     public function replay(string $messageId, \DateTimeImmutable $replayedAt): void;
 }
-

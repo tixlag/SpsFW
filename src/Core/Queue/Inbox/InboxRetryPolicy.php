@@ -21,12 +21,4 @@ final readonly class InboxRetryPolicy
         return $message->attempts >= $this->maxAttempts;
     }
 
-    public function nextAttemptAt(InboxMessage $message, \DateTimeImmutable $now): \DateTimeImmutable
-    {
-        $power = min(10, max(0, $message->attempts - 1));
-        $delay = min($this->maxDelaySeconds, $this->baseDelaySeconds * (2 ** $power));
-
-        return $now->modify(sprintf('+%d seconds', $delay));
-    }
 }
-

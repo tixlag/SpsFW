@@ -19,12 +19,15 @@ final readonly class InboxMessage
         public ?string $lastError,
         public ?\DateTimeImmutable $processedAt,
         public ?\DateTimeImmutable $quarantinedAt,
+        public ?string $lockedBy = null,
+        public ?string $claimToken = null,
+        public int $processingGeneration = 0,
     ) {
     }
 
     public function isTerminal(): bool
     {
-        return in_array($this->status, ['processed', 'skipped', 'failed', 'quarantined'], true);
+        return in_array($this->status, ['processed', 'skipped', 'quarantined'], true);
     }
 
     public function withStatus(
@@ -47,6 +50,9 @@ final readonly class InboxMessage
             lastError: $lastError,
             processedAt: $processedAt,
             quarantinedAt: $quarantinedAt,
+            lockedBy: null,
+            claimToken: null,
+            processingGeneration: $this->processingGeneration,
         );
     }
 }

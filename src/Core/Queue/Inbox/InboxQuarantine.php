@@ -12,11 +12,10 @@ final readonly class InboxQuarantine
 
     public function quarantine(
         InboxMessage $message,
-        string $consumerId,
         \DateTimeImmutable $at,
         string $error,
-    ): void {
-        $this->storage->quarantine($message->messageId, $consumerId, $at, mb_substr($error, 0, 2000));
+    ): bool {
+        return $this->storage->quarantine($message, $at, mb_substr($error, 0, 2000));
     }
 
     public function replay(string $messageId, \DateTimeImmutable $at): void
@@ -24,4 +23,3 @@ final readonly class InboxQuarantine
         $this->storage->replay($messageId, $at);
     }
 }
-
