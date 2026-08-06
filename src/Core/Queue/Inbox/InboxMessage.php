@@ -24,7 +24,7 @@ final readonly class InboxMessage
 
     public function isTerminal(): bool
     {
-        return in_array($this->status, ['processed', 'skipped', 'quarantined'], true);
+        return in_array($this->status, ['processed', 'skipped', 'failed', 'quarantined'], true);
     }
 
     public function withStatus(
@@ -50,4 +50,3 @@ final readonly class InboxMessage
         );
     }
 }
-

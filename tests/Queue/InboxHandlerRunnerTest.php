@@ -112,6 +112,8 @@ assert_same(
 );
 assert_same(0, $handled, 'terminal inbox message is a no-op');
 
+assert_true(inbox_runner_test_message(status: 'failed')->isTerminal(), 'failed inbox message is terminal');
+
 $storage->message = inbox_runner_test_message();
 assert_same(
     JobResult::Retry,
