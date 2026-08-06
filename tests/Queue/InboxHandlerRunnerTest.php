@@ -131,7 +131,13 @@ assert_same(
 );
 assert_same(0, $handled, 'terminal inbox message is a no-op');
 
-assert_true(!inbox_runner_test_message(status: 'failed')->isTerminal(), 'failed is not a canonical inbox status');
+$failedStatusRejected = false;
+try {
+    inbox_runner_test_message(status: 'failed');
+} catch (InvalidArgumentException) {
+    $failedStatusRejected = true;
+}
+assert_true($failedStatusRejected, 'failed is rejected instead of drifting from the database status contract');
 
 $storage->message = inbox_runner_test_message();
 assert_same(

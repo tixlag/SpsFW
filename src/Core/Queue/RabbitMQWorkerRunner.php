@@ -455,6 +455,12 @@ class RabbitMQWorkerRunner
             ];
 
             try {
+                if ($this->executionPolicy->retryDelayMs > 0) {
+                    // Keep the original delivery unacked while the worker owns
+                    // the retry delay. A process/broker failure during this
+                    // interval causes broker redelivery instead of losing the job.
+                    usleep($this->executionPolicy->retryDelayMs * 1000);
+                }
                 $this->client->publish($retryEnvelope, $properties, $routingKey, $exchange);
                 $message->ack();
 

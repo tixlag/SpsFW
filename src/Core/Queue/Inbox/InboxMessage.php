@@ -23,6 +23,9 @@ final readonly class InboxMessage
         public ?string $claimToken = null,
         public int $processingGeneration = 0,
     ) {
+        if (!in_array($this->status, ['pending', 'processing', 'retrying', 'processed', 'skipped', 'quarantined'], true)) {
+            throw new \InvalidArgumentException('Unsupported inbox status: ' . $this->status);
+        }
     }
 
     public function isTerminal(): bool
