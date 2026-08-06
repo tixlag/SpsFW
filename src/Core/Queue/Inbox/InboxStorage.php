@@ -28,5 +28,4 @@ interface InboxStorage
         string $error,
     ): bool;
 
-    public function replay(string $messageId, \DateTimeImmutable $replayedAt): void;
 }

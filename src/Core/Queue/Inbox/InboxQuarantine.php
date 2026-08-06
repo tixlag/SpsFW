@@ -18,8 +18,4 @@ final readonly class InboxQuarantine
         return $this->storage->quarantine($message, $at, mb_substr($error, 0, 2000));
     }
 
-    public function replay(string $messageId, \DateTimeImmutable $at): void
-    {
-        $this->storage->replay($messageId, $at);
-    }
 }

@@ -81,11 +81,6 @@ final class InboxRunnerTestStorage implements InboxStorage
         return true;
     }
 
-    public function replay(string $messageId, DateTimeImmutable $replayedAt): void
-    {
-        $this->calls[] = ['replay', $messageId];
-        $this->message = $this->message?->withStatus('pending', lastError: null, quarantinedAt: null);
-    }
 }
 
 function inbox_runner_test_message(string $status = 'pending', int $attempts = 0): InboxMessage
@@ -168,7 +163,4 @@ assert_same(
     'exhausted inbox failure is acknowledged after quarantine',
 );
 assert_same('quarantined', $storage->message?->status, 'exhausted inbox failure is quarantined');
-$quarantine->replay('inbox-message-1', $now);
-assert_same('pending', $storage->message?->status, 'quarantine replay returns the message to pending');
-
 echo "Inbox handler runner contract passed\n";
