@@ -46,6 +46,9 @@ class RabbitMQWorkerRunner
 
     private ?array $currentJobContext = null;
     private string $lastStatus = '';
+    private int $lastHeartbeatAt = 0;
+
+    private const HEARTBEAT_REFRESH_SECONDS = 30;
 
     public function __construct(
         RabbitMQClient $client,
@@ -680,11 +683,14 @@ class RabbitMQWorkerRunner
             return;
         }
 
-        // Only update status if it changed
-        if ($status === $this->lastStatus) {
+        $now = time();
+        if ($status === $this->lastStatus
+            && ($this->lastHeartbeatAt === 0 || ($now - $this->lastHeartbeatAt) < self::HEARTBEAT_REFRESH_SECONDS)
+        ) {
             return;
         }
         $this->lastStatus = $status;
+        $this->lastHeartbeatAt = $now;
 
         $data = array_merge($this->stats, [
             'consumer_tag' => $this->client->getConsumerTag(),
