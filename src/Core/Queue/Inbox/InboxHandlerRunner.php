@@ -31,12 +31,23 @@ final readonly class InboxHandlerRunner
         string $consumerId,
         callable $handler,
         ?\DateTimeImmutable $now = null,
+        ?int $expectedGeneration = null,
     ): JobResult {
         $now ??= new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
-        $message = $this->storage->claim($messageId, $consumerId, $now, $this->leaseSeconds);
+        $message = $this->storage->claim($messageId, $consumerId, $now, $this->leaseSeconds, $expectedGeneration);
 
         if ($message === null) {
             $current = $this->storage->find($messageId);
+            if ($expectedGeneration !== null
+                && $current !== null
+                && $current->messageGeneration !== null
+                && $current->messageGeneration !== $expectedGeneration
+            ) {
+                // The durable row belongs to a newer replay generation. The old
+                // delivery is acknowledged, but it never gets to claim or close
+                // the newer application message.
+                return JobResult::Success;
+            }
             // A duplicate delivery must not acknowledge a non-terminal event. The broker
             // remains the retry scheduler; a competing lease or early redelivery is sent
             // back for another delivery instead of being converted into Success.

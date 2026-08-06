@@ -22,6 +22,8 @@ final readonly class InboxMessage
         public ?string $lockedBy = null,
         public ?string $claimToken = null,
         public int $processingGeneration = 0,
+        /** Application-level message generation used to fence replayed deliveries. */
+        public ?int $messageGeneration = null,
     ) {
         if (!in_array($this->status, ['pending', 'processing', 'retrying', 'processed', 'skipped', 'quarantined'], true)) {
             throw new \InvalidArgumentException('Unsupported inbox status: ' . $this->status);
@@ -56,6 +58,7 @@ final readonly class InboxMessage
             lockedBy: null,
             claimToken: null,
             processingGeneration: $this->processingGeneration,
+            messageGeneration: $this->messageGeneration,
         );
     }
 }

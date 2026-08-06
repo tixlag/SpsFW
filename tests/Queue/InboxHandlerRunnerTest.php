@@ -17,10 +17,13 @@ final class InboxRunnerTestStorage implements InboxStorage
     public array $calls = [];
     public bool $simulateEarlyRedelivery = false;
 
-    public function claim(string $messageId, string $consumerId, DateTimeImmutable $now, int $leaseSeconds): ?InboxMessage
+    public function claim(string $messageId, string $consumerId, DateTimeImmutable $now, int $leaseSeconds, ?int $expectedGeneration = null): ?InboxMessage
     {
         $this->calls[] = ['claim', $messageId, $consumerId, $leaseSeconds];
         if ($this->message === null || $this->message->messageId !== $messageId || $this->message->isTerminal()) {
+            return null;
+        }
+        if ($expectedGeneration !== null && $this->message->messageGeneration !== $expectedGeneration) {
             return null;
         }
         if ($this->simulateEarlyRedelivery && $this->message->status === 'retrying') {
@@ -43,6 +46,7 @@ final class InboxRunnerTestStorage implements InboxStorage
             lockedBy: $consumerId,
             claimToken: 'claim-' . $consumerId,
             processingGeneration: $this->message->processingGeneration + 1,
+            messageGeneration: $this->message->messageGeneration,
         );
     }
 
@@ -98,6 +102,7 @@ function inbox_runner_test_message(string $status = 'pending', int $attempts = 0
         lastError: null,
         processedAt: null,
         quarantinedAt: $status === 'quarantined' ? new DateTimeImmutable('2026-08-06T00:00:00+00:00') : null,
+        messageGeneration: 1,
     );
 }
 
@@ -149,6 +154,24 @@ assert_same(
 );
 assert_same('retrying', $storage->message?->status, 'retryable inbox result stores retry state');
 assert_same(null, $storage->message?->nextAttemptAt, 'retry state does not create a second database scheduler');
+
+$storage->message = new InboxMessage(
+    messageId: 'inbox-message-1', source: 'test', type: 'test.event', schemaVersion: 1,
+    payload: ['value' => 2], status: 'pending', attempts: 0, nextAttemptAt: null,
+    lockedUntil: null, lastError: null, processedAt: null, quarantinedAt: null,
+    messageGeneration: 2,
+);
+$handled = 0;
+assert_same(
+    JobResult::Success,
+    $runner->run('inbox-message-1', 'old-generation-worker', static function () use (&$handled): JobResult {
+        $handled++;
+        return JobResult::Success;
+    }, $now, expectedGeneration: 1),
+    'stale generation delivery is acknowledged as a no-op',
+);
+assert_same(0, $handled, 'stale generation delivery cannot claim the current generation');
+assert_same('pending', $storage->message?->status, 'stale generation delivery cannot terminally update the current generation');
 
 $storage->simulateEarlyRedelivery = true;
 assert_same(

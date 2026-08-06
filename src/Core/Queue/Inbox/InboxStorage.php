@@ -11,6 +11,7 @@ interface InboxStorage
         string $consumerId,
         \DateTimeImmutable $now,
         int $leaseSeconds,
+        ?int $expectedGeneration = null,
     ): ?InboxMessage;
 
     public function find(string $messageId): ?InboxMessage;
