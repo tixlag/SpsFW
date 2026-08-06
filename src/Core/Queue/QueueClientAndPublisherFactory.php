@@ -42,6 +42,57 @@ class QueueClientAndPublisherFactory
         $this->outboxStorage = $outboxStorage;
     }
 
+    /**
+     * Always creates a publisher that talks to RabbitMQ directly. OutboxStorage is
+     * deliberately ignored, so direct delivery cannot silently change semantics.
+     */
+    public function createDirect(
+        string $queueName,
+        string $exchange = '',
+        string $routingKey = '',
+        string $exchangeType = AMQPExchangeType::DIRECT,
+        array $exchangeArguments = [],
+        ?LargeMessageHandlerInterface $largeMessageHandler = null,
+        array $queueArguments = [],
+        array $bindingKeys = [],
+    ): DirectQueuePublisher {
+        $publisher = $this->createWithoutOutbox(
+            queueName: $queueName,
+            exchange: $exchange,
+            routingKey: $routingKey,
+            exchangeType: $exchangeType,
+            exchangeArguments: $exchangeArguments,
+            largeMessageHandler: $largeMessageHandler,
+            queueArguments: $queueArguments,
+            bindingKeys: $bindingKeys,
+        );
+
+        return new DirectQueuePublisher($publisher->getClient(), $routingKey, $exchange);
+    }
+
+    /** Always creates a direct publisher from the named worker configuration. */
+    public function createByWorkerNameDirect(string $workerName): DirectQueuePublisher
+    {
+        $workerConfig = $this->workerConfig?->getQueueConfig($workerName);
+        if ($workerConfig === null) {
+            throw new \InvalidArgumentException("Unknown queue worker: {$workerName}");
+        }
+
+        $exchangeType = $workerConfig['exchange_type']
+            ?? (!empty($workerConfig['delayed']) ? 'x-delayed-message' : AMQPExchangeType::DIRECT);
+        $publishRoutingKey = $workerConfig['publish_routing_key'] ?? $workerConfig['routing_key'];
+
+        return $this->createDirect(
+            queueName: $workerConfig['queue'],
+            exchange: $workerConfig['exchange'],
+            routingKey: $publishRoutingKey,
+            exchangeType: $exchangeType,
+            exchangeArguments: $workerConfig['exchange_arguments'] ?? [],
+            queueArguments: $workerConfig['queue_arguments'] ?? [],
+            bindingKeys: $workerConfig['binding_keys'] ?? [$workerConfig['routing_key']],
+        );
+    }
+
     // -------------------------------------------------------------------------
     // create() — умный алиас: outbox, если хранилище задано в конструкторе
     // -------------------------------------------------------------------------
@@ -55,6 +106,7 @@ class QueueClientAndPublisherFactory
      *
      * @return OutboxPublisher|RabbitMQQueuePublisher
      */
+    /** @deprecated Use createDirect() or createForTransaction(). */
     public function create(
         string $queueName,
         string $exchange = "",
@@ -78,6 +130,7 @@ class QueueClientAndPublisherFactory
      *
      * @return OutboxPublisher|RabbitMQQueuePublisher
      */
+    /** @deprecated Use createByWorkerNameDirect() or createByWorkerNameForTransaction(). */
     public function createByWorkerName(string $workerName): QueuePublisherInterface
     {
         $publisher = $this->createByWorkerNameWithoutOutbox($workerName);
@@ -295,6 +348,7 @@ class QueueClientAndPublisherFactory
      * The nullable manager is intentionally preserved. New code that requires atomicity with a
      * business write should use createForTransaction(), which proves the same-PDO invariant.
      */
+    /** @deprecated Use createForTransaction(). */
     public function createTransactional(
         string $queueName,
         string $exchange = '',
@@ -362,6 +416,7 @@ class QueueClientAndPublisherFactory
      *
      * Use createByWorkerNameForTransaction() when the outbox row must share a business transaction.
      */
+    /** @deprecated Use createByWorkerNameForTransaction(). */
     public function createByWorkerNameTransactional(
         string $workerName,
         ?OutboxStorage $storage = null,
