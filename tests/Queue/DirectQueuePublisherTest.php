@@ -110,6 +110,33 @@ $outbox = new class ($pdo) extends OutboxStorage {
         return $this->testPdo;
     }
 };
+$factoryWithConfiguredOutbox = new DirectFactoryTestFactory(
+    new RabbitMQConfig('localhost', 5672, 'guest', 'guest', '/'),
+    new WorkerConfig([
+        'direct_worker' => [
+            'type' => 'queueConsumer',
+            'config' => [
+                'queue' => 'direct.queue',
+                'exchange' => 'direct.exchange',
+                'routing_key' => 'direct.#',
+                'publish_routing_key' => 'direct.job',
+                'binding_keys' => ['direct.#'],
+            ],
+        ],
+    ]),
+    null,
+    $outbox,
+);
+$directWithConfiguredOutbox = $factoryWithConfiguredOutbox->createDirect(
+    'direct.queue',
+    'direct.exchange',
+    'direct.job',
+);
+assert_true(
+    $directWithConfiguredOutbox instanceof DirectQueuePublisher,
+    'direct method remains direct even when the factory has an outbox configured',
+);
+
 $transactional = $factory->createForTransaction(
     queueName: 'direct.queue',
     transactionManager: new TransactionManager($pdo),

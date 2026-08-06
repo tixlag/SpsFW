@@ -148,6 +148,7 @@ class QueueClientAndPublisherFactory
      *
      * @return OutboxPublisher|RabbitMQQueuePublisher
      */
+    /** @deprecated Use createWithRetryWithoutOutbox() or an explicit outbox entrypoint. */
     public function createWithRetry(
         string $queueName,
         string $exchange = "",
